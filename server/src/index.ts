@@ -38,7 +38,19 @@ async function main(): Promise<void> {
   // Статика фронта (prod): web/dist рядом с server/dist
   const webDist = config.webDist || path.resolve(here, '../../web/dist');
   if (fs.existsSync(path.join(webDist, 'index.html'))) {
-    await app.register(fastifyStatic, { root: webDist, index: ['index.html'] });
+    await app.register(fastifyStatic, {
+      root: webDist,
+      index: ['index.html'],
+      setHeaders: (res, filePath) => {
+        // index.html не кэшируем — иначе после деплоя браузер держит старый билд;
+        // ассеты хэшированы vite'ом, им можно вечный кэш
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    });
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !req.url.startsWith('/api/')) {
         return reply.sendFile('index.html');
