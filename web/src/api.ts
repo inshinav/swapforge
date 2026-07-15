@@ -1,8 +1,11 @@
 import type { HealthInfo, ProjectFull, ProjectSummary } from '@shared/api-types';
 
-// База приложения ('/swapforge/'): API и медиа всегда под ней — nginx срезает префикс
+// База приложения ('/swapforge/'): API и медиа всегда под ней — nginx срезает префикс.
+// URL строим АБСОЛЮТНЫМ от location.origin: если страница открыта ссылкой вида
+// https://user:pass@host/…, относительный fetch унаследовал бы креды и упал бы
+// («Request cannot be constructed from a URL that includes credentials»).
 export const appBase = import.meta.env.BASE_URL;
-const u = (p: string) => `${appBase}${p}`;
+const u = (p: string) => `${window.location.origin}${appBase}${p}`;
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
