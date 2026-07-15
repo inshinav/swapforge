@@ -59,8 +59,9 @@ export const api = {
 
   storyboardRetry: (id: string) =>
     post(u(`api/projects/${id}/storyboard`)).then((r) => j<{ ok: true }>(r)),
-  analyze: (id: string) => post(u(`api/projects/${id}/analyze`)).then((r) => j<{ ok: true }>(r)),
-  generate: (id: string, body: { lang: string; endpoint: string }) =>
+  analyze: (id: string, model?: string) =>
+    post(u(`api/projects/${id}/analyze`), { model }).then((r) => j<{ ok: true }>(r)),
+  generate: (id: string, body: { lang: string; endpoint: string; model?: string }) =>
     post(u(`api/projects/${id}/generate`), body).then((r) => j<{ ok: true }>(r)),
   feedback: (
     id: string,
@@ -68,10 +69,17 @@ export const api = {
   ) => post(u(`api/projects/${id}/feedback`), body).then((r) => j<{ ok: true }>(r)),
   iterate: (
     id: string,
-    body: { version: number; artifacts: string[]; notes: string; lang: string; endpoint: string },
+    body: {
+      version: number;
+      artifacts: string[];
+      notes: string;
+      lang: string;
+      endpoint: string;
+      model?: string;
+    },
   ) => post(u(`api/projects/${id}/iterate`), body).then((r) => j<{ ok: true }>(r)),
-  startFrame: (id: string, version: number) =>
-    post(u(`api/projects/${id}/startframe`), { version }).then((r) =>
+  startFrame: (id: string, body: { version: number; model?: string; quality?: string }) =>
+    post(u(`api/projects/${id}/startframe`), body).then((r) =>
       j<{ file: string; version: number }>(r),
     ),
 

@@ -25,6 +25,7 @@ export interface GenerateOpts {
   lang: 'en' | 'ru';
   fewshot: SimilarExample[];
   iteration: IterationCtx | null;
+  model?: string;
 }
 
 function mimeOf(file: string): string {
@@ -124,7 +125,7 @@ export async function runGeneration(
     schemaName: 'prompt_pair',
     schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 6000,
-    model: modelForTask('generate'),
+    model: opts.model ?? modelForTask('generate'),
   });
   const parsed = PromptPairZ.safeParse(raw);
   if (!parsed.success) throw new Error('LLM вернул промты не по схеме — повтори генерацию');

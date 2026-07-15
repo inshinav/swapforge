@@ -5,13 +5,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
 import { projectDir, refsDir } from '../storage';
+import { imageModelFlexible } from '../../../shared/llm-options';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
 
-/** Размер под AR исходника: длинная сторона = target, обе стороны кратны 16 (требование gpt-image-2). */
-export function startFrameSize(width: number, height: number, longSide = config.imageLongSide): string {
+/**
+ * Размер под AR исходника. gpt-image-2 принимает любые размеры кратно 16 (длинная сторона = target);
+ * gpt-image-1/1.5/mini — только фиксированную тройку 1024x1024 / 1024x1536 / 1536x1024.
+ */
+export function startFrameSize(
+  width: number,
+  height: number,
+  model: string,
+  longSide = config.imageLongSide,
+): string {
+  const ar = width && height ? width / height : 9 / 16;
+  if (!imageModelFlexible(model)) {
+    if (ar < 0.95) return '1024x1536';
+    if (ar > 1.05) return '1536x1024';
+    return '1024x1024';
+  }
   const snap = (v: number) => Math.max(256, Math.round(v / 16) * 16);
-  if (!width || !height) return `${snap(longSide * 0.5625)}x${snap(longSide)}`; // дефолт 9:16
-  const ar = width / height;
   if (ar <= 1) return `${snap(longSide * ar)}x${snap(longSide)}`;
   return `${snap(longSide)}x${snap(longSide / ar)}`;
 }
@@ -31,10 +44,13 @@ export async function generateStartFrame(
   imagePrompt: string,
   refs: RefInfo[],
   meta: VideoMeta,
+  overrides: { model?: string; quality?: string } = {},
 ): Promise<string> {
   if (!config.openaiApiKey) {
     throw new Error('Для генерации стартового кадра нужен OpenAI-ключ (Images API)');
   }
+  const model = overrides.model ?? config.openaiImageModel;
+  const quality = overrides.quality ?? config.imageQuality;
   const client = new OpenAI({ apiKey: config.openaiApiKey, maxRetries: 2, timeout: 300_000 });
 
   const MIME: Record<string, string> = {
@@ -52,13 +68,13 @@ export async function generateStartFrame(
   );
   if (images.length === 0) throw new Error('Нет референсов — приложи фото модели');
 
-  const size = startFrameSize(meta.width, meta.height);
+  const size = startFrameSize(meta.width, meta.height, model);
   const params: Record<string, unknown> = {
-    model: config.openaiImageModel,
+    model,
     prompt: imagePrompt,
     image: images,
     size,
-    quality: config.imageQuality,
+    quality,
     // сохраняет лица/детали входных фото — критично для identity модели
     input_fidelity: 'high',
     n: 1,

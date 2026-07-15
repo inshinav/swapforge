@@ -63,7 +63,7 @@ export function startStoryboard(projectId: string): void {
   });
 }
 
-export function startAnalysis(projectId: string): void {
+export function startAnalysis(projectId: string, model?: string): void {
   enqueueProjectJob({
     projectId,
     label: 'analyze',
@@ -77,6 +77,7 @@ export function startAnalysis(projectId: string): void {
         projectId,
         JSON.parse(p.meta_json) as VideoMeta,
         JSON.parse(p.frames_json),
+        model,
       );
       getDb()
         .prepare(`UPDATE projects SET analysis_json = ?, tags_json = ? WHERE id = ?`)
@@ -89,6 +90,7 @@ export interface StartGenerationOpts {
   lang: 'en' | 'ru';
   endpoint: 'seedance-2.0' | 'seedance-2.0-fast';
   iteration: IterationCtx | null;
+  model?: string;
 }
 
 export function startGeneration(projectId: string, opts: StartGenerationOpts): void {
@@ -112,6 +114,7 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
         lang: opts.lang,
         fewshot,
         iteration: opts.iteration,
+        model: opts.model,
       });
 
       const params = buildSeedanceParams(meta, refs, opts.endpoint);

@@ -16,6 +16,7 @@ export async function runAnalysis(
   projectId: string,
   meta: VideoMeta,
   frames: FrameInfo[],
+  modelOverride?: string,
 ): Promise<Analysis> {
   const parts: ContentPart[] = [
     {
@@ -42,7 +43,7 @@ export async function runAnalysis(
     schemaName: 'video_analysis',
     schema: ANALYSIS_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 12_000,
-    model: modelForTask('analyze'),
+    model: modelOverride ?? modelForTask('analyze'),
   });
 
   const parsed = AnalysisZ.safeParse(raw);

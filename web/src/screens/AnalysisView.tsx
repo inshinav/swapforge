@@ -1,8 +1,20 @@
 import { useState } from 'react';
 import type { ProjectFull } from '@shared/api-types';
 import { ARTIFACTS, type ArtifactType } from '@shared/taxonomy';
+import { ANALYZE_MODELS, GENERATE_MODELS } from '@shared/llm-options';
 import { api } from '../api';
-import { Button, Card, copyText, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
+import {
+  Button,
+  Card,
+  copyText,
+  ErrorNote,
+  loadPref,
+  ModelSelect,
+  savePref,
+  SectionTitle,
+  Spinner,
+  Tag,
+} from '../ui';
 
 export const prefs = {
   get lang(): 'en' | 'ru' {
@@ -31,15 +43,23 @@ const RISK_TONE: Record<ArtifactType, 'danger' | 'warn'> = {
 
 export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
   const [err, setErr] = useState<string | null>(null);
+  const [model, setModel] = useState(() =>
+    loadPref('sf-model-analyze', 'gpt-5.5', ANALYZE_MODELS.map((m) => m.id)),
+  );
   const a = proj.analysis;
   const canAnalyze = proj.frames.length > 0 && !['storyboarding', 'analyzing', 'generating'].includes(proj.status);
 
   if (proj.frames.length === 0 && !a) return null;
 
+  const pickModel = (v: string) => {
+    setModel(v);
+    savePref('sf-model-analyze', v);
+  };
+
   const analyze = async () => {
     setErr(null);
     try {
-      await api.analyze(proj.id);
+      await api.analyze(proj.id, model);
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -55,9 +75,12 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
         right={
           a &&
           canAnalyze && (
-            <Button kind="ghost" onClick={() => void analyze()} className="!py-1 !px-2.5 text-xs">
-              переанализировать
-            </Button>
+            <span className="flex items-center gap-2">
+              <ModelSelect value={model} onChange={pickModel} options={ANALYZE_MODELS} />
+              <Button kind="ghost" onClick={() => void analyze()} className="!py-1 !px-2.5 text-xs">
+                переанализировать
+              </Button>
+            </span>
           )
         }
       />
@@ -69,11 +92,14 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
         )}
         {!a && proj.status !== 'analyzing' && (
           <div className="text-center py-8">
-            <Button kind="primary" onClick={() => void analyze()} disabled={!canAnalyze}>
-              Проанализировать ролик
-            </Button>
+            <div className="flex items-center justify-center gap-2 flex-wrap">
+              <ModelSelect value={model} onChange={pickModel} options={ANALYZE_MODELS} />
+              <Button kind="primary" onClick={() => void analyze()} disabled={!canAnalyze}>
+                Проанализировать ролик
+              </Button>
+            </div>
             <div className="text-xs text-dim mt-3">
-              gpt-5.5 vision разберёт раскадровку: свет, камеру, позы, отражения и рисковые моменты
+              vision-модель разберёт раскадровку: свет, камеру, позы, отражения и рисковые моменты
             </div>
           </div>
         )}
@@ -226,6 +252,9 @@ export function Seg<T extends string>({
 function GenerateBar({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
   const [lang, setLang] = useState<'en' | 'ru'>(prefs.lang);
   const [endpoint, setEndpoint] = useState<'seedance-2.0' | 'seedance-2.0-fast'>(prefs.endpoint);
+  const [model, setModel] = useState(() =>
+    loadPref('sf-model-generate', 'gpt-5.5', GENERATE_MODELS.map((m) => m.id)),
+  );
   const [err, setErr] = useState<string | null>(null);
   const busy = proj.status === 'generating';
   const hasPrompts = proj.prompts.length > 0;
@@ -234,8 +263,9 @@ function GenerateBar({ proj, reload }: { proj: ProjectFull; reload: () => void }
     setErr(null);
     prefs.lang = lang;
     prefs.endpoint = endpoint;
+    savePref('sf-model-generate', model);
     try {
-      await api.generate(proj.id, { lang, endpoint });
+      await api.generate(proj.id, { lang, endpoint, model });
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -245,6 +275,14 @@ function GenerateBar({ proj, reload }: { proj: ProjectFull; reload: () => void }
   return (
     <div className="rounded-xl border border-lime/25 bg-lime/5 p-4">
       <div className="flex flex-wrap items-center gap-3">
+        <ModelSelect
+          value={model}
+          onChange={(v) => {
+            setModel(v);
+            savePref('sf-model-generate', v);
+          }}
+          options={GENERATE_MODELS}
+        />
         <div className="flex items-center gap-2">
           <span className="text-xs text-mut">Промт старт-кадра:</span>
           <Seg value={lang} onChange={setLang} options={[{ v: 'en', label: 'EN' }, { v: 'ru', label: 'RU' }]} />
