@@ -10,6 +10,7 @@ import { ARTIFACTS, REF_ROLES, type ArtifactType, type RefRole } from '../../../
 import type { RefInfo, SeedanceParams, VideoMeta } from '../../../shared/api-types';
 import { framesDir, refsDir } from '../storage';
 import { getLlm, type ContentPart } from '../llm/provider';
+import { modelForTask } from '../config';
 import { DOCTRINE_SYSTEM, ITERATION_ADDENDUM } from './doctrine';
 import type { SimilarExample } from './similar';
 
@@ -123,6 +124,7 @@ export async function runGeneration(
     schemaName: 'prompt_pair',
     schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 6000,
+    model: modelForTask('generate'),
   });
   const parsed = PromptPairZ.safeParse(raw);
   if (!parsed.success) throw new Error('LLM вернул промты не по схеме — повтори генерацию');

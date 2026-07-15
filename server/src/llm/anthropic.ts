@@ -31,7 +31,7 @@ function firstText(res: unknown): string {
 
 async function complete(req: StructuredRequest, withSchemaFormat: boolean): Promise<unknown> {
   const params: Record<string, unknown> = {
-    model: config.anthropicModel,
+    model: req.model ?? config.anthropicModel,
     max_tokens: req.maxTokens ?? 8000,
     system: withSchemaFormat
       ? req.system
@@ -45,6 +45,10 @@ async function complete(req: StructuredRequest, withSchemaFormat: boolean): Prom
     p: Record<string, unknown>,
   ) => Promise<unknown>;
   const res = await create(params);
+  const usage = (res as { usage?: { input_tokens?: number; output_tokens?: number }; model?: string });
+  console.log(
+    `[llm-usage] task=${req.schemaName} model=${usage.model ?? params.model} in=${usage.usage?.input_tokens ?? '?'} out=${usage.usage?.output_tokens ?? '?'}`,
+  );
   return parseJsonLoose(firstText(res));
 }
 

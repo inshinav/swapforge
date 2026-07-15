@@ -23,6 +23,23 @@ export function llmKeyPresent(): boolean {
   return config.llmProvider === 'openai' ? !!config.openaiApiKey : !!config.anthropicApiKey;
 }
 
+export type LlmTask = 'analyze' | 'generate';
+
+/**
+ * Модель под задачу: OPENAI_MODEL_ANALYZE / OPENAI_MODEL_GENERATE (или ANTHROPIC_MODEL_*)
+ * перекрывают базовую OPENAI_MODEL / ANTHROPIC_MODEL. Анализ — vision-тяжёлый (почти весь
+ * расход = input-токены кадров), генерация — короткая, но требует максимума интеллекта.
+ */
+export function modelForTask(task: LlmTask): string {
+  const suffix = task === 'analyze' ? 'ANALYZE' : 'GENERATE';
+  if (config.llmProvider === 'openai') {
+    return env(`OPENAI_MODEL_${suffix}`) || config.openaiModel;
+  }
+  return env(`ANTHROPIC_MODEL_${suffix}`) || config.anthropicModel;
+}
+
 export function llmModelName(): string {
-  return config.llmProvider === 'openai' ? config.openaiModel : config.anthropicModel;
+  const a = modelForTask('analyze');
+  const g = modelForTask('generate');
+  return a === g ? a : `анализ ${a} · промты ${g}`;
 }

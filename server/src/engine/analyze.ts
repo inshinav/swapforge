@@ -4,6 +4,7 @@ import { ANALYSIS_JSON_SCHEMA, AnalysisZ, type Analysis } from '../../../shared/
 import type { FrameInfo, VideoMeta } from '../../../shared/api-types';
 import { framesDir } from '../storage';
 import { getLlm, type ContentPart } from '../llm/provider';
+import { modelForTask } from '../config';
 import { ANALYST_SYSTEM } from './doctrine';
 
 export function frameToPart(projectId: string, file: string): { b64: string; mime: string } {
@@ -41,6 +42,7 @@ export async function runAnalysis(
     schemaName: 'video_analysis',
     schema: ANALYSIS_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 12_000,
+    model: modelForTask('analyze'),
   });
 
   const parsed = AnalysisZ.safeParse(raw);

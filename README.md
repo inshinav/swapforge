@@ -50,9 +50,21 @@ HOST=127.0.0.1
 DATA_DIR=/var/lib/swapforge
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-5.5              # база для всех задач
+OPENAI_MODEL_ANALYZE=gpt-5.5      # vision-анализ ролика (почти весь расход — input-токены кадров)
+OPENAI_MODEL_GENERATE=gpt-5.5     # генерация промтов (мало входа, важен максимум интеллекта)
 STORAGE_CAP_GB=10
 ```
+
+**Выбор моделей per задача.** `OPENAI_MODEL_ANALYZE` / `OPENAI_MODEL_GENERATE` (для Anthropic — `ANTHROPIC_MODEL_ANALYZE/GENERATE`) перекрывают базовую модель; после правки — `systemctl restart swapforge`. Пресеты:
+
+| Пресет | ANALYZE | GENERATE | Когда |
+|---|---|---|---|
+| Максимум (дефолт) | `gpt-5.5` | `gpt-5.5` | Единичные прогоны — качество карты рисков решает всё |
+| Экономный | `gpt-5.4-mini` | `gpt-5.5` | Анализ жрёт input-токены кадров — mini режет основную статью расхода, промты остаются на флагмане |
+| Потолок | `gpt-5.5` | `gpt-5.5-pro` | Если хочется выжать максимум из текста промтов (pro заметно дороже и медленнее) |
+
+**Контроль расхода:** после каждого шага сервис пишет строку `[llm-usage] task=… model=… in=… out=…` — смотреть `journalctl -u swapforge | grep llm-usage`; детальная разбивка по моделям и дням — platform.openai.com/usage, актуальные цены — openai.com/api/pricing. Health (`/swapforge/api/health` и футер UI) показывает активные модели обеих задач.
 
 ## Ротация места
 

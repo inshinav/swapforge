@@ -6,8 +6,11 @@ import { randomUUID } from 'node:crypto';
 
 // БД в темп-каталог ДО импорта модулей, читающих config
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-test-'));
+process.env.OPENAI_MODEL = 'base-model';
+process.env.OPENAI_MODEL_ANALYZE = 'analyze-model';
 
 const { reduceAspect, rotationOf } = await import('../src/ffmpeg');
+const { modelForTask } = await import('../src/config');
 const { parseJsonLoose } = await import('../src/llm/provider');
 const { jaccard, findSimilarWorked } = await import('../src/engine/similar');
 const { buildManifestText, buildSeedanceParams, buildGenerationRequest } = await import(
@@ -88,6 +91,13 @@ describe('rotationOf (iPhone rotation-мета)', () => {
     expect(rotationOf({ tags: { rotate: '180' } })).toBe(180);
     expect(rotationOf({})).toBe(0);
     expect(rotationOf({ tags: { rotate: 'мусор' } })).toBe(0);
+  });
+});
+
+describe('modelForTask (модель per задача)', () => {
+  it('переопределение задачи работает, без него — базовая модель', () => {
+    expect(modelForTask('analyze')).toBe('analyze-model');
+    expect(modelForTask('generate')).toBe('base-model');
   });
 });
 

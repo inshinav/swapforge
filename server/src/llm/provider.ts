@@ -12,6 +12,8 @@ export interface StructuredRequest {
   schemaName: string;
   schema: Record<string, unknown>;
   maxTokens?: number;
+  /** Переопределение модели под задачу (см. config.modelForTask); без него — базовая модель провайдера. */
+  model?: string;
 }
 
 export interface LlmClient {
