@@ -94,6 +94,18 @@ describe('rotationOf (iPhone rotation-мета)', () => {
   });
 });
 
+describe('startFrameSize (2K под AR, кратно 16)', () => {
+  it('портрет/ландшафт/квадрат', async () => {
+    const { startFrameSize } = await import('../src/engine/startframe');
+    expect(startFrameSize(1080, 1920)).toBe('1152x2048');
+    expect(startFrameSize(1920, 1080)).toBe('2048x1152');
+    expect(startFrameSize(1000, 1000)).toBe('2048x2048');
+    const [w, h] = startFrameSize(1088, 1920).split('x').map(Number);
+    expect(w! % 16).toBe(0);
+    expect(h! % 16).toBe(0);
+  });
+});
+
 describe('modelForTask (модель per задача)', () => {
   it('переопределение задачи работает, без него — базовая модель', () => {
     expect(modelForTask('analyze')).toBe('analyze-model');

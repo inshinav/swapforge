@@ -107,7 +107,11 @@ export function deleteProjectFiles(id: string): void {
 }
 
 /** Безопасное имя файла внутри каталога проекта (без путей от пользователя). */
-export function safeMediaPath(projectId: string, sub: 'frames' | 'refs' | '.', file: string): string | null {
+export function safeMediaPath(
+  projectId: string,
+  sub: 'frames' | 'refs' | 'start' | '.',
+  file: string,
+): string | null {
   if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
   const base = sub === '.' ? projectDir(projectId) : path.join(projectDir(projectId), sub);
   const full = path.join(base, file);

@@ -1,5 +1,7 @@
 // DB-строки → DTO для фронта.
+import fs from 'node:fs';
 import { getDb } from './db';
+import { startDir } from './engine/startframe';
 import type {
   FeedbackRow,
   ProjectFull,
@@ -117,6 +119,17 @@ export function toFull(p: DbProject): ProjectFull {
     }),
   );
 
+  let startFrames: Array<{ file: string; version: number }> = [];
+  try {
+    startFrames = fs
+      .readdirSync(startDir(p.id))
+      .filter((f) => /^start_v\d+_[A-Za-z0-9-]+\.png$/.test(f))
+      .map((f) => ({ file: f, version: Number(/^start_v(\d+)_/.exec(f)?.[1] ?? 0) }))
+      .sort((a, b) => b.file.localeCompare(a.file));
+  } catch {
+    /* папки может не быть */
+  }
+
   return {
     ...toSummary(p),
     videoFile: p.video_purged === 1 ? null : p.video_file,
@@ -126,5 +139,6 @@ export function toFull(p: DbProject): ProjectFull {
     analysis: parse(p.analysis_json),
     prompts,
     feedback,
+    startFrames,
   };
 }

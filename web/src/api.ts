@@ -70,7 +70,11 @@ export const api = {
     id: string,
     body: { version: number; artifacts: string[]; notes: string; lang: string; endpoint: string },
   ) => post(u(`api/projects/${id}/iterate`), body).then((r) => j<{ ok: true }>(r)),
+  startFrame: (id: string, version: number) =>
+    post(u(`api/projects/${id}/startframe`), { version }).then((r) =>
+      j<{ file: string; version: number }>(r),
+    ),
 
-  mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src', file: string) =>
+  mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src' | 'start', file: string) =>
     u(`api/projects/${id}/media/${sub}/${encodeURIComponent(file)}`),
 };

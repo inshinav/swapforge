@@ -50,12 +50,15 @@ export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () =>
         )}
 
         {image && (
-          <CopyBlock
-            title="1 · Стартовый кадр → ChatGPT (GPT Image)"
-            badge={image.lang.toUpperCase()}
-            text={image.text}
-            mono={false}
-          />
+          <>
+            <CopyBlock
+              title="1 · Промт стартового кадра"
+              badge={image.lang.toUpperCase()}
+              text={image.text}
+              mono={false}
+            />
+            {version !== null && <StartFramePanel proj={proj} version={version} reload={reload} />}
+          </>
         )}
         {video && (
           <CopyBlock title="2 · Свап → Seedance 2.0 Video Edit (WaveSpeed)" badge="EN" text={video.text} />
@@ -91,6 +94,71 @@ export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () =>
         )}
       </div>
     </Card>
+  );
+}
+
+function StartFramePanel({
+  proj,
+  version,
+  reload,
+}: {
+  proj: ProjectFull;
+  version: number;
+  reload: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const frames = proj.startFrames.filter((f) => f.version === version);
+
+  const generate = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.startFrame(proj.id, version);
+      reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-line bg-panel2 p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm font-semibold">Стартовый кадр по API</span>
+        <span className="text-xs text-dim">gpt-image-2 · high · 2K · с твоими рефами · это reference image 1</span>
+        <div className="flex-1" />
+        <Button kind={frames.length ? 'ghost' : 'primary'} onClick={() => void generate()} busy={busy}>
+          {busy ? 'Генерирую… ~1–2 мин' : frames.length ? 'Ещё вариант' : '🖼 Сгенерировать кадр'}
+        </Button>
+      </div>
+      {frames.length > 0 && (
+        <div className="mt-3 flex gap-3 overflow-x-auto sf-scroll pb-1">
+          {frames.map((f) => {
+            const url = api.mediaUrl(proj.id, 'start', f.file);
+            return (
+              <figure key={f.file} className="shrink-0 w-36">
+                <a href={url} target="_blank" rel="noreferrer">
+                  <img
+                    src={url}
+                    alt=""
+                    loading="lazy"
+                    className="w-36 rounded-lg border border-lime/40 hover:border-lime transition-colors"
+                  />
+                </a>
+                <figcaption className="mt-1 text-center">
+                  <a href={url} download={f.file} className="text-[11px] text-mut hover:text-lime">
+                    ⬇ скачать PNG
+                  </a>
+                </figcaption>
+              </figure>
+            );
+          })}
+        </div>
+      )}
+      {err && <div className="mt-3"><ErrorNote text={err} /></div>}
+    </div>
   );
 }
 

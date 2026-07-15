@@ -17,6 +17,7 @@ import {
   safeMediaPath,
 } from './storage';
 import { startAnalysis, startGeneration, startStoryboard } from './engine/pipeline';
+import { generateStartFrame } from './engine/startframe';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
 import type { HealthInfo } from '../../shared/api-types';
@@ -358,6 +359,39 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  // Стартовый кадр по Images API: длинный await прямо в роуте (nginx timeout 300с покрывает)
+  app.post('/api/projects/:id/startframe', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = getProject(id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    if (!p.meta_json) return bad(reply, 409, 'Нет метаданных видео');
+    const body = (req.body ?? {}) as { version?: number };
+    const db = getDb();
+    const version =
+      body.version ??
+      (db.prepare(`SELECT COALESCE(MAX(version), 0) AS v FROM prompts WHERE project_id = ?`).get(id) as { v: number }).v;
+    const promptRow = db
+      .prepare(`SELECT text FROM prompts WHERE project_id = ? AND version = ? AND kind = 'image' LIMIT 1`)
+      .get(id, version) as { text: string } | undefined;
+    if (!promptRow) return bad(reply, 409, 'Сначала сгенерируй промты (нужен imagePrompt)');
+    const refs = db
+      .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
+      .all(id) as unknown as import('../../shared/api-types').RefInfo[];
+    if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
+    try {
+      const file = await generateStartFrame(
+        id,
+        version,
+        promptRow.text,
+        refs,
+        JSON.parse(p.meta_json),
+      );
+      return { file, version };
+    } catch (e) {
+      return bad(reply, 502, e instanceof Error ? e.message : String(e));
+    }
+  });
+
   // ── Медиа ────────────────────────────────────────────────────────────────
 
   app.get('/api/projects/:id/media/:sub/:file', async (req, reply) => {
@@ -365,7 +399,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getProject(id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     let full: string | null = null;
-    if (sub === 'frames' || sub === 'refs') full = safeMediaPath(id, sub, file);
+    if (sub === 'frames' || sub === 'refs' || sub === 'start') full = safeMediaPath(id, sub, file);
     else if (sub === 'src' && p.video_file && file === p.video_file) full = safeMediaPath(id, '.', file);
     if (!full) return bad(reply, 404, 'Файл не найден');
     const ct = MEDIA_CT[path.extname(full).toLowerCase()] ?? 'application/octet-stream';

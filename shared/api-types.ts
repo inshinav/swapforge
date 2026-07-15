@@ -85,6 +85,7 @@ export interface ProjectFull extends ProjectSummary {
   analysis: Analysis | null;
   prompts: PromptRow[];
   feedback: FeedbackRow[];
+  startFrames: Array<{ file: string; version: number }>;
 }
 
 export interface HealthInfo {
