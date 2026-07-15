@@ -3,7 +3,7 @@ import type { ProjectFull, PromptRow } from '@shared/api-types';
 import { ARTIFACTS, ARTIFACT_TYPES, type ArtifactType } from '@shared/taxonomy';
 import { api } from '../api';
 import { Button, Card, CopyBlock, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
-import { prefs, Seg } from './AnalysisView';
+import { prefs } from './AnalysisView';
 
 export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
   const versions = useMemo(

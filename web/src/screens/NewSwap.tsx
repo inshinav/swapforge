@@ -68,6 +68,15 @@ export default function NewSwap({
   const { proj, err, reload } = useProject(projectId);
 
   if (!projectId) return <UploadZone onCreated={onProjectCreated} />;
+  if (err?.includes('не найден')) {
+    // проект удалили — забываем его и показываем загрузку
+    return (
+      <div className="space-y-4">
+        <ErrorNote text="Этот проект удалён — начни новый свап" />
+        <UploadZone onCreated={onProjectCreated} />
+      </div>
+    );
+  }
   if (err) return <ErrorNote text={err} onRetry={() => void reload()} />;
   if (!proj)
     return (

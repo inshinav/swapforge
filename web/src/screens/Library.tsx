@@ -107,7 +107,7 @@ function LibCard({
         <div className="p-3">
           <div className="text-sm font-semibold truncate">{p.title}</div>
           <div className="text-[11px] text-dim mt-0.5">
-            {new Date(p.createdAt + 'Z').toLocaleDateString('ru-RU', {
+            {new Date(p.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString('ru-RU', {
               day: '2-digit',
               month: 'short',
               hour: '2-digit',
