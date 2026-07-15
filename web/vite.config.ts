@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // Живём под https://inshinlab.com/swapforge/ — nginx режет префикс перед бэкендом
+  base: '/swapforge/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -17,7 +19,10 @@ export default defineConfig({
     port: 5195,
     fs: { allow: [path.resolve(here, '..')] },
     proxy: {
-      '/api': 'http://127.0.0.1:4315',
+      '/swapforge/api': {
+        target: 'http://127.0.0.1:4315',
+        rewrite: (p) => p.replace(/^\/swapforge/, ''),
+      },
     },
   },
   build: {

@@ -38,12 +38,11 @@ main() {
     systemctl daemon-reload
     echo "systemd unit обновлён"
   fi
-  if [ -f /etc/nginx/sites-available/swapforge.inshinlab.com ] &&
-     ! grep -q 'managed by Certbot' /etc/nginx/sites-available/swapforge.inshinlab.com &&
-     ! cmp -s deploy/nginx-swapforge.conf /etc/nginx/sites-available/swapforge.inshinlab.com; then
-    cp deploy/nginx-swapforge.conf /etc/nginx/sites-available/swapforge.inshinlab.com
+  if ! cmp -s deploy/nginx-swapforge.conf /etc/nginx/snippets/swapforge.conf 2>/dev/null; then
+    mkdir -p /etc/nginx/snippets
+    cp deploy/nginx-swapforge.conf /etc/nginx/snippets/swapforge.conf
     nginx -t && systemctl reload nginx
-    echo "nginx-конфиг обновлён"
+    echo "nginx-сниппет обновлён"
   fi
 
   # Холодный бэкап БД (сервис остановлен => консистентно), keep-5.

@@ -52,7 +52,8 @@ export function toSummary(p: DbProject): ProjectSummary {
     status: p.status as ProjectStatus,
     error: p.error,
     createdAt: p.created_at,
-    thumb: frames?.length ? `/api/projects/${p.id}/media/frames/first.jpg` : null,
+    // имя файла, не URL: публичный префикс знает только фронт (api.mediaUrl)
+    thumb: frames?.length ? 'first.jpg' : null,
     tags: parse<string[]>(p.tags_json) ?? [],
     worked: workedOf(p.id),
     videoPurged: p.video_purged === 1,

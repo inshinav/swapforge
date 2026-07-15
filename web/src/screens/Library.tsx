@@ -88,7 +88,12 @@ function LibCard({
       <button type="button" className="block w-full text-left" onClick={() => onOpen(p.id)}>
         <div className="relative aspect-[9/12] bg-panel2">
           {p.thumb ? (
-            <img src={p.thumb} alt="" loading="lazy" className="w-full h-full object-cover" />
+            <img
+              src={api.mediaUrl(p.id, 'frames', p.thumb)}
+              alt=""
+              loading="lazy"
+              className="w-full h-full object-cover"
+            />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-2xl">🎬</div>
           )}
