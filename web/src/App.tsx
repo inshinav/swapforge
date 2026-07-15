@@ -1,43 +1,103 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { HealthInfo } from '@shared/api-types';
+import { api } from './api';
+import NewSwap from './screens/NewSwap';
+import Library from './screens/Library';
+
+type View = 'new' | 'library';
 
 export default function App() {
+  const [view, setView] = useState<View>('new');
+  const [projectId, setProjectId] = useState<string | null>(
+    () => localStorage.getItem('sf-project') || null,
+  );
   const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => r.json())
-      .then(setHealth)
-      .catch((e) => setErr(String(e)));
+    api.health().then(setHealth).catch(() => setHealth(null));
+  }, [view]);
+
+  const openProject = useCallback((id: string) => {
+    const pid = id || null;
+    setProjectId(pid);
+    if (pid) localStorage.setItem('sf-project', pid);
+    else localStorage.removeItem('sf-project');
+    setView('new');
   }, []);
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-line px-6 py-4 flex items-center gap-3">
+    <div className="min-h-screen flex flex-col">
+      <header className="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-4 sticky top-0 bg-bg/85 backdrop-blur z-10">
         <Logo />
-        <div className="text-sm text-mut">генератор промтов для Seedance 2.0 subject-swap</div>
-      </header>
-      <main className="mx-auto max-w-3xl px-6 py-24 text-center sf-in">
-        <div className="text-5xl mb-4">⚒️</div>
-        <h1 className="text-2xl font-bold mb-2">Каркас SwapForge поднят</h1>
-        <p className="text-mut mb-8">Этап 1 из 6 — пайплайн ingest → анализ → промты уже в работе.</p>
-        {health && (
-          <div className="inline-flex flex-wrap justify-center gap-2 text-xs">
-            <Chip ok>v{health.version}</Chip>
-            <Chip ok={health.ffmpeg}>ffmpeg {health.ffmpeg ? 'на месте' : 'нет'}</Chip>
-            <Chip ok={health.keyPresent}>
-              {health.provider}/{health.model} · ключ {health.keyPresent ? 'есть' : 'нет'}
-            </Chip>
-          </div>
+        <nav className="flex gap-1 ml-2">
+          <TabBtn active={view === 'new'} onClick={() => setView('new')}>
+            Свап
+          </TabBtn>
+          <TabBtn active={view === 'library'} onClick={() => setView('library')}>
+            Библиотека
+          </TabBtn>
+        </nav>
+        <div className="flex-1" />
+        {health && !health.keyPresent && (
+          <span className="text-[11px] text-danger hidden sm:inline">LLM-ключ не настроен</span>
         )}
-        {err && <div className="text-danger text-sm">API недоступен: {err}</div>}
+        {health && health.diskUsedPct >= 80 && (
+          <span className="text-[11px] text-warn hidden sm:inline">
+            хранилище {health.diskUsedPct}%
+          </span>
+        )}
+      </header>
+
+      <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6">
+        {view === 'new' ? (
+          <NewSwap projectId={projectId} onProjectCreated={openProject} />
+        ) : (
+          <Library onOpen={openProject} />
+        )}
       </main>
+
+      <footer className="border-t border-line px-6 py-3 text-[11px] text-dim flex flex-wrap gap-x-4 gap-y-1">
+        <span>SwapForge v{health?.version ?? '…'}</span>
+        {health && (
+          <>
+            <span>
+              мозг: {health.provider}/{health.model}
+            </span>
+            <span>
+              хранилище: {(health.dataBytes / 1024 ** 3).toFixed(2)} /{' '}
+              {(health.storageCapBytes / 1024 ** 3).toFixed(0)} ГБ
+            </span>
+          </>
+        )}
+        <span className="ml-auto">INSHIN LAB · внутренний инструмент</span>
+      </footer>
     </div>
   );
 }
 
-export function Logo() {
+function TabBtn({
+  children,
+  active,
+  onClick,
+}: {
+  children: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+        active ? 'bg-panel2 text-ink border border-line2' : 'text-mut hover:text-ink'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Logo() {
   return (
     <div className="flex items-center gap-2 select-none">
       <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden>
@@ -47,19 +107,9 @@ export function Logo() {
       <span className="font-extrabold tracking-tight">
         Swap<span className="text-lime">Forge</span>
       </span>
-      <span className="text-[10px] uppercase tracking-[0.18em] text-dim mt-0.5">Inshin Lab</span>
+      <span className="text-[10px] uppercase tracking-[0.18em] text-dim mt-0.5 hidden sm:inline">
+        Inshin Lab
+      </span>
     </div>
-  );
-}
-
-export function Chip({ children, ok = true }: { children: React.ReactNode; ok?: boolean }) {
-  return (
-    <span
-      className={`px-2.5 py-1 rounded-full border ${
-        ok ? 'border-line text-mut' : 'border-danger/40 text-danger'
-      } bg-panel`}
-    >
-      {children}
-    </span>
   );
 }

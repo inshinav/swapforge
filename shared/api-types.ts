@@ -78,6 +78,7 @@ export interface ProjectSummary {
 }
 
 export interface ProjectFull extends ProjectSummary {
+  videoFile: string | null;
   meta: VideoMeta | null;
   frames: FrameInfo[];
   refs: RefInfo[];
