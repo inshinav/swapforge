@@ -37,9 +37,17 @@ export async function generateStartFrame(
   }
   const client = new OpenAI({ apiKey: config.openaiApiKey, maxRetries: 2, timeout: 300_000 });
 
+  const MIME: Record<string, string> = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+  };
   const images = await Promise.all(
     refs.map((r) =>
-      toFile(fs.createReadStream(path.join(refsDir(projectId), r.file)), r.file),
+      toFile(fs.createReadStream(path.join(refsDir(projectId), r.file)), r.file, {
+        type: MIME[path.extname(r.file).toLowerCase()] ?? 'image/jpeg',
+      }),
     ),
   );
   if (images.length === 0) throw new Error('Нет референсов — приложи фото модели');
