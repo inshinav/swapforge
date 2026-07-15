@@ -178,50 +178,6 @@ export function CopyBlock({
   );
 }
 
-export interface SelectOption {
-  id: string;
-  ru: string;
-  hint: string;
-}
-
-/** Компактный выбор модели: «топ/быстро/превью» — чтобы не переплачивать там, где не нужно. */
-export function ModelSelect({
-  value,
-  onChange,
-  options,
-  title,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: SelectOption[];
-  title?: string;
-}) {
-  const current = options.find((o) => o.id === value);
-  return (
-    <select
-      value={value}
-      title={title ?? current?.hint}
-      onChange={(e) => onChange(e.target.value)}
-      className="bg-panel2 border border-line2 rounded-lg px-2 py-1.5 text-xs font-semibold text-ink max-w-52"
-    >
-      {options.map((o) => (
-        <option key={o.id} value={o.id} title={o.hint}>
-          {o.ru}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-/** Пользовательская настройка в localStorage с валидацией по allowlist. */
-export function loadPref(key: string, def: string, allowed: string[]): string {
-  const v = localStorage.getItem(key);
-  return v && allowed.includes(v) ? v : def;
-}
-export function savePref(key: string, v: string): void {
-  localStorage.setItem(key, v);
-}
-
 export function Empty({ icon, title, sub }: { icon: string; title: string; sub?: string }) {
   return (
     <div className="text-center py-14 px-6">

@@ -5,8 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
 import { projectDir, refsDir } from '../storage';
-import { imageModelFlexible } from '../../../shared/llm-options';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
+
+/** Гибкие размеры (кратно 16) поддерживает только gpt-image-2; у остальных — фиксированная тройка. */
+export function imageModelFlexible(id: string): boolean {
+  return id === 'gpt-image-2';
+}
 
 /**
  * Размер под AR исходника. gpt-image-2 принимает любые размеры кратно 16 (длинная сторона = target);
@@ -44,13 +48,13 @@ export async function generateStartFrame(
   imagePrompt: string,
   refs: RefInfo[],
   meta: VideoMeta,
-  overrides: { model?: string; quality?: string } = {},
 ): Promise<string> {
   if (!config.openaiApiKey) {
     throw new Error('Для генерации стартового кадра нужен OpenAI-ключ (Images API)');
   }
-  const model = overrides.model ?? config.openaiImageModel;
-  const quality = overrides.quality ?? config.imageQuality;
+  // Кадры всегда на последней модели в максимальном качестве — решение Alex
+  const model = config.openaiImageModel;
+  const quality = config.imageQuality;
   const client = new OpenAI({ apiKey: config.openaiApiKey, maxRetries: 2, timeout: 300_000 });
 
   const MIME: Record<string, string> = {

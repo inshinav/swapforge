@@ -10,7 +10,7 @@ import { ARTIFACTS, REF_ROLES, type ArtifactType, type RefRole } from '../../../
 import type { RefInfo, SeedanceParams, VideoMeta } from '../../../shared/api-types';
 import { framesDir, refsDir } from '../storage';
 import { getLlm, type ContentPart } from '../llm/provider';
-import { modelForTask } from '../config';
+import { config, modelChainFor } from '../config';
 import { DOCTRINE_SYSTEM, ITERATION_ADDENDUM } from './doctrine';
 import type { SimilarExample } from './similar';
 
@@ -25,7 +25,6 @@ export interface GenerateOpts {
   lang: 'en' | 'ru';
   fewshot: SimilarExample[];
   iteration: IterationCtx | null;
-  model?: string;
 }
 
 function mimeOf(file: string): string {
@@ -125,21 +124,17 @@ export async function runGeneration(
     schemaName: 'prompt_pair',
     schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 6000,
-    model: opts.model ?? modelForTask('generate'),
+    models: modelChainFor('generate'),
   });
   const parsed = PromptPairZ.safeParse(raw);
   if (!parsed.success) throw new Error('LLM вернул промты не по схеме — повтори генерацию');
   return parsed.data;
 }
 
-/** Параметр-блок WaveSpeed: код, не LLM — имена полей точные. */
-export function buildSeedanceParams(
-  meta: VideoMeta,
-  refs: RefInfo[],
-  endpoint: 'seedance-2.0' | 'seedance-2.0-fast',
-): SeedanceParams {
+/** Параметр-блок WaveSpeed: код, не LLM — имена полей точные. Эндпоинт зафиксирован (seedance-2.0). */
+export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[]): SeedanceParams {
   return {
-    endpoint: `bytedance/${endpoint}/video-edit`,
+    endpoint: config.seedanceEndpoint,
     video: 'исходный ролик (motion control + мир)',
     reference_images: [
       { index: 1, whatItIs: 'Стартовый кадр — сгенерируй в ChatGPT по imagePrompt', file: 'start-frame.png' },

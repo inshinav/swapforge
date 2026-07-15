@@ -50,26 +50,27 @@ HOST=127.0.0.1
 DATA_DIR=/var/lib/swapforge
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5.5              # база для всех задач
-OPENAI_MODEL_ANALYZE=gpt-5.5      # vision-анализ ролика (почти весь расход — input-токены кадров)
-OPENAI_MODEL_GENERATE=gpt-5.5     # генерация промтов (мало входа, важен максимум интеллекта)
-OPENAI_MODEL_IMAGE=gpt-image-2    # стартовый кадр по Images API (edits с реф-фото)
-IMAGE_QUALITY=high                # low | medium | high
-IMAGE_LONG_SIDE=2048              # длинная сторона кадра (2K), размер подгоняется под AR ролика, кратно 16
+OPENAI_MODEL_IMAGE=gpt-image-2    # стартовый кадр: всегда последняя image-модель
+IMAGE_QUALITY=high                # всегда максимум (решение Alex)
+IMAGE_LONG_SIDE=2048              # 2K по длинной стороне, размер подгоняется под AR ролика, кратно 16
+WAVESPEED_API_KEY=wsk_...         # на будущее: прямая генерация в Seedance (v2)
 STORAGE_CAP_GB=10
+# OPENAI_MODEL_ANALYZE / OPENAI_MODEL_GENERATE — необязательные оверрайды: встают ПЕРВЫМИ в цепочку роутинга
 ```
 
-**Выбор моделей per задача.** `OPENAI_MODEL_ANALYZE` / `OPENAI_MODEL_GENERATE` (для Anthropic — `ANTHROPIC_MODEL_ANALYZE/GENERATE`) перекрывают базовую модель; после правки — `systemctl restart swapforge`. Пресеты:
+**Авто-роутинг моделей (сервис выбирает сам, кнопок в UI нет).** Цепочки зашиты в `server/src/config.ts` (`DEFAULT_CHAINS`), при сбое модели — автоматический откат к следующей (лог `[llm-fallback]`):
 
-| Пресет | ANALYZE | GENERATE | Когда |
-|---|---|---|---|
-| Максимум (дефолт) | `gpt-5.5` | `gpt-5.5` | Единичные прогоны — качество карты рисков решает всё |
-| Экономный | `gpt-5.4-mini` | `gpt-5.5` | Анализ жрёт input-токены кадров — mini режет основную статью расхода, промты остаются на флагмане |
-| Потолок | `gpt-5.5` | `gpt-5.5-pro` | Если хочется выжать максимум из текста промтов (pro заметно дороже и медленнее) |
+| Задача | Цепочка | Логика |
+|---|---|---|
+| Анализ ролика | `gpt-5.6-terra` → `gpt-5.4-mini` → `gpt-5.5` | объём = input-токены ~30 кадров → быстрый/дешёвый tier новейшего поколения |
+| Генерация промтов | `gpt-5.6-luna` → `gpt-5.5` | вход крошечный, качество решает всё → топ-tier 5.6 |
+| Стартовый кадр | `gpt-image-2` (фикс) | всегда последняя модель, `high`, 2K, `input_fidelity=high` |
 
-На ключе также доступны превью **gpt-5.6-luna / gpt-5.6-sol / gpt-5.6-terra** — это три A/B-варианта следующего поколения. Их можно пробовать в `OPENAI_MODEL_GENERATE` (одна строка + restart); в дефолт не ставим: превью могут менять поведение/исчезать и не гарантируют стабильный structured output. Если какой-то из них начнёт стабильно выигрывать по качеству промтов — переключим дефолт.
+Эмпирика по 5.6-тройке (15.07.2026): все умеют vision + structured output; по латентности terra — лёгкий tier, sol — средний, luna — тяжёлый. Расход каждого вызова: `journalctl -u swapforge | grep llm-usage`; фолбэки: `grep llm-fallback`.
 
-**Стартовый кадр по API.** Кнопка «Сгенерировать кадр» в блоке промтов вызывает Images API (`OPENAI_MODEL_IMAGE`, edits): imagePrompt + все реф-фото проекта → PNG в максимальном качестве (`IMAGE_QUALITY=high`, длинная сторона `IMAGE_LONG_SIDE=2048`, размер подогнан под AR ролика, `input_fidelity=high` сохраняет лицо модели). Кадр появляется превью в UI, скачивается одним кликом — это готовый reference image 1 для WaveSpeed. Можно генерить несколько вариантов и выбирать.
+**Стартовый кадр по API.** Кнопка «Сгенерировать кадр» в блоке промтов: imagePrompt + все реф-фото проекта → PNG (это готовый reference image 1 для WaveSpeed). Превью в UI, скачивание в клик, можно генерить несколько вариантов.
+
+**Seedance-эндпоинт зафиксирован:** `bytedance/seedance-2.0/video-edit` (не fast) — прошит в параметр-блок; ключ WaveSpeed уже в env под v2-интеграцию (прямой сабмит + поллинг `predictions/<id>/result`).
 
 **Контроль расхода:** после каждого шага сервис пишет строку `[llm-usage] task=… model=… in=… out=…` — смотреть `journalctl -u swapforge | grep llm-usage`; детальная разбивка по моделям и дням — platform.openai.com/usage, актуальные цены — openai.com/api/pricing. Health (`/swapforge/api/health` и футер UI) показывает активные модели обеих задач.
 

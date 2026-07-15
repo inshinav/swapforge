@@ -1,20 +1,8 @@
 import { useState } from 'react';
 import type { ProjectFull } from '@shared/api-types';
 import { ARTIFACTS, type ArtifactType } from '@shared/taxonomy';
-import { ANALYZE_MODELS, GENERATE_MODELS } from '@shared/llm-options';
 import { api } from '../api';
-import {
-  Button,
-  Card,
-  copyText,
-  ErrorNote,
-  loadPref,
-  ModelSelect,
-  savePref,
-  SectionTitle,
-  Spinner,
-  Tag,
-} from '../ui';
+import { Button, Card, copyText, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 export const prefs = {
   get lang(): 'en' | 'ru' {
@@ -22,14 +10,6 @@ export const prefs = {
   },
   set lang(v: 'en' | 'ru') {
     localStorage.setItem('sf-lang', v);
-  },
-  get endpoint(): 'seedance-2.0' | 'seedance-2.0-fast' {
-    return localStorage.getItem('sf-endpoint') === 'seedance-2.0-fast'
-      ? 'seedance-2.0-fast'
-      : 'seedance-2.0';
-  },
-  set endpoint(v: 'seedance-2.0' | 'seedance-2.0-fast') {
-    localStorage.setItem('sf-endpoint', v);
   },
 };
 
@@ -43,23 +23,15 @@ const RISK_TONE: Record<ArtifactType, 'danger' | 'warn'> = {
 
 export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
   const [err, setErr] = useState<string | null>(null);
-  const [model, setModel] = useState(() =>
-    loadPref('sf-model-analyze', 'gpt-5.5', ANALYZE_MODELS.map((m) => m.id)),
-  );
   const a = proj.analysis;
   const canAnalyze = proj.frames.length > 0 && !['storyboarding', 'analyzing', 'generating'].includes(proj.status);
 
   if (proj.frames.length === 0 && !a) return null;
 
-  const pickModel = (v: string) => {
-    setModel(v);
-    savePref('sf-model-analyze', v);
-  };
-
   const analyze = async () => {
     setErr(null);
     try {
-      await api.analyze(proj.id, model);
+      await api.analyze(proj.id);
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -75,12 +47,9 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
         right={
           a &&
           canAnalyze && (
-            <span className="flex items-center gap-2">
-              <ModelSelect value={model} onChange={pickModel} options={ANALYZE_MODELS} />
-              <Button kind="ghost" onClick={() => void analyze()} className="!py-1 !px-2.5 text-xs">
-                переанализировать
-              </Button>
-            </span>
+            <Button kind="ghost" onClick={() => void analyze()} className="!py-1 !px-2.5 text-xs">
+              переанализировать
+            </Button>
           )
         }
       />
@@ -92,14 +61,11 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
         )}
         {!a && proj.status !== 'analyzing' && (
           <div className="text-center py-8">
-            <div className="flex items-center justify-center gap-2 flex-wrap">
-              <ModelSelect value={model} onChange={pickModel} options={ANALYZE_MODELS} />
-              <Button kind="primary" onClick={() => void analyze()} disabled={!canAnalyze}>
-                Проанализировать ролик
-              </Button>
-            </div>
+            <Button kind="primary" onClick={() => void analyze()} disabled={!canAnalyze}>
+              Проанализировать ролик
+            </Button>
             <div className="text-xs text-dim mt-3">
-              vision-модель разберёт раскадровку: свет, камеру, позы, отражения и рисковые моменты
+              сервис сам подберёт оптимальную модель под задачу (с авто-фолбэком)
             </div>
           </div>
         )}
@@ -251,10 +217,6 @@ export function Seg<T extends string>({
 
 function GenerateBar({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
   const [lang, setLang] = useState<'en' | 'ru'>(prefs.lang);
-  const [endpoint, setEndpoint] = useState<'seedance-2.0' | 'seedance-2.0-fast'>(prefs.endpoint);
-  const [model, setModel] = useState(() =>
-    loadPref('sf-model-generate', 'gpt-5.5', GENERATE_MODELS.map((m) => m.id)),
-  );
   const [err, setErr] = useState<string | null>(null);
   const busy = proj.status === 'generating';
   const hasPrompts = proj.prompts.length > 0;
@@ -262,10 +224,8 @@ function GenerateBar({ proj, reload }: { proj: ProjectFull; reload: () => void }
   const go = async () => {
     setErr(null);
     prefs.lang = lang;
-    prefs.endpoint = endpoint;
-    savePref('sf-model-generate', model);
     try {
-      await api.generate(proj.id, { lang, endpoint, model });
+      await api.generate(proj.id, { lang });
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -275,29 +235,11 @@ function GenerateBar({ proj, reload }: { proj: ProjectFull; reload: () => void }
   return (
     <div className="rounded-xl border border-lime/25 bg-lime/5 p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <ModelSelect
-          value={model}
-          onChange={(v) => {
-            setModel(v);
-            savePref('sf-model-generate', v);
-          }}
-          options={GENERATE_MODELS}
-        />
         <div className="flex items-center gap-2">
           <span className="text-xs text-mut">Промт старт-кадра:</span>
           <Seg value={lang} onChange={setLang} options={[{ v: 'en', label: 'EN' }, { v: 'ru', label: 'RU' }]} />
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-mut">Эндпоинт:</span>
-          <Seg
-            value={endpoint}
-            onChange={setEndpoint}
-            options={[
-              { v: 'seedance-2.0', label: 'Seedance 2.0' },
-              { v: 'seedance-2.0-fast', label: 'Fast' },
-            ]}
-          />
-        </div>
+        <span className="text-xs text-dim">эндпоинт: Seedance 2.0 · модель подбирается автоматически</span>
         <div className="flex-1" />
         <Button kind="primary" onClick={() => void go()} busy={busy} disabled={proj.refs.length === 0}>
           {busy ? 'Куются промты…' : hasPrompts ? 'Перегенерировать промты' : '⚡ Сгенерировать промты'}

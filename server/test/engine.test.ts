@@ -6,11 +6,10 @@ import { randomUUID } from 'node:crypto';
 
 // БД в темп-каталог ДО импорта модулей, читающих config
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-test-'));
-process.env.OPENAI_MODEL = 'base-model';
-process.env.OPENAI_MODEL_ANALYZE = 'analyze-model';
+process.env.OPENAI_MODEL_ANALYZE = 'override-model';
 
 const { reduceAspect, rotationOf } = await import('../src/ffmpeg');
-const { modelForTask } = await import('../src/config');
+const { modelChainFor } = await import('../src/config');
 const { parseJsonLoose } = await import('../src/llm/provider');
 const { jaccard, findSimilarWorked } = await import('../src/engine/similar');
 const { buildManifestText, buildSeedanceParams, buildGenerationRequest } = await import(
@@ -112,10 +111,17 @@ describe('startFrameSize (2K под AR, кратно 16)', () => {
   });
 });
 
-describe('modelForTask (модель per задача)', () => {
-  it('переопределение задачи работает, без него — базовая модель', () => {
-    expect(modelForTask('analyze')).toBe('analyze-model');
-    expect(modelForTask('generate')).toBe('base-model');
+describe('modelChainFor (авто-роутинг с фолбэками)', () => {
+  it('дефолтные цепочки: дешёвый tier на анализ, топ на промты, фолбэки в хвосте', () => {
+    expect(modelChainFor('generate')).toEqual(['gpt-5.6-luna', 'gpt-5.5']);
+  });
+  it('env-переопределение ставит модель первой, дефолты остаются фолбэками', () => {
+    expect(modelChainFor('analyze')).toEqual([
+      'override-model',
+      'gpt-5.6-terra',
+      'gpt-5.4-mini',
+      'gpt-5.5',
+    ]);
   });
 });
 
@@ -155,7 +161,7 @@ describe('манифест и параметры', () => {
     expect(m).toContain('3. vehicle');
   });
   it('buildSeedanceParams: порядок и поля WaveSpeed', () => {
-    const p = buildSeedanceParams(META, REFS, 'seedance-2.0');
+    const p = buildSeedanceParams(META, REFS);
     expect(p.endpoint).toBe('bytedance/seedance-2.0/video-edit');
     expect(p.reference_images.map((r) => r.index)).toEqual([1, 2, 3]);
     expect(p.reference_images[0]!.file).toBe('start-frame.png');

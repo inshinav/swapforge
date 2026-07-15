@@ -20,13 +20,6 @@ import { startAnalysis, startGeneration, startStoryboard } from './engine/pipeli
 import { generateStartFrame } from './engine/startframe';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
-import {
-  ANALYZE_MODELS,
-  GENERATE_MODELS,
-  IMAGE_MODELS,
-  IMAGE_QUALITIES,
-  isAllowed,
-} from '../../shared/llm-options';
 import type { HealthInfo } from '../../shared/api-types';
 
 const BUSY = new Set(['storyboarding', 'analyzing', 'generating']);
@@ -272,8 +265,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.frames_json) return bad(reply, 409, 'Сначала должна завершиться раскадровка');
     if (!llmKeyPresent()) return bad(reply, 503, 'LLM-ключ не настроен на сервере');
-    const body = (req.body ?? {}) as { model?: string };
-    startAnalysis(id, isAllowed(ANALYZE_MODELS, body.model) ? body.model : undefined);
+    startAnalysis(id);
     return { ok: true };
   });
 
@@ -287,12 +279,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT COUNT(*) AS c FROM refs WHERE project_id = ?`)
       .get(id) as { c: number };
     if (refCount.c === 0) return bad(reply, 409, 'Добавь хотя бы один референс (модель)');
-    const body = (req.body ?? {}) as { lang?: string; endpoint?: string; model?: string };
+    const body = (req.body ?? {}) as { lang?: string };
     startGeneration(id, {
       lang: body.lang === 'ru' ? 'ru' : 'en',
-      endpoint: body.endpoint === 'seedance-2.0-fast' ? 'seedance-2.0-fast' : 'seedance-2.0',
       iteration: null,
-      model: isAllowed(GENERATE_MODELS, body.model) ? body.model : undefined,
     });
     return { ok: true };
   });
@@ -341,8 +331,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       artifacts?: string[];
       notes?: string;
       lang?: string;
-      endpoint?: string;
-      model?: string;
     };
     if (!body.version) return bad(reply, 400, 'Не указана версия промта');
     const db = getDb();
@@ -363,9 +351,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     ).run(randomUUID(), id, body.version, JSON.stringify(artifacts), notes);
     startGeneration(id, {
       lang: body.lang === 'ru' ? 'ru' : 'en',
-      endpoint: body.endpoint === 'seedance-2.0-fast' ? 'seedance-2.0-fast' : 'seedance-2.0',
       iteration: { prevVideoPrompt: prevVideo, prevImagePrompt: prevImage, artifacts, notes },
-      model: isAllowed(GENERATE_MODELS, body.model) ? body.model : undefined,
     });
     return { ok: true };
   });
@@ -376,7 +362,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getProject(id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (!p.meta_json) return bad(reply, 409, 'Нет метаданных видео');
-    const body = (req.body ?? {}) as { version?: number; model?: string; quality?: string };
+    const body = (req.body ?? {}) as { version?: number };
     const db = getDb();
     const version =
       body.version ??
@@ -390,12 +376,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .all(id) as unknown as import('../../shared/api-types').RefInfo[];
     if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
     try {
-      const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json), {
-        model: isAllowed(IMAGE_MODELS, body.model) ? body.model : undefined,
-        quality: (IMAGE_QUALITIES as readonly string[]).includes(body.quality ?? '')
-          ? body.quality
-          : undefined,
-      });
+      const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json));
       return { file, version };
     } catch (e) {
       return bad(reply, 502, e instanceof Error ? e.message : String(e));

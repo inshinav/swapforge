@@ -31,7 +31,7 @@ function firstText(res: unknown): string {
 
 async function complete(req: StructuredRequest, withSchemaFormat: boolean): Promise<unknown> {
   const params: Record<string, unknown> = {
-    model: req.model ?? config.anthropicModel,
+    model: req.models?.[0] ?? config.anthropicModel,
     max_tokens: req.maxTokens ?? 8000,
     system: withSchemaFormat
       ? req.system

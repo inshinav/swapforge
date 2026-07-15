@@ -1,20 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { ProjectFull, PromptRow } from '@shared/api-types';
 import { ARTIFACTS, ARTIFACT_TYPES, type ArtifactType } from '@shared/taxonomy';
-import { GENERATE_MODELS, IMAGE_MODELS, IMAGE_QUALITIES } from '@shared/llm-options';
 import { api } from '../api';
-import {
-  Button,
-  Card,
-  CopyBlock,
-  ErrorNote,
-  loadPref,
-  ModelSelect,
-  savePref,
-  SectionTitle,
-  Spinner,
-  Tag,
-} from '../ui';
+import { Button, Card, CopyBlock, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 import { prefs } from './AnalysisView';
 
 export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
@@ -120,21 +108,13 @@ function StartFramePanel({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [model, setModel] = useState(() =>
-    loadPref('sf-model-image', 'gpt-image-2', IMAGE_MODELS.map((m) => m.id)),
-  );
-  const [quality, setQuality] = useState(() =>
-    loadPref('sf-image-quality', 'high', [...IMAGE_QUALITIES]),
-  );
   const frames = proj.startFrames.filter((f) => f.version === version);
 
   const generate = async () => {
     setBusy(true);
     setErr(null);
-    savePref('sf-model-image', model);
-    savePref('sf-image-quality', quality);
     try {
-      await api.startFrame(proj.id, { version, model, quality });
+      await api.startFrame(proj.id, { version });
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -145,33 +125,10 @@ function StartFramePanel({
 
   return (
     <div className="rounded-xl border border-line bg-panel2 p-4">
-      <div className="flex flex-wrap items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm font-semibold">Стартовый кадр по API</span>
-        <span className="text-xs text-dim">с твоими рефами · это reference image 1</span>
+        <span className="text-xs text-dim">gpt-image-2 · high · 2K · с твоими рефами · это reference image 1</span>
         <div className="flex-1" />
-        <ModelSelect
-          value={model}
-          onChange={(v) => {
-            setModel(v);
-            savePref('sf-model-image', v);
-          }}
-          options={IMAGE_MODELS}
-        />
-        <select
-          value={quality}
-          title="Качество: главный рычаг цены кадра"
-          onChange={(e) => {
-            setQuality(e.target.value);
-            savePref('sf-image-quality', e.target.value);
-          }}
-          className="bg-panel2 border border-line2 rounded-lg px-2 py-1.5 text-xs font-semibold"
-        >
-          {IMAGE_QUALITIES.map((q) => (
-            <option key={q} value={q}>
-              {q === 'high' ? 'high · макс' : q === 'medium' ? 'medium' : 'low · дёшево'}
-            </option>
-          ))}
-        </select>
         <Button kind={frames.length ? 'ghost' : 'primary'} onClick={() => void generate()} busy={busy}>
           {busy ? 'Генерирую… ~1–2 мин' : frames.length ? 'Ещё вариант' : '🖼 Сгенерировать кадр'}
         </Button>
@@ -298,8 +255,6 @@ function FeedbackPanel({
           artifacts: [...picked],
           notes,
           lang: prefs.lang,
-          endpoint: prefs.endpoint,
-          model: loadPref('sf-model-generate', 'gpt-5.5', GENERATE_MODELS.map((m) => m.id)),
         });
       } else {
         await api.feedback(proj.id, { version, worked: false, artifacts: [...picked], notes });

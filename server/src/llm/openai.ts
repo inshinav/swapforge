@@ -52,11 +52,12 @@ function isSchemaUnsupported(e: unknown): boolean {
 
 async function complete(
   req: StructuredRequest,
+  model: string,
   responseFormat: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'],
   systemSuffix = '',
 ): Promise<unknown> {
   const res = await getClient().chat.completions.create({
-    model: req.model ?? config.openaiModel,
+    model,
     messages: [
       { role: 'system', content: req.system + systemSuffix },
       { role: 'user', content: toContent(req) },
@@ -77,29 +78,53 @@ async function complete(
   return parseJsonLoose(text);
 }
 
+async function completeWithModel(req: StructuredRequest, model: string): Promise<unknown> {
+  try {
+    // Основной путь: строгая json_schema
+    return await complete(req, model, {
+      type: 'json_schema',
+      json_schema: { name: req.schemaName, schema: req.schema, strict: true },
+    });
+  } catch (e) {
+    if (isSchemaUnsupported(e)) {
+      // Фолбэк для моделей без json_schema: json_object + схема текстом
+      return complete(
+        req,
+        model,
+        { type: 'json_object' },
+        `\n\nRespond with a single JSON object that STRICTLY matches this JSON Schema (no extra keys, all keys present):\n${JSON.stringify(req.schema)}`,
+      );
+    }
+    throw e;
+  }
+}
+
+/** Ошибки, при которых менять модель бессмысленно — падаем сразу. */
+function isFatal(e: unknown): boolean {
+  if (e instanceof OpenAI.APIError) {
+    if (e.status === 401) return true;
+    if (/billing_not_active|insufficient_quota/i.test(e.message ?? '')) return true;
+  }
+  return false;
+}
+
 export const openaiClient: LlmClient = {
   name: () => `openai/${config.openaiModel}`,
   async structured(req) {
-    try {
-      // Основной путь: строгая json_schema
-      return await complete(req, {
-        type: 'json_schema',
-        json_schema: { name: req.schemaName, schema: req.schema, strict: true },
-      });
-    } catch (e) {
-      if (isSchemaUnsupported(e)) {
-        // Фолбэк для моделей без json_schema: json_object + схема текстом (проверено на gpt-5.5 в yasno)
-        try {
-          return await complete(
-            req,
-            { type: 'json_object' },
-            `\n\nRespond with a single JSON object that STRICTLY matches this JSON Schema (no extra keys, all keys present):\n${JSON.stringify(req.schema)}`,
-          );
-        } catch (e2) {
-          throw humanError(e2);
-        }
+    const chain = req.models?.length ? req.models : [config.openaiModel];
+    let lastErr: unknown = null;
+    for (let i = 0; i < chain.length; i++) {
+      const model = chain[i]!;
+      try {
+        return await completeWithModel(req, model);
+      } catch (e) {
+        lastErr = e;
+        if (isFatal(e) || i === chain.length - 1) break;
+        console.warn(
+          `[llm-fallback] task=${req.schemaName} ${model} → ${chain[i + 1]}: ${(e instanceof Error ? e.message : String(e)).slice(0, 160)}`,
+        );
       }
-      throw humanError(e);
     }
+    throw humanError(lastErr);
   },
 };
