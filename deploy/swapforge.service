@@ -1,0 +1,23 @@
+[Unit]
+Description=SwapForge — Seedance subject-swap prompt generator (INSHIN LAB)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/swapforge/server
+EnvironmentFile=/etc/swapforge.env
+ExecStart=/usr/bin/node /opt/swapforge/server/dist/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/swapforge
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

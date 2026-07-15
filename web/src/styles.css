@@ -1,0 +1,64 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/manrope/index.css';
+
+@theme {
+  --font-sans: 'Manrope Variable', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
+
+  --color-bg: #0a0a0b;
+  --color-panel: #131316;
+  --color-panel2: #19191d;
+  --color-line: #26262b;
+  --color-line2: #333339;
+  --color-ink: #ededef;
+  --color-mut: #8f8f98;
+  --color-dim: #5d5d66;
+  --color-lime: #c6f24e;
+  --color-lime-dim: #a8d13d;
+  --color-danger: #ff6f6f;
+  --color-ok: #55d68a;
+  --color-warn: #f2c94c;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(ellipse 900px 480px at 50% -140px, rgba(198, 242, 78, 0.055), transparent);
+  background-repeat: no-repeat;
+}
+
+::selection {
+  background: rgba(198, 242, 78, 0.28);
+}
+
+@keyframes sf-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes sf-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sf-in {
+  animation: sf-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.sf-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.sf-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line2);
+  border-radius: 4px;
+}
+.sf-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
