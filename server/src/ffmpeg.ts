@@ -62,6 +62,24 @@ export function reduceAspect(w: number, h: number): string {
   return bestErr < 0.03 ? `${best[0]}:${best[1]}` : `${w / g}:${h / g}`;
 }
 
+interface ProbeStream {
+  codec_type?: string;
+  width?: number;
+  height?: number;
+  duration?: string;
+  r_frame_rate?: string;
+  side_data_list?: Array<{ rotation?: number }>;
+  tags?: { rotate?: string };
+}
+
+/** iPhone и камеры пишут портрет как 1920x1080 + rotation-мета — учитываем её. */
+export function rotationOf(v: ProbeStream): number {
+  const side = v.side_data_list?.find((s) => typeof s.rotation === 'number')?.rotation;
+  const tag = v.tags?.rotate !== undefined ? Number(v.tags.rotate) : undefined;
+  const rot = side ?? tag ?? 0;
+  return Number.isFinite(rot) ? ((Math.round(rot) % 360) + 360) % 360 : 0;
+}
+
 export async function probe(file: string): Promise<VideoMeta> {
   const { stdout } = await run('ffprobe', [
     '-v', 'error',
@@ -71,25 +89,22 @@ export async function probe(file: string): Promise<VideoMeta> {
   ]);
   const j = JSON.parse(stdout) as {
     format?: { duration?: string; size?: string };
-    streams?: Array<{
-      codec_type?: string;
-      width?: number;
-      height?: number;
-      duration?: string;
-      r_frame_rate?: string;
-    }>;
+    streams?: ProbeStream[];
   };
   const v = (j.streams ?? []).find((s) => s.codec_type === 'video');
   if (!v || !v.width || !v.height) throw new Error('В файле нет видеопотока — это точно ролик?');
   const durationSec = Number(j.format?.duration ?? v.duration ?? 0);
   const [num = 0, den = 1] = String(v.r_frame_rate ?? '0/1').split('/').map(Number);
   const fps = den ? Math.round((num / den) * 100) / 100 : 0;
+  const swap = rotationOf(v) % 180 === 90;
+  const width = swap ? v.height : v.width;
+  const height = swap ? v.width : v.height;
   return {
     durationSec: Math.round(durationSec * 100) / 100,
-    width: v.width,
-    height: v.height,
+    width,
+    height,
     fps,
-    aspect: reduceAspect(v.width, v.height),
+    aspect: reduceAspect(width, height),
     sizeBytes: Number(j.format?.size ?? fs.statSync(file).size),
   };
 }

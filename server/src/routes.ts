@@ -45,6 +45,12 @@ function bad(reply: FastifyReply, code: number, msg: string) {
   return reply.code(code).send({ error: msg });
 }
 
+/** Кросс-сайтовые form-POST под basic auth отклоняем (Sec-Fetch-Site шлют все браузеры). */
+function crossSite(req: FastifyRequest): boolean {
+  const s = req.headers['sec-fetch-site'];
+  return typeof s === 'string' && s !== 'same-origin' && s !== 'same-site' && s !== 'none';
+}
+
 function getProject(id: string): DbProject | undefined {
   return getDb().prepare(`SELECT * FROM projects WHERE id = ?`).get(id) as DbProject | undefined;
 }
@@ -76,10 +82,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ── Проекты ──────────────────────────────────────────────────────────────
 
   app.post('/api/projects', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const part = await req.file();
     if (!part) return bad(reply, 400, 'Нет файла — приложи ролик (mp4/mov)');
     const ext = VIDEO_MIME[part.mimetype];
-    if (!ext) return bad(reply, 415, `Неподдерживаемый тип видео: ${part.mimetype}. Нужен mp4 или mov`);
+    if (!ext) {
+      part.file.resume(); // дочитать стрим, иначе сокет рвётся до отправки ответа
+      return bad(reply, 415, `Неподдерживаемый тип видео: ${part.mimetype}. Нужен mp4 или mov`);
+    }
 
     const id = randomUUID();
     ensureProjectDirs(id);
@@ -143,23 +153,34 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ── Референсы ────────────────────────────────────────────────────────────
 
   app.post('/api/projects/:id/refs', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { id } = req.params as { id: string };
     const p = getProject(id);
     if (!p) return bad(reply, 404, 'Проект не найден');
-    const part = await req.file();
+    const part = await req.file({ limits: { fileSize: config.maxImageBytes } });
     if (!part) return bad(reply, 400, 'Нет файла референса');
     const ext = IMAGE_MIME[part.mimetype];
-    if (!ext) return bad(reply, 415, `Референс должен быть jpg/png/webp, а не ${part.mimetype}`);
+    if (!ext) {
+      part.file.resume();
+      return bad(reply, 415, `Референс должен быть jpg/png/webp, а не ${part.mimetype}`);
+    }
     const role = fieldValue(part.fields, 'role') || 'model';
-    if (!['model', 'vehicle', 'object'].includes(role)) return bad(reply, 400, 'Неизвестная роль');
+    if (!['model', 'vehicle', 'object'].includes(role)) {
+      part.file.resume();
+      return bad(reply, 400, 'Неизвестная роль');
+    }
     const note = fieldValue(part.fields, 'note').slice(0, 300);
 
     const refId = randomUUID();
     const file = `ref_${refId.slice(0, 8)}${ext}`;
     const dest = path.join(refsDir(id), file);
-    await streamPipeline(part.file, fs.createWriteStream(dest));
-    const size = fs.statSync(dest).size;
-    if (part.file.truncated || size > config.maxImageBytes) {
+    try {
+      await streamPipeline(part.file, fs.createWriteStream(dest));
+    } catch (e) {
+      fs.rmSync(dest, { force: true }); // оборванная загрузка не оставляет сирот
+      throw e;
+    }
+    if (part.file.truncated) {
       fs.rmSync(dest, { force: true });
       return bad(reply, 413, `Фото больше лимита ${Math.round(config.maxImageBytes / 1024 ** 2)} МБ`);
     }
@@ -277,6 +298,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       notes?: string;
     };
     if (!body.version) return bad(reply, 400, 'Не указана версия промта');
+    const versionExists = getDb()
+      .prepare(`SELECT 1 FROM prompts WHERE project_id = ? AND version = ? LIMIT 1`)
+      .get(id, body.version);
+    if (!versionExists) return bad(reply, 404, 'Версия промта не найдена');
     const artifacts = (body.artifacts ?? []).filter((a): a is ArtifactType =>
       (ARTIFACT_TYPES as string[]).includes(a),
     );
@@ -345,7 +370,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!full) return bad(reply, 404, 'Файл не найден');
     const ct = MEDIA_CT[path.extname(full).toLowerCase()] ?? 'application/octet-stream';
     reply.header('Cache-Control', 'private, max-age=86400');
+    reply.header('Accept-Ranges', 'bytes');
     reply.type(ct);
+
+    // Range — чтобы <video> умел перемотку и не ждал полной догрузки исходника
+    const size = fs.statSync(full).size;
+    const range = req.headers.range;
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (m && (m[1] || m[2])) {
+        const start = m[1] ? parseInt(m[1], 10) : Math.max(0, size - parseInt(m[2]!, 10));
+        const end = m[1] && m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1;
+        if (start <= end && start < size) {
+          reply.code(206);
+          reply.header('Content-Range', `bytes ${start}-${end}/${size}`);
+          reply.header('Content-Length', end - start + 1);
+          return reply.send(fs.createReadStream(full, { start, end }));
+        }
+        reply.header('Content-Range', `bytes */${size}`);
+        return reply.code(416).send();
+      }
+    }
+    reply.header('Content-Length', size);
     return reply.send(fs.createReadStream(full));
   });
 }

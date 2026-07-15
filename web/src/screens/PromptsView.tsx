@@ -164,6 +164,7 @@ function FeedbackPanel({
   };
 
   const saveWorked = async () => {
+    if (hasWorked) return; // уже отмечено — не плодим дубли
     setBusy(true);
     setErr(null);
     try {

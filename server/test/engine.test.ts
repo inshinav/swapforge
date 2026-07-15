@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 // БД в темп-каталог ДО импорта модулей, читающих config
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-test-'));
 
-const { reduceAspect } = await import('../src/ffmpeg');
+const { reduceAspect, rotationOf } = await import('../src/ffmpeg');
 const { parseJsonLoose } = await import('../src/llm/provider');
 const { jaccard, findSimilarWorked } = await import('../src/engine/similar');
 const { buildManifestText, buildSeedanceParams, buildGenerationRequest } = await import(
@@ -76,6 +76,18 @@ describe('reduceAspect', () => {
   });
   it('экзотика прижимается к ближайшему стандарту при <3% ошибки', () => {
     expect(reduceAspect(1088, 1920)).toBe('9:16');
+  });
+});
+
+describe('rotationOf (iPhone rotation-мета)', () => {
+  it('side_data_list.rotation в приоритете', () => {
+    expect(rotationOf({ side_data_list: [{ rotation: -90 }] })).toBe(270);
+    expect(rotationOf({ side_data_list: [{ rotation: 90 }], tags: { rotate: '0' } })).toBe(90);
+  });
+  it('фолбэк на tags.rotate; отсутствие меты = 0', () => {
+    expect(rotationOf({ tags: { rotate: '180' } })).toBe(180);
+    expect(rotationOf({})).toBe(0);
+    expect(rotationOf({ tags: { rotate: 'мусор' } })).toBe(0);
   });
 });
 

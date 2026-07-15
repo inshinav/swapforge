@@ -1,5 +1,28 @@
 import { useState, type ReactNode } from 'react';
 
+/** Копирование с фолбэком: navigator.clipboard живёт только в secure context (HTTPS/localhost). */
+export async function copyText(text: string): Promise<boolean> {
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* падаем в фолбэк */
+    }
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand('copy');
+  } finally {
+    ta.remove();
+  }
+}
+
 export function Card({
   children,
   className = '',
@@ -127,7 +150,8 @@ export function CopyBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then((ok) => {
+      if (!ok) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     });

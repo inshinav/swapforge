@@ -11,12 +11,17 @@ const BUSY = ['storyboarding', 'analyzing', 'generating'];
 function useProject(id: string | null) {
   const [proj, setProj] = useState<ProjectFull | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const seq = useRef(0);
   const reload = useCallback(async () => {
     if (!id) return;
+    const my = ++seq.current; // защита от гонки устаревшего ответа при смене проекта
     try {
-      setProj(await api.project(id));
+      const p = await api.project(id);
+      if (seq.current !== my) return;
+      setProj(p);
       setErr(null);
     } catch (e) {
+      if (seq.current !== my) return;
       setErr(e instanceof Error ? e.message : String(e));
     }
   }, [id]);
@@ -291,40 +296,54 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
   const [err, setErr] = useState<string | null>(null);
   const [showTips, setShowTips] = useState(false);
 
-  const defaultRole = (): RefRole => {
-    if (!proj.refs.some((r) => r.role === 'model')) return 'model';
-    if (!proj.refs.some((r) => r.role === 'vehicle')) return 'vehicle';
-    return 'object';
+  const run = async (fn: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await fn();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      reload();
+    }
   };
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
     setBusy(true);
-    setErr(null);
-    try {
-      for (const f of Array.from(files)) await api.addRef(proj.id, f, defaultRole(), '');
-      reload();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    // роли для батча считаем заранее, а не по несвежему proj.refs в цикле
+    const have = {
+      model: proj.refs.some((r) => r.role === 'model'),
+      vehicle: proj.refs.some((r) => r.role === 'vehicle'),
+    };
+    const pickRole = (): RefRole => {
+      if (!have.model) {
+        have.model = true;
+        return 'model';
+      }
+      if (!have.vehicle) {
+        have.vehicle = true;
+        return 'vehicle';
+      }
+      return 'object';
+    };
+    await run(async () => {
+      for (const f of Array.from(files)) await api.addRef(proj.id, f, pickRole(), '');
+    });
+    setBusy(false);
   };
 
-  const move = async (ref: RefInfo, dir: -1 | 1) => {
-    const order = [...proj.refs].sort((a, b) => a.idx - b.idx).map((r) => r.id);
-    const i = order.indexOf(ref.id);
-    const j = i + dir;
-    if (j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j]!, order[i]!];
-    await api.patchRefs(proj.id, { order });
-    reload();
-  };
+  const move = (ref: RefInfo, dir: -1 | 1) =>
+    run(async () => {
+      const order = [...proj.refs].sort((a, b) => a.idx - b.idx).map((r) => r.id);
+      const i = order.indexOf(ref.id);
+      const j = i + dir;
+      if (j < 0 || j >= order.length) return;
+      [order[i], order[j]] = [order[j]!, order[i]!];
+      await api.patchRefs(proj.id, { order });
+    });
 
-  const update = async (refId: string, patch: { role?: string; note?: string }) => {
-    await api.patchRefs(proj.id, { updates: [{ id: refId, ...patch }] });
-    reload();
-  };
+  const update = (refId: string, patch: { role?: string; note?: string }) =>
+    run(() => api.patchRefs(proj.id, { updates: [{ id: refId, ...patch }] }));
 
   return (
     <Card>
@@ -367,7 +386,7 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
                 <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <MiniBtn onClick={() => void move(r, -1)} disabled={i === 0} label="←" />
                   <MiniBtn onClick={() => void move(r, 1)} disabled={i === arr.length - 1} label="→" />
-                  <MiniBtn onClick={() => void api.deleteRef(proj.id, r.id).then(reload)} label="✕" danger />
+                  <MiniBtn onClick={() => void run(() => api.deleteRef(proj.id, r.id))} label="✕" danger />
                 </div>
               </div>
               <div className="p-2 space-y-1.5">

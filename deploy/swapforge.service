@@ -16,6 +16,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+StateDirectory=swapforge
 ReadWritePaths=/var/lib/swapforge
 UMask=0077
 

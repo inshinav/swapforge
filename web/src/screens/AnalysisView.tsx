@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ProjectFull } from '@shared/api-types';
 import { ARTIFACTS, type ArtifactType } from '@shared/taxonomy';
 import { api } from '../api';
-import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
+import { Button, Card, copyText, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 export const prefs = {
   get lang(): 'en' | 'ru' {
@@ -78,7 +78,7 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
           </div>
         )}
         {err && <div className="mb-4"><ErrorNote text={err} /></div>}
-        {proj.error && proj.status === 'storyboarded' && a === null && (
+        {proj.error && proj.status === 'storyboarded' && (
           <div className="mb-4"><ErrorNote text={proj.error} onRetry={() => void analyze()} /></div>
         )}
 
@@ -171,7 +171,7 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
                     <button
                       type="button"
                       title="Кликни — скопировать строку"
-                      onClick={() => void navigator.clipboard.writeText(r.suppressorLine)}
+                      onClick={() => void copyText(r.suppressorLine)}
                       className="w-full text-left font-mono text-[12px] leading-relaxed text-lime/90 bg-black/30 border border-lime/15 rounded-lg px-2.5 py-1.5 hover:border-lime/40 transition-colors"
                     >
                       {r.suppressorLine}

@@ -123,16 +123,23 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
         `INSERT INTO prompts (id, project_id, version, kind, lang, text, params_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
-      insert.run(randomUUID(), projectId, version, 'image', opts.lang, pair.imagePrompt, null);
-      insert.run(
-        randomUUID(),
-        projectId,
-        version,
-        'video',
-        'en',
-        pair.videoPrompt,
-        JSON.stringify({ ...params, notes: pair.notes }),
-      );
+      db.exec('BEGIN');
+      try {
+        insert.run(randomUUID(), projectId, version, 'image', opts.lang, pair.imagePrompt, null);
+        insert.run(
+          randomUUID(),
+          projectId,
+          version,
+          'video',
+          'en',
+          pair.videoPrompt,
+          JSON.stringify({ ...params, notes: pair.notes }),
+        );
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
     },
   });
 }

@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { config } from './config';
 import { getDb } from './db';
+import { isQueued } from './jobs';
 
 export function projectDir(id: string): string {
   return path.join(config.dataDir, 'projects', id);
@@ -64,6 +65,7 @@ export function enforceStorageCap(): { purged: string[] } {
 
   for (const c of candidates) {
     if (usage <= config.storageCapBytes) break;
+    if (isQueued(c.id)) continue; // проект ждёт джобу — исходник ещё нужен
     const file = path.join(projectDir(c.id), c.video_file);
     fs.rmSync(file, { force: true });
     db.prepare(`UPDATE projects SET video_purged = 1 WHERE id = ?`).run(c.id);
@@ -72,6 +74,31 @@ export function enforceStorageCap(): { purged: string[] } {
   }
   usageCache = null;
   return { purged };
+}
+
+/** Подметает файлы рефов, осиротевшие после оборванных загрузок (их нет в БД). */
+export function sweepOrphanRefFiles(): number {
+  const db = getDb();
+  const root = path.join(config.dataDir, 'projects');
+  if (!fs.existsSync(root)) return 0;
+  let removed = 0;
+  for (const pid of fs.readdirSync(root)) {
+    const rd = path.join(root, pid, 'refs');
+    if (!fs.existsSync(rd)) continue;
+    const known = new Set(
+      (db.prepare(`SELECT file FROM refs WHERE project_id = ?`).all(pid) as Array<{ file: string }>).map(
+        (r) => r.file,
+      ),
+    );
+    for (const f of fs.readdirSync(rd)) {
+      if (!known.has(f)) {
+        fs.rmSync(path.join(rd, f), { force: true });
+        removed++;
+      }
+    }
+  }
+  if (removed > 0) usageCache = null;
+  return removed;
 }
 
 export function deleteProjectFiles(id: string): void {
@@ -85,5 +112,9 @@ export function safeMediaPath(projectId: string, sub: 'frames' | 'refs' | '.', f
   const base = sub === '.' ? projectDir(projectId) : path.join(projectDir(projectId), sub);
   const full = path.join(base, file);
   if (!full.startsWith(projectDir(projectId))) return null;
-  return fs.existsSync(full) ? full : null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
 }

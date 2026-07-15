@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config';
 import { getDb, resetInterruptedJobs } from './db';
 import { registerRoutes } from './routes';
-import { enforceStorageCap } from './storage';
+import { enforceStorageCap, sweepOrphanRefFiles } from './storage';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,6 +15,8 @@ async function main(): Promise<void> {
   fs.mkdirSync(config.dataDir, { recursive: true });
   getDb();
   resetInterruptedJobs();
+  const swept = sweepOrphanRefFiles();
+  if (swept) console.log(`[sweep] удалено файлов-сирот от оборванных загрузок: ${swept}`);
   const { purged } = enforceStorageCap();
   if (purged.length) console.log(`[rotation] на старте очищены исходники: ${purged.join(', ')}`);
 
