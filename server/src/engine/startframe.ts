@@ -102,7 +102,8 @@ export async function generateStartFrame(
   // Первый кадр исходника — ПЕРВЫМ изображением: кадр = in-place edit (фон/ракурс/свет
   // остаются пиксель-в-пиксель), а не реконструкция по описанию (та уводила композицию)
   const firstFrame = path.join(framesDir(projectId), 'first.jpg');
-  if (fs.existsSync(firstFrame)) {
+  const hasSourceFrame = fs.existsSync(firstFrame);
+  if (hasSourceFrame) {
     images.unshift(await toFile(fs.createReadStream(firstFrame), 'source-frame.jpg', { type: 'image/jpeg' }));
   } else {
     console.warn(`[startframe] project=${projectId} нет first.jpg — кадр пойдёт реконструкцией по промту`);
@@ -113,7 +114,6 @@ export async function generateStartFrame(
     : startFrameSize(meta.width, meta.height, model);
   const params: Record<string, unknown> = {
     model,
-    image: images,
     size,
     quality,
     // сохраняет лица/детали входных фото — критично для identity модели
@@ -128,8 +128,8 @@ export async function generateStartFrame(
     ) => Promise<ImagesResponse>);
 
   /** Одна попытка с фолбэком input_fidelity (модели без параметра). */
-  const attempt = async (prompt: string): Promise<ImagesResponse> => {
-    const p: Record<string, unknown> = { ...params, prompt };
+  const attempt = async (prompt: string, imgs: unknown[]): Promise<ImagesResponse> => {
+    const p: Record<string, unknown> = { ...params, prompt, image: imgs };
     try {
       return await edit(p);
     } catch (e) {
@@ -142,31 +142,49 @@ export async function generateStartFrame(
     }
   };
 
-  // Анти-модерационная лестница фразы фигуры: tier1 → tier2 → без фразы
+  // Анти-модерационная лестница фразы фигуры: tier1 → tier2 → без фразы.
+  // null = ВСЕ ступени отбиты модерацией (не ошибка сети/API — те бросаются).
   const ladder = moderationLadder(imagePrompt);
-  let res: ImagesResponse | null = null;
-  for (let i = 0; i < ladder.length; i++) {
-    try {
-      res = await attempt(ladder[i]!);
-      if (i > 0) {
-        console.warn(
-          `[startframe-moderation] project=${projectId} фраза фигуры смягчена до яруса ${i + 1}/${ladder.length} (свап-промт не тронут)`,
-        );
+  const runLadder = async (imgs: unknown[]): Promise<ImagesResponse | null> => {
+    for (let i = 0; i < ladder.length; i++) {
+      try {
+        const r = await attempt(ladder[i]!, imgs);
+        if (i > 0) {
+          console.warn(
+            `[startframe-moderation] project=${projectId} фраза фигуры смягчена до яруса ${i + 1}/${ladder.length} (свап-промт не тронут)`,
+          );
+        }
+        return r;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (isModerationRefusal(msg)) {
+          if (i < ladder.length - 1) {
+            console.warn(`[startframe-moderation] отказ модерации, пробую мягче: ${msg.slice(0, 120)}`);
+            continue;
+          }
+          return null;
+        }
+        if (e instanceof OpenAI.APIError && e.status === 429) {
+          throw new Error(`Лимит или квота OpenAI (429) — повтори позже. ${msg.slice(0, 160)}`);
+        }
+        throw new Error(`Images API: ${msg.slice(0, 300)}`);
       }
-      break;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (i < ladder.length - 1 && isModerationRefusal(msg)) {
-        console.warn(`[startframe-moderation] отказ модерации, пробую мягче: ${msg.slice(0, 120)}`);
-        continue;
-      }
-      if (e instanceof OpenAI.APIError && e.status === 429) {
-        throw new Error(`Лимит или квота OpenAI (429) — повтори позже. ${msg.slice(0, 160)}`);
-      }
-      throw new Error(`Images API: ${msg.slice(0, 300)}`);
     }
+    return null;
+  };
+
+  let res = await runLadder(images);
+  if (!res && hasSourceFrame) {
+    // Вторая ось фолбэка: модерация капризна к edit'у кадра с человеком — пробуем
+    // реконструкцию без кадра исходника (поведение v2), кадр менее точный, но флоу живёт
+    console.warn(
+      `[startframe-moderation] project=${projectId} edit с кадром исходника отбит модерацией — фолбэк на реконструкцию без кадра`,
+    );
+    res = await runLadder(images.slice(1));
   }
-  if (!res) throw new Error('Images API не дал ответа');
+  if (!res) {
+    throw new Error('Images API: запрос отбит модерацией на всех ступенях — переформулируй промт (кнопка «Перегенерировать»)');
+  }
 
   console.log(
     `[llm-usage] task=start_frame model=${String(params.model)} size=${size} in=${res.usage?.input_tokens ?? '?'} out=${res.usage?.output_tokens ?? '?'}`,

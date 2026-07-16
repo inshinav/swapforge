@@ -69,11 +69,13 @@ describe('доктрина v2: opener и режимные блоки', () => {
     expect(DOCTRINE_SYSTEM).not.toContain('KEEP UNCHANGED, frame-accurate to the source video: [an explicit');
   });
 
-  it('v3 старт-кадр: in-place edit первого кадра, не реконструкция', () => {
+  it('v3 старт-кадр: in-place edit первого кадра, не реконструкция; модерационно-безопасные формулировки', () => {
     expect(DOCTRINE_SYSTEM).toContain('SOURCE FIRST FRAME attached as the FIRST image');
     expect(DOCTRINE_SYSTEM).toContain('IN-PLACE EDIT of the source frame');
-    expect(DOCTRINE_SYSTEM).toContain('Replace ONLY the person');
+    expect(DOCTRINE_SYSTEM).toContain('Recreate this exact frame with the character');
     expect(DOCTRINE_SYSTEM).toContain('EXACTLY as in the source frame');
+    expect(DOCTRINE_SYSTEM).toContain('AI-generated virtual characters');
+    expect(DOCTRINE_SYSTEM).toContain('NEVER write "replace the person"');
     expect(DOCTRINE_SYSTEM).not.toContain('Reconstruct the first-frame scene');
     expect(DOCTRINE_SYSTEM).not.toContain('State the aspect ratio');
   });
@@ -254,6 +256,30 @@ describe('модерационная лестница старт-кадра', ()
     });
     expect(names[0]).toBe('source-frame.jpg'); // база = кадр исходника
     expect(names.length).toBe(REFS.length + 1);
+  });
+
+  it('generateStartFrame: вся лесенка с кадром отбита модерацией → фолбэк-реконструкция без кадра', async () => {
+    const pid = 'proj-modfallback';
+    fs.mkdirSync(refsDir(pid), { recursive: true });
+    fs.writeFileSync(path.join(refsDir(pid), 'ref_a.jpg'), 'x');
+    const { framesDir } = await import('../src/storage');
+    fs.mkdirSync(framesDir(pid), { recursive: true });
+    fs.writeFileSync(path.join(framesDir(pid), 'first.jpg'), 'frame');
+
+    const calls: string[][] = [];
+    const editFn = async (params: Record<string, unknown>) => {
+      const names = (params.image as Array<{ name?: string }>).map((f) => f.name ?? '?');
+      calls.push(names);
+      if (names[0] === 'source-frame.jpg') throw new Error('rejected by safety system');
+      return { data: [{ b64_json: Buffer.from('png').toString('base64') }], usage: {} };
+    };
+    const file = await generateStartFrame(pid, 1, 'Recast the character.', REFS, META, {
+      forceNineSixteen: true,
+      _editFn: editFn,
+    });
+    expect(file).toMatch(/^start_v1_/);
+    expect(calls[0]![0]).toBe('source-frame.jpg'); // сперва с кадром
+    expect(calls[calls.length - 1]![0]).not.toBe('source-frame.jpg'); // фолбэк без кадра
   });
 });
 
