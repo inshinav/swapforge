@@ -127,7 +127,7 @@ function StartFramePanel({
     <div className="rounded-xl border border-line bg-panel2 p-4">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm font-semibold">Стартовый кадр по API</span>
-        <span className="text-xs text-dim">gpt-image-2 · high · 2K · с твоими рефами · это reference image 1</span>
+        <span className="text-xs text-dim">gpt-image-2 · high · с твоими рефами · это reference image 1</span>
         <div className="flex-1" />
         <Button kind={frames.length ? 'ghost' : 'primary'} onClick={() => void generate()} busy={busy}>
           {busy ? 'Генерирую… ~1–2 мин' : frames.length ? 'Ещё вариант' : '🖼 Сгенерировать кадр'}
@@ -171,8 +171,6 @@ function ParamsBlock({ p }: { p: PromptRow }) {
       <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
         <Param k="endpoint" v={params.endpoint} mono />
         <Param k="video" v={params.video} />
-        <Param k="aspect_ratio" v={params.aspect_ratio} mono />
-        <Param k="resolution" v={params.resolution} />
         <Param k="enable_web_search" v="false" mono />
         <Param k="длительность" v={params.durationNote} />
       </dl>

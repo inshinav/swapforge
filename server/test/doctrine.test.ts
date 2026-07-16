@@ -54,9 +54,28 @@ describe('доктрина v2: opener и режимные блоки', () => {
     expect(DOCTRINE_SYSTEM).toContain(
       'Reference image 1 is the exact first frame of the edit — start from it.',
     );
-    expect(DOCTRINE_SYSTEM).toContain('KEEP UNCHANGED, frame-accurate');
-    expect(DOCTRINE_SYSTEM).toContain('DO NOT change the environment');
+    expect(DOCTRINE_SYSTEM).toContain(
+      'Keep the entire world, background, lighting, camera work and ALL motion exactly as in the source video',
+    );
+    expect(DOCTRINE_SYSTEM).toContain('DO NOT change or restyle anything except');
     expect(DOCTRINE_SYSTEM).toContain('LIGHT the new');
+  });
+
+  it('v3 «не сковывать»: без инвентарей в KEEP, подавители — только в итерациях, без форматов', () => {
+    expect(DOCTRINE_SYSTEM).toContain('TRUST THE SOURCE VIDEO');
+    expect(DOCTRINE_SYSTEM).toContain('NEVER enumerate scene objects');
+    expect(DOCTRINE_SYSTEM).toContain('for ITERATIONS');
+    expect(DOCTRINE_SYSTEM).toContain('Never mention resolutions, aspect ratios or formats');
+    expect(DOCTRINE_SYSTEM).not.toContain('KEEP UNCHANGED, frame-accurate to the source video: [an explicit');
+  });
+
+  it('v3 старт-кадр: in-place edit первого кадра, не реконструкция', () => {
+    expect(DOCTRINE_SYSTEM).toContain('SOURCE FIRST FRAME attached as the FIRST image');
+    expect(DOCTRINE_SYSTEM).toContain('IN-PLACE EDIT of the source frame');
+    expect(DOCTRINE_SYSTEM).toContain('Replace ONLY the person');
+    expect(DOCTRINE_SYSTEM).toContain('EXACTLY as in the source frame');
+    expect(DOCTRINE_SYSTEM).not.toContain('Reconstruct the first-frame scene');
+    expect(DOCTRINE_SYSTEM).not.toContain('State the aspect ratio');
   });
 
   it('матрица 4 комбо: блоки появляются строго по своим флагам', () => {
@@ -91,37 +110,34 @@ describe('доктрина v2: opener и режимные блоки', () => {
     expect(ANALYST_SYSTEM).toContain('watermarks');
   });
 
-  it('режим OFF: ядро доктрины велит защищать оверлеи в KEEP (не регресс против v1)', () => {
-    // аналитик выносит оверлеи из background → без этого правила при выключенной галочке
-    // их никто бы ни хранил, ни удалял
+  it('режим OFF: оверлеи хранятся одной короткой строкой, без перечислений', () => {
     expect(DOCTRINE_SYSTEM).toContain('NO remove-text mode is active');
-    expect(DOCTRINE_SYSTEM).toContain('KEEP them explicitly and verbatim');
+    expect(DOCTRINE_SYSTEM).toContain('Keep all on-screen text exactly as in the source');
+    expect(DOCTRINE_SYSTEM).toContain('Do not quote or enumerate the captions');
   });
 
-  it('бюджет слов зашит в доктрину: жёсткая полоса, приоритет якорей, неприкосновенные строки', () => {
-    expect(DOCTRINE_SYSTEM).toContain('WORD BUDGET (hard): videoPrompt 130–200 words');
-    expect(DOCTRINE_SYSTEM).toContain('8–12 strongest anchors');
-    expect(DOCTRINE_SYSTEM).toContain('Density beats coverage');
+  it('бюджет слов зашит в доктрину: жёсткая полоса и неприкосновенные строки', () => {
+    expect(DOCTRINE_SYSTEM).toContain('WORD BUDGET (hard): videoPrompt 60–120 words');
+    expect(DOCTRINE_SYSTEM).toContain('never above 150');
     expect(DOCTRINE_SYSTEM).toContain('NEVER cut to fit');
-    expect(DOCTRINE_SYSTEM).toContain('80–160 words'); // полоса imagePrompt
+    expect(DOCTRINE_SYSTEM).toContain('Length: 60–120 words'); // полоса imagePrompt
   });
 });
 
 describe('энфорсмент длины промтов кодом', () => {
   it('wordCount и компресс-запрос: verbatim-строки и бюджет в инструкции', () => {
     expect(wordCount('  one   two\nthree ')).toBe(3);
-    expect(VIDEO_PROMPT_MAX_WORDS).toBe(220);
+    expect(VIDEO_PROMPT_MAX_WORDS).toBe(150);
     const req = buildCompressionRequest({
       videoPrompt: Array(300).fill('word').join(' '),
       imagePrompt: 'img prompt',
       notes: 'заметки',
     });
     expect(req).toContain('videoPrompt = 300 words');
-    expect(req).toContain('STRICTLY UNDER 200 words');
-    expect(req).toContain('TARGET: videoPrompt 170–190 words');
-    expect(req).toContain('DELETE the weakest KEEP anchors');
+    expect(req).toContain('STRICTLY UNDER 120 words');
+    expect(req).toContain('TARGET: videoPrompt 80–110 words');
+    expect(req).toContain('no scene inventories, no captions, no timings');
     expect(req).toContain('Keep verbatim: the reference-1 line');
-    expect(req).toContain('every DO NOT guardrail');
     expect(req).toContain('img prompt');
     expect(req).toContain('заметки');
   });
@@ -217,6 +233,27 @@ describe('модерационная лестница старт-кадра', ()
     expect(prompts.length).toBe(2);
     expect(prompts[1]).toContain(FIGURE_TIER2);
     expect(file).toMatch(/^start_v1_/);
+  });
+
+  it('generateStartFrame: first.jpg исходника идёт ПЕРВЫМ изображением (in-place edit)', async () => {
+    const pid = 'proj-firstframe';
+    fs.mkdirSync(refsDir(pid), { recursive: true });
+    fs.writeFileSync(path.join(refsDir(pid), 'ref_a.jpg'), 'x');
+    const { framesDir } = await import('../src/storage');
+    fs.mkdirSync(framesDir(pid), { recursive: true });
+    fs.writeFileSync(path.join(framesDir(pid), 'first.jpg'), 'frame');
+
+    let names: string[] = [];
+    const editFn = async (params: Record<string, unknown>) => {
+      names = (params.image as Array<{ name?: string }>).map((f) => f.name ?? '?');
+      return { data: [{ b64_json: Buffer.from('png').toString('base64') }], usage: {} };
+    };
+    await generateStartFrame(pid, 1, 'Swap the person.', REFS, META, {
+      forceNineSixteen: true,
+      _editFn: editFn,
+    });
+    expect(names[0]).toBe('source-frame.jpg'); // база = кадр исходника
+    expect(names.length).toBe(REFS.length + 1);
   });
 });
 

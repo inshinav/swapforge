@@ -99,10 +99,9 @@ function fmtDate(s: string): string {
 }
 
 function GenMeta({ g }: { g: GenerationRow }) {
-  const p = (g.params ?? {}) as { resolution?: string; generate_audio?: boolean };
+  const p = (g.params ?? {}) as { generate_audio?: boolean };
   return (
     <div className="flex flex-wrap gap-2">
-      <Tag tone="lime">{p.resolution ?? '720p'} · 9:16</Tag>
       <Tag>{p.generate_audio === false ? 'звук исходника' : 'нативный звук'}</Tag>
       <Tag>версия промтов {g.version}</Tag>
       {g.costActualUsd !== null ? (

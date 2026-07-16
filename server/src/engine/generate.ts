@@ -68,10 +68,13 @@ export function buildGenerationRequest(
       `## REFERENCE MANIFEST (this exact order goes into reference_images)\n${buildManifestText(refs)}`,
   });
 
-  // Первый кадр — для точной реконструкции сцены старт-кадра
+  // Первый кадр — imagePrompt правит именно его (in-place edit), промт должен это знать
   const firstFrame = path.join(framesDir(projectId), 'first.jpg');
   if (fs.existsSync(firstFrame)) {
-    parts.push({ type: 'text', text: 'SOURCE FIRST FRAME (reconstruct this exact shot in the imagePrompt):' });
+    parts.push({
+      type: 'text',
+      text: 'SOURCE FIRST FRAME — the imagePrompt will be executed on THIS exact image (attached first at edit time); it swaps only the subjects and keeps everything else pixel-faithful:',
+    });
     parts.push({ type: 'image', b64: fs.readFileSync(firstFrame).toString('base64'), mime: 'image/jpeg', detail: 'high' });
   }
 
@@ -119,20 +122,19 @@ export function wordCount(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length;
 }
 
-/** Норма доктрины 130–200; выше потолка — один принудительный компресс-проход. */
-export const VIDEO_PROMPT_MAX_WORDS = 220;
+/** Норма доктрины 60–120; выше потолка — принудительный компресс-проход. */
+export const VIDEO_PROMPT_MAX_WORDS = 150;
 
 /** Текст компресс-прохода: без картинок и анализа — только прежний вывод и бюджет.
- *  Точечная цель (170–190) вместо полосы: по полосе модели стабильно промахиваются вверх. */
+ *  Точечная цель вместо полосы: по полосе модели стабильно промахиваются вверх. */
 export function buildCompressionRequest(pair: PromptPair): string {
   return (
     `Your previous output is over the WORD BUDGET (videoPrompt = ${wordCount(pair.videoPrompt)} words).\n` +
-    `Return a videoPrompt STRICTLY UNDER 200 words — an answer over 200 is invalid. Count the words before returning.\n` +
-    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 170–190 words; imagePrompt 100–140 (ceiling 160). Rules:\n` +
+    `Return a videoPrompt STRICTLY UNDER 120 words — an answer over 120 is invalid. Count the words before returning.\n` +
+    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 80–110 words; imagePrompt 60–110 (ceiling 120). Rules:\n` +
     `- Keep verbatim: the reference-1 line, identity-lock sentences, active mode sentences (REMOVE-text / figure).\n` +
-    `- Keep every DO NOT guardrail (merging clauses into fewer sentences is fine).\n` +
-    `- Merge the KEEP list down to the 8–12 strongest anchors (reflective/moving elements, light, camera path first).\n` +
-    `- Cut adjectives and repetition. If still over the ceiling, DELETE the weakest KEEP anchors until it fits.\n` +
+    `- The keep-intent is ONE opening sentence and the DO NOT part is ONE sentence — no scene inventories, no captions, no timings.\n` +
+    `- Keep the REPLACE identity details; cut adjectives and repetition elsewhere.\n` +
     `- Do NOT add any new content or change meaning. Keep "notes" as is. Count words before returning.\n\n` +
     `Previous videoPrompt:\n${pair.videoPrompt}\n\nPrevious imagePrompt:\n${pair.imagePrompt}\n\nPrevious notes:\n${pair.notes}`
   );

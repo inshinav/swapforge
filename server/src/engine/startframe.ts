@@ -4,7 +4,7 @@ import OpenAI, { toFile } from 'openai';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
-import { refsDir, startDir } from '../storage';
+import { framesDir, refsDir, startDir } from '../storage';
 import { recordUsage } from '../usage';
 import { FIGURE_TIER1, FIGURE_TIER2 } from './doctrine';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
@@ -99,6 +99,14 @@ export async function generateStartFrame(
     ),
   );
   if (images.length === 0) throw new Error('Нет референсов — приложи фото модели');
+  // Первый кадр исходника — ПЕРВЫМ изображением: кадр = in-place edit (фон/ракурс/свет
+  // остаются пиксель-в-пиксель), а не реконструкция по описанию (та уводила композицию)
+  const firstFrame = path.join(framesDir(projectId), 'first.jpg');
+  if (fs.existsSync(firstFrame)) {
+    images.unshift(await toFile(fs.createReadStream(firstFrame), 'source-frame.jpg', { type: 'image/jpeg' }));
+  } else {
+    console.warn(`[startframe] project=${projectId} нет first.jpg — кадр пойдёт реконструкцией по промту`);
+  }
 
   const size = opts.forceNineSixteen
     ? startFrameSize(1080, 1920, model)

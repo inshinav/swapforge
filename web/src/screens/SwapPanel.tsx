@@ -208,9 +208,6 @@ export function SwapPanel({
                 {proj.videoPurged && (
                   <span className="text-xs text-danger">исходник очищен ротацией — залей ролик заново</span>
                 )}
-                <div className="text-xs text-dim">
-                  выход всегда 720p · 9:16{proj.meta && proj.meta.aspect !== '9:16' ? ' · кадр будет пересобран под вертикаль' : ''}
-                </div>
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-3">
@@ -236,9 +233,6 @@ export function SwapPanel({
                 {proj.videoPurged && (
                   <span className="text-xs text-danger">исходник очищен ротацией — залей ролик заново</span>
                 )}
-                <span className="text-xs text-dim">
-                  выход всегда 720p · 9:16{proj.meta && proj.meta.aspect !== '9:16' ? ' · кадр будет пересобран под вертикаль' : ''}
-                </span>
               </div>
             )}
             {launchErr && <ErrorNote text={launchErr} />}
@@ -309,7 +303,7 @@ function EstimateLine({
           {est.approximate ? ' (примерно)' : ''}
         </span>
         <span className="text-mut">
-          WaveSpeed {fmtUsd(ws.usd)} ({ws.billedSeconds} бил. сек · {ws.resolution})
+          WaveSpeed {fmtUsd(ws.usd)} ({ws.billedSeconds} бил. сек)
         </span>
         <span className="text-mut">OpenAI ≈ {fmtUsd(est.openai.usd)}</span>
         <span className={est.balanceUsd !== null && ws.usd !== null && ws.usd > est.balanceUsd - 0.05 ? 'text-danger font-semibold' : 'text-mut'}>
@@ -366,7 +360,7 @@ function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
     { key: 'storyboard', label: 'Раскадровка', ...mark(framesDone, s === 'storyboarding', 'ffmpeg ищет смены сцен · ~10–30 с', t.storyboard) },
     { key: 'analyze', label: 'Анализ', ...mark(analysisDone, s === 'analyzing', 'vision смотрит кадры и строит карту рисков · ~30–90 с', t.analyze) },
     { key: 'generate', label: 'Промты', ...mark(promptsDone, s === 'generating', 'доктрина куёт пару промтов · ~15–50 с', t.generate) },
-    { key: 'startframe', label: 'Стартовый кадр', ...mark(startframeDone, s === 'startframing', 'gpt-image-2 · high · 9:16 · ~1–2 мин', t.startframe) },
+    { key: 'startframe', label: 'Стартовый кадр', ...mark(startframeDone, s === 'startframing', 'gpt-image-2 · high · ~1–2 мин', t.startframe) },
     { key: 'upload', label: 'Загрузка в WaveSpeed', ...mark(!!genS && genS !== 'uploading_assets', genS === 'uploading_assets', 'ролик + кадр + рефы улетают на WaveSpeed', gen?.uploadSec) },
     { key: 'render', label: 'Рендер Seedance', ...mark(genS === 'downloading' || genS === 'done', genS === 'submitted' || genS === 'rendering', 'обычно 2–10 мин — можно уйти со страницы', gen?.renderSec) },
     { key: 'download', label: 'Скачивание', ...mark(genS === 'done', genS === 'downloading', 'забираю готовый ролик в библиотеку') },

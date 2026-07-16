@@ -173,9 +173,11 @@ describe('манифест и параметры', () => {
 
 describe('запрос генерации', () => {
   it('доктрина содержит контракт и правило нумерации', () => {
-    expect(DOCTRINE_SYSTEM).toContain('KEEP UNCHANGED, frame-accurate');
+    expect(DOCTRINE_SYSTEM).toContain(
+      'Keep the entire world, background, lighting, camera work and ALL motion exactly as in the source video',
+    );
     expect(DOCTRINE_SYSTEM).toContain('Reference image 1 is the exact first frame of the edit — start from it.');
-    expect(DOCTRINE_SYSTEM).toContain('DO NOT change the environment');
+    expect(DOCTRINE_SYSTEM).toContain('DO NOT change or restyle anything except');
     expect(DOCTRINE_SYSTEM).toContain('LIGHT the new');
   });
   it('обычная генерация: анализ + манифест, без итерации', () => {
