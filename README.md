@@ -38,6 +38,10 @@ deploy/   swapforge.service (systemd, hardening), nginx conf (basic auth + ACME)
 
 Код: `/opt/swapforge`. Данные: `/var/lib/swapforge` (`swapforge.db` + `projects/<id>/{source.mp4, frames/, refs/}`).
 
+**Логика оптимального промта** (почему KEEP/REPLACE/GUARDRAILS, бюджет 130–200 слов, выбор
+якорей, таргет-фиксы артефактов) — [docs/prompting-logic.md](docs/prompting-logic.md);
+машинная версия тех же правил = `server/src/engine/doctrine.ts`.
+
 ## LLM
 
 Провайдер выбирается через env: `LLM_PROVIDER=openai|anthropic` (+ `OPENAI_MODEL` / `ANTHROPIC_MODEL`). Оба пути используют structured output (json_schema strict с фолбэком на json_object) и ретраи на 429/5xx. Анализ шлёт кадры с таймстемпами (scene/first — high detail, сетка — low), генерация дополнительно получает фото рефов и первый кадр — промты несут реальные детали внешности.

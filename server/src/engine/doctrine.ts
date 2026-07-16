@@ -41,7 +41,8 @@ DO NOT change the environment, background or scene. DO NOT substitute or redesig
 ### Rules that actually move quality
 - WaveSpeed automatically prepends "Edit the input video." to every prompt — NEVER write your own edit-opener ("Edit this video" etc.); the videoPrompt begins directly with the keep/replace intent line.
 - Replacement, not addition. "The rider IS the person in reference image 2", "completely replace" — never soft phrasings ("make the rider look like…"), they cause identity blend.
-- The KEEP list is explicit and concrete FROM THE ANALYSIS. Generic "keep the background" leaks. The model protects what you NAME: name the surfaces, the background objects, the light sources, the reflective elements.
+- The KEEP list is explicit and concrete FROM THE ANALYSIS, but SELECTIVE: pick the 8–12 strongest anchors, not an inventory. Priority order: reflective/moving elements (identity leaks there) → named light sources and time of day → camera position and path → the 2–3 dominant surfaces/objects. Merge related items into one clause ("Marathon canopy, pumps and columns"), drop generic static scenery — the model was not going to touch it, and naming it spends attention.
+- Density beats coverage: Seedance's attention is finite. Every extra named object dilutes the REPLACE signal and invites the model to repaint the thing you described. Name fewer things, name them precisely, strongest first.
 - Identity lock across time is mandatory: "keep this face consistent and recognizable in every frame" — Seedance drifts on 10–15 s clips. Add the same for the object's design when an object is swapped.
 - Pin the person↔object physical relationship: same posture, hands on the same grips/handles, feet in the same position.
 - Do NOT retell the scene — it is already in the video. Spend words on KEEP / REPLACE / GUARDRAILS only.
@@ -51,7 +52,7 @@ DO NOT change the environment, background or scene. DO NOT substitute or redesig
 - If the analysis lists overlays in world.overlayText and NO remove-text mode is active, those overlays ARE part of the world: KEEP them explicitly and verbatim (e.g. 'the on-screen caption "…" stays exactly as is — same text, position and timing'), and keep them present in the imagePrompt's first frame too.
 - Adapt to the ACTUAL reference set: one person photo → one person REPLACE block; several photos of the same person → "the person shown in reference images 2 and 3"; no vehicle reference → NO vehicle REPLACE block and no vehicle DO-NOT clause. Never write sections for references that don't exist.
 - If a reference note says the outfit in the photo is NOT what should appear, describe the intended outfit explicitly instead of pointing at the photo's outfit.
-- Length: surgical and dense, typically 120–220 words. Every sentence must do work.
+- WORD BUDGET (hard): videoPrompt 130–200 words, never above 220. Per block: intent line ≤ 18 words; KEEP 55–85 (one sentence, the 8–12 anchors); each REPLACE 40–65; LIGHT 15–25; DO NOT 30–45. Before returning, count the words; if over budget — merge KEEP anchors and cut adjectives until inside the band. NEVER cut to fit: the reference-1 line, identity-lock sentences, active mode sentences (REMOVE-text / figure), or a whole DO NOT clause (merging clauses is fine). Every sentence must do work.
 
 ## THE IMAGE PROMPT (start frame)
 
@@ -60,6 +61,7 @@ Purpose: pasted into ChatGPT (GPT Image) WITH the user's reference photos attach
 - Place the user's person (from the attached reference photos) in the EXACT same position, pose, scale and orientation as the original subject occupies in the first frame; same for objects (e.g. the motorcycle from the attached photo).
 - Reference the attachments explicitly ("the person from the attached photos", "the motorcycle from the attached photo") and carry over the real appearance details visible in the references (outfit, colors, design) unless a reference note overrides them.
 - State the aspect ratio (e.g. vertical 9:16) and require: photorealistic, natural integration with the scene's light, no text, no watermarks, no borders.
+- Length: 80–160 words — one dense scene description, not prose. Same economics as the videoPrompt: precise nouns beat adjective pile-ups.
 - Write imagePrompt in the language requested in the task line (English or Russian). English by default.
 
 ## OUTPUT

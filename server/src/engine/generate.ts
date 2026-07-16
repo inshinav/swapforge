@@ -94,7 +94,9 @@ export function buildGenerationRequest(
     );
     parts.push({
       type: 'text',
-      text: `## PRIOR SUCCESSFUL PROJECTS (similar; use as level/style anchors — do NOT copy their scene contents)\n${blocks.join('\n\n')}`,
+      text:
+        `## PRIOR SUCCESSFUL PROJECTS (similar; use as level/style anchors — do NOT copy their scene contents. ` +
+        `Examples may exceed the current word budget — the budget wins: match their precision, not their length)\n${blocks.join('\n\n')}`,
     });
   }
 
@@ -111,6 +113,26 @@ export function buildGenerationRequest(
   }
 
   return { system, parts };
+}
+
+export function wordCount(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Норма доктрины 130–200; выше этого порога — один принудительный компресс-проход. */
+export const VIDEO_PROMPT_MAX_WORDS = 240;
+
+/** Текст компресс-прохода: без картинок и анализа — только прежний вывод и бюджет. */
+export function buildCompressionRequest(pair: PromptPair): string {
+  return (
+    `Your previous output is over the WORD BUDGET (videoPrompt = ${wordCount(pair.videoPrompt)} words; hard band 130–200, imagePrompt ≤ 160).\n` +
+    `Rewrite BOTH prompts compressed to the budget. Rules:\n` +
+    `- Keep verbatim: the reference-1 line, identity-lock sentences, active mode sentences (REMOVE-text / figure).\n` +
+    `- Keep every DO NOT guardrail (merging clauses into fewer sentences is fine).\n` +
+    `- Merge the KEEP list down to the 8–12 strongest anchors (reflective/moving elements, light, camera path first).\n` +
+    `- Cut adjectives and repetition. Do NOT add any new content or change meaning. Keep "notes" as is.\n\n` +
+    `Previous videoPrompt:\n${pair.videoPrompt}\n\nPrevious imagePrompt:\n${pair.imagePrompt}\n\nPrevious notes:\n${pair.notes}`
+  );
 }
 
 export async function runGeneration(
@@ -133,6 +155,33 @@ export async function runGeneration(
   });
   const parsed = PromptPairZ.safeParse(raw);
   if (!parsed.success) throw new Error('LLM вернул промты не по схеме — повтори генерацию');
+
+  // Бюджет слов — энфорсмент кодом: один дешёвый компресс-проход (без картинок),
+  // при любом сбое остаёмся на исходной паре (fail-soft)
+  const words = wordCount(parsed.data.videoPrompt);
+  if (words <= VIDEO_PROMPT_MAX_WORDS) return parsed.data;
+  try {
+    const rawC = await llm.structured({
+      system,
+      parts: [{ type: 'text', text: buildCompressionRequest(parsed.data) }],
+      schemaName: 'prompt_pair',
+      schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
+      maxTokens: 4000,
+      models: modelChainFor('generate'),
+      meta: { projectId },
+    });
+    const compressed = PromptPairZ.safeParse(rawC);
+    if (compressed.success && wordCount(compressed.data.videoPrompt) < words) {
+      console.log(
+        `[prompt-length] videoPrompt ${words} слов > ${VIDEO_PROMPT_MAX_WORDS} → сжат до ${wordCount(compressed.data.videoPrompt)}`,
+      );
+      return compressed.data;
+    }
+  } catch (e) {
+    console.warn(
+      `[prompt-length] компресс-проход не удался (${e instanceof Error ? e.message.slice(0, 120) : e}) — оставляю исходный промт (${words} слов)`,
+    );
+  }
   return parsed.data;
 }
 

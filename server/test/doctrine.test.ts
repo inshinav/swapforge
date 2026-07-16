@@ -15,7 +15,8 @@ const {
   FIGURE_TIER2,
   ANALYST_SYSTEM,
 } = await import('../src/engine/doctrine');
-const { buildGenerationRequest } = await import('../src/engine/generate');
+const { buildGenerationRequest, wordCount, buildCompressionRequest, VIDEO_PROMPT_MAX_WORDS } =
+  await import('../src/engine/generate');
 const { isModerationRefusal, moderationLadder, generateStartFrame } = await import(
   '../src/engine/startframe'
 );
@@ -95,6 +96,32 @@ describe('доктрина v2: opener и режимные блоки', () => {
     // их никто бы ни хранил, ни удалял
     expect(DOCTRINE_SYSTEM).toContain('NO remove-text mode is active');
     expect(DOCTRINE_SYSTEM).toContain('KEEP them explicitly and verbatim');
+  });
+
+  it('бюджет слов зашит в доктрину: жёсткая полоса, приоритет якорей, неприкосновенные строки', () => {
+    expect(DOCTRINE_SYSTEM).toContain('WORD BUDGET (hard): videoPrompt 130–200 words');
+    expect(DOCTRINE_SYSTEM).toContain('8–12 strongest anchors');
+    expect(DOCTRINE_SYSTEM).toContain('Density beats coverage');
+    expect(DOCTRINE_SYSTEM).toContain('NEVER cut to fit');
+    expect(DOCTRINE_SYSTEM).toContain('80–160 words'); // полоса imagePrompt
+  });
+});
+
+describe('энфорсмент длины промтов кодом', () => {
+  it('wordCount и компресс-запрос: verbatim-строки и бюджет в инструкции', () => {
+    expect(wordCount('  one   two\nthree ')).toBe(3);
+    expect(VIDEO_PROMPT_MAX_WORDS).toBe(240);
+    const req = buildCompressionRequest({
+      videoPrompt: Array(300).fill('word').join(' '),
+      imagePrompt: 'img prompt',
+      notes: 'заметки',
+    });
+    expect(req).toContain('videoPrompt = 300 words');
+    expect(req).toContain('hard band 130–200');
+    expect(req).toContain('Keep verbatim: the reference-1 line');
+    expect(req).toContain('every DO NOT guardrail');
+    expect(req).toContain('img prompt');
+    expect(req).toContain('заметки');
   });
 });
 
