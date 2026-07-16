@@ -14,6 +14,8 @@ export interface StructuredRequest {
   maxTokens?: number;
   /** Цепочка моделей: первая — основная, дальше авто-фолбэки при сбое (см. config.modelChainFor). */
   models?: string[];
+  /** Привязка расхода к проекту/генерации (usage_events). */
+  meta?: { projectId?: string | null; generationId?: string | null };
 }
 
 export interface LlmClient {

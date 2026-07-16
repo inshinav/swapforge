@@ -6,7 +6,7 @@ import { pipeline as streamPipeline } from 'node:stream/promises';
 import { config, llmKeyPresent, llmModelName } from './config';
 import { getDb } from './db';
 import { ffmpegAvailable, probe } from './ffmpeg';
-import { isQueued } from './jobs';
+import { BUSY_STATUSES, isQueued } from './jobs';
 import {
   dataUsageBytes,
   deleteProjectFiles,
@@ -16,13 +16,26 @@ import {
   refsDir,
   safeMediaPath,
 } from './storage';
-import { startAnalysis, startGeneration, startStoryboard } from './engine/pipeline';
+import { advanceFlow, startAnalysis, startGeneration, startStoryboard } from './engine/pipeline';
 import { generateStartFrame } from './engine/startframe';
+import {
+  RenderGateError,
+  activeGeneration,
+  parseGenerateAudio,
+  projectHasActiveGeneration,
+  recheckGeneration,
+  retryGeneration,
+  startRender,
+} from './engine/render';
+import { nextStageOf, parseFlags, snapshotProject } from './engine/orchestrator';
+import { classifyRef } from './engine/classify';
+import { buildEstimate, getBalanceCached, pricingDates } from './pricing';
+import { monthSummary } from './usage';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
-import type { HealthInfo } from '../../shared/api-types';
+import type { HealthInfo, PricingInfo, RefInfo } from '../../shared/api-types';
 
-const BUSY = new Set(['storyboarding', 'analyzing', 'generating']);
+const BUSY = BUSY_STATUSES;
 const VIDEO_MIME: Record<string, string> = {
   'video/mp4': '.mp4',
   'video/quicktime': '.mov',
@@ -78,6 +91,39 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       storageCapBytes: config.storageCapBytes,
       diskUsedPct: Math.round((dataBytes / config.storageCapBytes) * 100),
     };
+  });
+
+  // ── Цены и расход ────────────────────────────────────────────────────────
+
+  app.get('/api/pricing', async (): Promise<PricingInfo> => {
+    const balanceUsd = await getBalanceCached();
+    const dates = pricingDates();
+    return {
+      balanceUsd,
+      litellmFetchedAt: dates.litellm,
+      wavespeedFetchedAt: dates.wavespeed,
+    };
+  });
+
+  app.get('/api/usage/summary', async (req, reply) => {
+    const q = (req.query ?? {}) as { month?: string };
+    const month = q.month ?? new Date().toISOString().slice(0, 7);
+    try {
+      return monthSummary(month);
+    } catch (e) {
+      return bad(reply, 400, e instanceof Error ? e.message : String(e));
+    }
+  });
+
+  app.get('/api/projects/:id/estimate', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = getProject(id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    try {
+      return await buildEstimate(p);
+    } catch (e) {
+      return bad(reply, 502, `Смета недоступна: ${e instanceof Error ? e.message : String(e)}`);
+    }
   });
 
   // ── Проекты ──────────────────────────────────────────────────────────────
@@ -146,8 +192,192 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getProject(id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Дождись окончания текущей задачи');
+    if (projectHasActiveGeneration(id)) {
+      return bad(reply, 409, 'Идёт рендер этого проекта — дождись окончания');
+    }
     getDb().prepare(`DELETE FROM projects WHERE id = ?`).run(id);
     deleteProjectFiles(id);
+    return { ok: true };
+  });
+
+  // ── One-click свап и рендеры ─────────────────────────────────────────────
+
+  app.post('/api/projects/:id/swap', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { id } = req.params as { id: string };
+    const p = getProject(id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
+    const active = activeGeneration();
+    if (active) {
+      return bad(reply, 409, active.project_id === id ? 'Рендер уже идёт' : 'Идёт рендер другого проекта — дождись');
+    }
+    if (!p.video_file || p.video_purged === 1) {
+      return bad(reply, 409, 'Исходник очищен ротацией — залей ролик заново');
+    }
+    if (!llmKeyPresent()) return bad(reply, 503, 'LLM-ключ не настроен на сервере');
+    const hasModelRef = getDb()
+      .prepare(`SELECT 1 FROM refs WHERE project_id = ? AND role = 'model' LIMIT 1`)
+      .get(id);
+    if (!hasModelRef) return bad(reply, 409, 'Нужен хотя бы один референс с ролью «модель»');
+
+    const body = (req.body ?? {}) as {
+      flags?: { removeText?: boolean; enhanceFigure?: boolean };
+      generateAudio?: boolean;
+      lang?: string;
+      confirmUnknownCost?: boolean;
+    };
+    // Звук: если тело его не прислало — берём сохранённую настройку проекта («под капотом»),
+    // а не дефолт: иначе свежий PATCH затирался бы протухшим значением из UI
+    const flagsJson = JSON.stringify({
+      removeText: !!body.flags?.removeText,
+      enhanceFigure: !!body.flags?.enhanceFigure,
+      generateAudio:
+        body.generateAudio === undefined ? parseGenerateAudio(p.flags_json) : !!body.generateAudio,
+    });
+
+    // Гвард запуска по деньгам: смета WaveSpeed против живого баланса
+    const draft = { ...p, flags_json: flagsJson };
+    const est = await buildEstimate(draft);
+    if (est.wavespeed.usd === null) {
+      if (!body.confirmUnknownCost) {
+        return bad(reply, 409, `Оценка WaveSpeed недоступна (${est.wavespeed.unavailableReason ?? '?'}) — подтверди запуск явно`);
+      }
+    } else if (est.balanceUsd !== null && est.wavespeed.usd > est.balanceUsd - 0.05) {
+      return bad(
+        reply,
+        409,
+        `Не хватает баланса WaveSpeed: рендер ≈ $${est.wavespeed.usd.toFixed(2)}, на счету $${est.balanceUsd.toFixed(2)} — пополни и жми ещё раз`,
+      );
+    }
+
+    getDb()
+      .prepare(
+        `UPDATE projects SET flags_json = ?, flow = 'auto', flow_started_at = datetime('now'), error = NULL WHERE id = ?`,
+      )
+      .run(flagsJson, id);
+
+    // Повторный свап с теми же галочками: nextStageOf говорит 'done', но смета обещала
+    // рендер — явный клик означает «прогнать ещё раз», запускаем рендер напрямую
+    const snap = snapshotProject({ ...p, flags_json: flagsJson });
+    if (nextStageOf(snap) === 'done') {
+      if (snap.latestGenStatus === 'done') {
+        try {
+          startRender(id, snap.latestVersion);
+        } catch (e) {
+          if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
+          throw e;
+        }
+      } else {
+        // failed: авто-пересабмит запрещён (деньги) — направляем к безопасным кнопкам
+        return bad(
+          reply,
+          409,
+          'Рендер этой версии уже падал — в карточке ролика жми «Проверить ещё раз» (бесплатно) или «Повторить рендер»',
+        );
+      }
+    } else {
+      advanceFlow(id);
+    }
+    return { ok: true, estimate: est };
+  });
+
+  // Точечное обновление флагов без запуска (сейчас — режим звука «под капотом»)
+  app.patch('/api/projects/:id/flags', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = getProject(id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    const body = (req.body ?? {}) as { generateAudio?: boolean };
+    if (typeof body.generateAudio !== 'boolean') return bad(reply, 400, 'Нечего обновлять');
+    let current: Record<string, unknown> = {};
+    try {
+      current = p.flags_json ? (JSON.parse(p.flags_json) as Record<string, unknown>) : {};
+    } catch {
+      /* кривой JSON перезапишем */
+    }
+    getDb()
+      .prepare(`UPDATE projects SET flags_json = ? WHERE id = ?`)
+      .run(JSON.stringify({ ...current, generateAudio: body.generateAudio }), id);
+    return { ok: true };
+  });
+
+  app.post('/api/projects/:id/generations', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { id } = req.params as { id: string };
+    const p = getProject(id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    const body = (req.body ?? {}) as { version?: number };
+    const version = body.version ?? snapshotProject(p).latestVersion;
+    if (!version) return bad(reply, 409, 'Сначала сгенерируй промты');
+    try {
+      const genId = startRender(id, version);
+      return { id: genId };
+    } catch (e) {
+      if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
+      throw e;
+    }
+  });
+
+  app.post('/api/generations/:genId/retry', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { genId } = req.params as { genId: string };
+    try {
+      return { id: await retryGeneration(genId) };
+    } catch (e) {
+      if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
+      throw e;
+    }
+  });
+
+  app.post('/api/generations/:genId/recheck', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { genId } = req.params as { genId: string };
+    try {
+      const status = await recheckGeneration(genId);
+      return { status };
+    } catch (e) {
+      if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
+      return bad(reply, 502, e instanceof Error ? e.message : String(e));
+    }
+  });
+
+  app.post('/api/generations/:genId/rating', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { genId } = req.params as { genId: string };
+    const db = getDb();
+    const gen = db
+      .prepare(`SELECT id, project_id, version, feedback_id, status FROM generations WHERE id = ?`)
+      .get(genId) as
+      | { id: string; project_id: string; version: number; feedback_id: string | null; status: string }
+      | undefined;
+    if (!gen) return bad(reply, 404, 'Генерация не найдена');
+    if (gen.status !== 'done') return bad(reply, 409, 'Оценивать можно только готовый ролик');
+    const body = (req.body ?? {}) as { rating?: number; artifacts?: string[]; notes?: string };
+    const rating = body.rating === 1 ? 1 : body.rating === -1 ? -1 : null;
+    if (rating === null) return bad(reply, 400, 'rating должен быть 1 или -1');
+    const artifacts = (body.artifacts ?? []).filter((a): a is ArtifactType =>
+      (ARTIFACT_TYPES as string[]).includes(a),
+    );
+    const notes = (body.notes ?? '').slice(0, 2000);
+
+    // Зеркало в feedback: UPDATE-in-place, чтобы флип 👍→👎 не оставлял мусор в few-shot
+    let feedbackId = gen.feedback_id;
+    if (feedbackId) {
+      db.prepare(`UPDATE feedback SET worked = ?, artifacts_json = ?, notes = ? WHERE id = ?`).run(
+        rating === 1 ? 1 : 0,
+        JSON.stringify(artifacts),
+        notes,
+        feedbackId,
+      );
+    } else {
+      feedbackId = randomUUID();
+      db.prepare(
+        `INSERT INTO feedback (id, project_id, version, worked, artifacts_json, notes) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(feedbackId, gen.project_id, gen.version, rating === 1 ? 1 : 0, JSON.stringify(artifacts), notes);
+    }
+    db.prepare(
+      `UPDATE generations SET rating = ?, artifacts_json = ?, notes = ?, feedback_id = ? WHERE id = ?`,
+    ).run(rating, JSON.stringify(artifacts), notes, feedbackId, genId);
     return { ok: true };
   });
 
@@ -165,8 +395,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       part.file.resume();
       return bad(reply, 415, `Референс должен быть jpg/png/webp, а не ${part.mimetype}`);
     }
-    const role = fieldValue(part.fields, 'role') || 'model';
-    if (!['model', 'vehicle', 'object'].includes(role)) {
+    const roleField = fieldValue(part.fields, 'role') || 'auto';
+    if (!['auto', 'model', 'vehicle', 'object'].includes(roleField)) {
       part.file.resume();
       return bad(reply, 400, 'Неизвестная роль');
     }
@@ -186,18 +416,36 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return bad(reply, 413, `Фото больше лимита ${Math.round(config.maxImageBytes / 1024 ** 2)} МБ`);
     }
     const db = getDb();
+
+    // роль: явная от пользователя → vision-классификатор → позиционная эвристика
+    let role = roleField;
+    let roleSource: 'manual' | 'auto' | 'heuristic' = 'manual';
+    let autoNote = '';
+    if (roleField === 'auto') {
+      const cls = await classifyRef(id, file);
+      if (cls) {
+        role = cls.role;
+        roleSource = 'auto';
+        autoNote = cls.note;
+      } else {
+        const have = db
+          .prepare(
+            `SELECT SUM(role = 'model') AS m, SUM(role = 'vehicle') AS v FROM refs WHERE project_id = ?`,
+          )
+          .get(id) as { m: number | null; v: number | null };
+        role = !have.m ? 'model' : !have.v ? 'vehicle' : 'object';
+        roleSource = 'heuristic';
+      }
+    }
+
     const maxIdx = db
       .prepare(`SELECT COALESCE(MAX(idx), -1) AS m FROM refs WHERE project_id = ?`)
       .get(id) as { m: number };
-    db.prepare(`INSERT INTO refs (id, project_id, idx, role, file, note) VALUES (?, ?, ?, ?, ?, ?)`).run(
-      refId,
-      id,
-      maxIdx.m + 1,
-      role,
-      file,
-      note,
-    );
-    return { id: refId, file };
+    db.prepare(
+      `INSERT INTO refs (id, project_id, idx, role, file, note, role_source, auto_note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(refId, id, maxIdx.m + 1, role, file, note, roleSource, autoNote);
+    return { id: refId, file, role, roleSource };
   });
 
   app.patch('/api/projects/:id/refs', async (req, reply) => {
@@ -214,7 +462,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
     for (const u of body.updates ?? []) {
       if (u.role && ['model', 'vehicle', 'object'].includes(u.role)) {
-        db.prepare(`UPDATE refs SET role = ? WHERE id = ? AND project_id = ?`).run(u.role, u.id, id);
+        // выбранная руками роль — финальная: классификатор её больше не перетирает
+        db.prepare(
+          `UPDATE refs SET role = ?, role_source = 'manual' WHERE id = ? AND project_id = ?`,
+        ).run(u.role, u.id, id);
       }
       if (typeof u.note === 'string') {
         db.prepare(`UPDATE refs SET note = ? WHERE id = ? AND project_id = ?`).run(
@@ -335,8 +586,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!body.version) return bad(reply, 400, 'Не указана версия промта');
     const db = getDb();
     const prev = db
-      .prepare(`SELECT kind, text FROM prompts WHERE project_id = ? AND version = ?`)
-      .all(id, body.version) as Array<{ kind: string; text: string }>;
+      .prepare(`SELECT kind, text, flags_json FROM prompts WHERE project_id = ? AND version = ?`)
+      .all(id, body.version) as Array<{ kind: string; text: string; flags_json: string | null }>;
     const prevVideo = prev.find((r) => r.kind === 'video')?.text;
     const prevImage = prev.find((r) => r.kind === 'image')?.text;
     if (!prevVideo || !prevImage) return bad(reply, 404, 'Версия промта не найдена');
@@ -349,9 +600,25 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       `INSERT INTO feedback (id, project_id, version, worked, artifacts_json, notes)
        VALUES (?, ?, ?, 0, ?, ?)`,
     ).run(randomUUID(), id, body.version, JSON.stringify(artifacts), notes);
+    // итерация наследует флаги исходной версии, а не текущие галочки проекта
+    const inherited = parseFlags(prev[0]?.flags_json);
+    // Галочки проекта синхронизируем с итерируемой версией: иначе advanceFlow увидит
+    // несовпадение флагов и молча перегенерирует БЕЗ таргет-фиксов (двойная LLM-трата
+    // + рендер обычных промтов вместо итерации). generateAudio не трогаем.
+    let curFlags: Record<string, unknown> = {};
+    try {
+      curFlags = p.flags_json ? (JSON.parse(p.flags_json) as Record<string, unknown>) : {};
+    } catch {
+      /* кривой JSON перезапишем */
+    }
+    db.prepare(`UPDATE projects SET flags_json = ? WHERE id = ?`).run(
+      JSON.stringify({ ...curFlags, removeText: inherited.removeText, enhanceFigure: inherited.enhanceFigure }),
+      id,
+    );
     startGeneration(id, {
       lang: body.lang === 'ru' ? 'ru' : 'en',
       iteration: { prevVideoPrompt: prevVideo, prevImagePrompt: prevImage, artifacts, notes },
+      flagsOverride: inherited,
     });
     return { ok: true };
   });
@@ -373,7 +640,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!promptRow) return bad(reply, 409, 'Сначала сгенерируй промты (нужен imagePrompt)');
     const refs = db
       .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
-      .all(id) as unknown as import('../../shared/api-types').RefInfo[];
+      .all(id) as unknown as RefInfo[];
     if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
     try {
       const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json));
@@ -390,8 +657,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getProject(id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     let full: string | null = null;
-    if (sub === 'frames' || sub === 'refs' || sub === 'start') full = safeMediaPath(id, sub, file);
-    else if (sub === 'src' && p.video_file && file === p.video_file) full = safeMediaPath(id, '.', file);
+    if (sub === 'frames' || sub === 'refs' || sub === 'start' || sub === 'renders') {
+      full = safeMediaPath(id, sub, file);
+    } else if (sub === 'src' && p.video_file && file === p.video_file) {
+      full = safeMediaPath(id, '.', file);
+    }
     if (!full) return bad(reply, 404, 'Файл не найден');
     const ct = MEDIA_CT[path.extname(full).toLowerCase()] ?? 'application/octet-stream';
     reply.header('Cache-Control', 'private, max-age=86400');

@@ -13,6 +13,12 @@ export function framesDir(id: string): string {
 export function refsDir(id: string): string {
   return path.join(projectDir(id), 'refs');
 }
+export function startDir(id: string): string {
+  return path.join(projectDir(id), 'start');
+}
+export function rendersDir(id: string): string {
+  return path.join(projectDir(id), 'renders');
+}
 
 export function ensureProjectDirs(id: string): void {
   fs.mkdirSync(framesDir(id), { recursive: true });
@@ -45,20 +51,27 @@ export function dataUsageBytes(force = false): number {
 }
 
 /**
- * Ротация: при превышении капа удаляем source-видео самых старых проектов
- * (кадры/рефы/анализ/промты остаются — они лёгкие и нужны для few-shot).
+ * Ротация в два эшелона при превышении капа:
+ * 1) source-видео самых старых проектов (кадры/рефы/анализ/промты остаются — лёгкие, кормят few-shot);
+ *    проекты с активной генерацией пропускаем — исходник нужен для ретрая рендера;
+ * 2) старые готовые рендеры, КРОМЕ помеченных 👍 (rating=1) и последнего done в каждом проекте.
  */
-export function enforceStorageCap(): { purged: string[] } {
+export function enforceStorageCap(): { purged: string[]; purgedRenders: string[] } {
   const purged: string[] = [];
+  const purgedRenders: string[] = [];
   let usage = dataUsageBytes(true);
-  if (usage <= config.storageCapBytes) return { purged };
+  if (usage <= config.storageCapBytes) return { purged, purgedRenders };
 
   const db = getDb();
   const candidates = db
     .prepare(
       `SELECT id, video_file, video_bytes FROM projects
        WHERE video_purged = 0 AND video_file IS NOT NULL
-         AND status NOT IN ('storyboarding', 'analyzing', 'generating')
+         AND status NOT IN ('storyboarding', 'analyzing', 'generating', 'startframing')
+         AND id NOT IN (
+           SELECT project_id FROM generations
+            WHERE status IN ('uploading_assets','submitted','rendering','downloading')
+         )
        ORDER BY created_at ASC`,
     )
     .all() as Array<{ id: string; video_file: string; video_bytes: number }>;
@@ -72,8 +85,30 @@ export function enforceStorageCap(): { purged: string[] } {
     usage -= c.video_bytes;
     purged.push(c.id);
   }
+
+  if (usage > config.storageCapBytes) {
+    const renders = db
+      .prepare(
+        `SELECT g.id, g.project_id, g.file, g.bytes FROM generations g
+          WHERE g.status = 'done' AND g.render_purged = 0 AND g.file IS NOT NULL
+            AND COALESCE(g.rating, 0) != 1
+            AND g.rowid NOT IN (
+              SELECT MAX(rowid) FROM generations WHERE status = 'done' GROUP BY project_id
+            )
+          ORDER BY g.created_at ASC, g.rowid ASC`,
+      )
+      .all() as Array<{ id: string; project_id: string; file: string; bytes: number }>;
+    for (const r of renders) {
+      if (usage <= config.storageCapBytes) break;
+      fs.rmSync(path.join(rendersDir(r.project_id), r.file), { force: true });
+      db.prepare(`UPDATE generations SET render_purged = 1 WHERE id = ?`).run(r.id);
+      usage -= r.bytes;
+      purgedRenders.push(r.id);
+    }
+  }
+
   usageCache = null;
-  return { purged };
+  return { purged, purgedRenders };
 }
 
 /** Подметает файлы рефов, осиротевшие после оборванных загрузок (их нет в БД). */
@@ -109,7 +144,7 @@ export function deleteProjectFiles(id: string): void {
 /** Безопасное имя файла внутри каталога проекта (без путей от пользователя). */
 export function safeMediaPath(
   projectId: string,
-  sub: 'frames' | 'refs' | 'start' | '.',
+  sub: 'frames' | 'refs' | 'start' | 'renders' | '.',
   file: string,
 ): string | null {
   if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;

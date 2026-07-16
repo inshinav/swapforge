@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { config } from '../config';
+import { recordUsage } from '../usage';
 import { parseJsonLoose, type LlmClient, type StructuredRequest } from './provider';
 
 let client: OpenAI | null = null;
@@ -69,6 +70,16 @@ async function complete(
   console.log(
     `[llm-usage] task=${req.schemaName} model=${res.model} in=${res.usage?.prompt_tokens ?? '?'} out=${res.usage?.completion_tokens ?? '?'}`,
   );
+  if (res.usage) {
+    recordUsage({
+      projectId: req.meta?.projectId,
+      generationId: req.meta?.generationId,
+      task: req.schemaName,
+      model: res.model,
+      tokensIn: res.usage.prompt_tokens ?? 0,
+      tokensOut: res.usage.completion_tokens ?? 0,
+    });
+  }
   const choice = res.choices[0];
   if (!choice) throw new Error('OpenAI вернул пустой ответ');
   if (choice.finish_reason === 'length')

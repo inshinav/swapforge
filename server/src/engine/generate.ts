@@ -11,7 +11,8 @@ import type { RefInfo, SeedanceParams, VideoMeta } from '../../../shared/api-typ
 import { framesDir, refsDir } from '../storage';
 import { getLlm, type ContentPart } from '../llm/provider';
 import { config, modelChainFor } from '../config';
-import { DOCTRINE_SYSTEM, ITERATION_ADDENDUM } from './doctrine';
+import { buildDoctrineSystem, ITERATION_ADDENDUM } from './doctrine';
+import type { FlowFlags } from './orchestrator';
 import type { SimilarExample } from './similar';
 
 export interface IterationCtx {
@@ -25,6 +26,8 @@ export interface GenerateOpts {
   lang: 'en' | 'ru';
   fewshot: SimilarExample[];
   iteration: IterationCtx | null;
+  /** Галочки one-click; undefined = оба режима выключены (v1-поведение). */
+  flags?: FlowFlags | null;
 }
 
 function mimeOf(file: string): string {
@@ -52,13 +55,14 @@ export function buildGenerationRequest(
   refs: RefInfo[],
   opts: GenerateOpts,
 ): { system: string; parts: ContentPart[] } {
-  const system = DOCTRINE_SYSTEM + (opts.iteration ? ITERATION_ADDENDUM : '');
+  const system = buildDoctrineSystem(opts.flags) + (opts.iteration ? ITERATION_ADDENDUM : '');
   const parts: ContentPart[] = [];
 
+  const modes = `Modes: remove overlay text = ${opts.flags?.removeText ? 'ON' : 'OFF'}, figure enhancement = ${opts.flags?.enhanceFigure ? 'ON' : 'OFF'}.`;
   parts.push({
     type: 'text',
     text:
-      `TASK: generate the two prompts for this project. imagePrompt language: ${opts.lang === 'ru' ? 'Russian' : 'English'}. videoPrompt: English.\n\n` +
+      `TASK: generate the two prompts for this project. imagePrompt language: ${opts.lang === 'ru' ? 'Russian' : 'English'}. videoPrompt: English. ${modes}\n\n` +
       `## SOURCE VIDEO META\nduration ${meta.durationSec}s, ${meta.width}x${meta.height} (aspect ${meta.aspect}), ${meta.fps} fps.\n\n` +
       `## VIDEO ANALYSIS (JSON)\n${JSON.stringify(analysis, null, 1)}\n\n` +
       `## REFERENCE MANIFEST (this exact order goes into reference_images)\n${buildManifestText(refs)}`,
@@ -125,6 +129,7 @@ export async function runGeneration(
     schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 6000,
     models: modelChainFor('generate'),
+    meta: { projectId },
   });
   const parsed = PromptPairZ.safeParse(raw);
   if (!parsed.success) throw new Error('LLM вернул промты не по схеме — повтори генерацию');

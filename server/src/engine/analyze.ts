@@ -43,6 +43,7 @@ export async function runAnalysis(
     schema: ANALYSIS_JSON_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 12_000,
     models: modelChainFor('analyze'),
+    meta: { projectId },
   });
 
   const parsed = AnalysisZ.safeParse(raw);

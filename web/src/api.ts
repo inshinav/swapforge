@@ -1,4 +1,11 @@
-import type { HealthInfo, ProjectFull, ProjectSummary } from '@shared/api-types';
+import type {
+  EstimateInfo,
+  HealthInfo,
+  PricingInfo,
+  ProjectFull,
+  ProjectSummary,
+  UsageSummary,
+} from '@shared/api-types';
 
 // База приложения ('/swapforge/'): API и медиа всегда под ней — nginx срезает префикс.
 // URL строим АБСОЛЮТНЫМ от location.origin: если страница открыта ссылкой вида
@@ -78,6 +85,34 @@ export const api = {
       j<{ file: string; version: number }>(r),
     ),
 
-  mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src' | 'start', file: string) =>
+  // ── v2: one-click, рендеры, цены ─────────────────────────────────────────
+  swap: (
+    id: string,
+    body: {
+      flags: { removeText: boolean; enhanceFigure: boolean };
+      generateAudio?: boolean;
+      confirmUnknownCost?: boolean;
+    },
+  ) => post(u(`api/projects/${id}/swap`), body).then((r) => j<{ ok: true }>(r)),
+  estimate: (id: string) =>
+    fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo>(r)),
+  swapAudioPref: (id: string, generateAudio: boolean) =>
+    fetch(u(`api/projects/${id}/flags`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ generateAudio }),
+    }).then((r) => j<{ ok: true }>(r)),
+  renderVersion: (id: string, body: { version?: number }) =>
+    post(u(`api/projects/${id}/generations`), body).then((r) => j<{ id: string }>(r)),
+  genRetry: (genId: string) =>
+    post(u(`api/generations/${genId}/retry`)).then((r) => j<{ id: string }>(r)),
+  genRecheck: (genId: string) =>
+    post(u(`api/generations/${genId}/recheck`)).then((r) => j<{ status: string }>(r)),
+  genRate: (genId: string, body: { rating: 1 | -1; artifacts: string[]; notes: string }) =>
+    post(u(`api/generations/${genId}/rating`), body).then((r) => j<{ ok: true }>(r)),
+  pricing: () => fetch(u('api/pricing')).then((r) => j<PricingInfo>(r)),
+  usageSummary: () => fetch(u('api/usage/summary')).then((r) => j<UsageSummary>(r)),
+
+  mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src' | 'start' | 'renders', file: string) =>
     u(`api/projects/${id}/media/${sub}/${encodeURIComponent(file)}`),
 };

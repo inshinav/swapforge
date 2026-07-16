@@ -10,6 +10,7 @@ const STATUS_RU: Record<string, string> = {
   analyzing: 'анализ…',
   analyzed: 'проанализирован',
   generating: 'генерация…',
+  startframing: 'старт-кадр…',
   complete: 'промты готовы',
   error: 'ошибка',
 };
@@ -81,7 +82,7 @@ function LibCard({
   onDeleted: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const busy = ['storyboarding', 'analyzing', 'generating'].includes(p.status);
+  const busy = ['storyboarding', 'analyzing', 'generating', 'startframing'].includes(p.status);
 
   return (
     <div className="rounded-xl border border-line bg-panel overflow-hidden group hover:border-line2 transition-colors">
@@ -98,6 +99,11 @@ function LibCard({
             <div className="w-full h-full flex items-center justify-center text-2xl">🎬</div>
           )}
           <div className="absolute top-2 left-2 flex flex-col items-start gap-1">
+            {p.latestRender && (
+              <Tag tone="lime">
+                ▶ рендер{p.latestRender.rating === 1 ? ' 👍' : p.latestRender.rating === -1 ? ' 👎' : ''}
+              </Tag>
+            )}
             {p.worked === true && <Tag tone="ok">✓ сработало</Tag>}
             {p.worked === false && <Tag tone="danger">артефакты</Tag>}
             {busy && <Tag tone="lime">{STATUS_RU[p.status]}</Tag>}

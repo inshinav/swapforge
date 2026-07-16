@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { HealthInfo } from '@shared/api-types';
+import type { HealthInfo, PricingInfo, UsageSummary } from '@shared/api-types';
 import { api } from './api';
 import NewSwap from './screens/NewSwap';
 import Library from './screens/Library';
@@ -12,9 +12,13 @@ export default function App() {
     () => localStorage.getItem('sf-project') || null,
   );
   const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [pricing, setPricing] = useState<PricingInfo | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
+    api.pricing().then(setPricing).catch(() => setPricing(null));
+    api.usageSummary().then(setUsage).catch(() => setUsage(null));
   }, [view]);
 
   const openProject = useCallback((id: string) => {
@@ -68,6 +72,20 @@ export default function App() {
               {(health.storageCapBytes / 1024 ** 3).toFixed(0)} ГБ
             </span>
           </>
+        )}
+        {pricing?.balanceUsd !== null && pricing?.balanceUsd !== undefined && (
+          <span className={pricing.balanceUsd < 2 ? 'text-warn' : ''}>
+            баланс WaveSpeed: ${pricing.balanceUsd.toFixed(2)}
+          </span>
+        )}
+        {usage && usage.totalUsd > 0 && (
+          <span>
+            за месяц: ${usage.totalUsd.toFixed(2)}
+            {usage.runs > 0 ? ` · ${usage.runs} рендеров` : ''}
+          </span>
+        )}
+        {pricing?.litellmFetchedAt && (
+          <span>тарифы от {pricing.litellmFetchedAt.slice(0, 10)}</span>
         )}
         <span className="ml-auto">INSHIN LAB · внутренний инструмент</span>
       </footer>

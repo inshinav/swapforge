@@ -1,5 +1,9 @@
 // Простая последовательная очередь: ffmpeg и LLM-джобы не должны толкаться на 2 vCPU.
+// Удалённые ожидания (загрузка на WaveSpeed, поллинг рендера) сюда НЕ ставятся — см. engine/render.ts.
 import { getDb } from './db';
+
+/** Busy-статусы проекта (локальные стадии). Рендер живёт в generations.status. */
+export const BUSY_STATUSES = new Set(['storyboarding', 'analyzing', 'generating', 'startframing']);
 
 interface Job {
   projectId: string;
@@ -49,6 +53,8 @@ export function enqueueProjectJob(opts: {
   doneStatus: string;
   errorFallbackStatus: string;
   fn: () => Promise<void>;
+  /** Хук авто-флоу: зовётся ПОСЛЕ записи doneStatus; его ошибки не роняют джобу. */
+  onSuccess?: () => void;
 }): void {
   const db = getDb();
   db.prepare(`UPDATE projects SET status = ?, error = NULL WHERE id = ?`).run(
@@ -73,6 +79,14 @@ export function enqueueProjectJob(opts: {
           msg.slice(0, 500),
           opts.projectId,
         );
+        return;
+      }
+      if (opts.onSuccess) {
+        try {
+          opts.onSuccess();
+        } catch (e) {
+          console.error(`[jobs] onSuccess ${opts.label} (${opts.projectId}):`, e);
+        }
       }
     },
   });

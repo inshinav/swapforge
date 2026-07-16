@@ -5,8 +5,10 @@ import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 import { AnalysisView } from './AnalysisView';
 import { PromptsView } from './PromptsView';
+import { GEN_ACTIVE, SwapPanel } from './SwapPanel';
+import { RenderPanel } from './RenderPanel';
 
-const BUSY = ['storyboarding', 'analyzing', 'generating'];
+const BUSY = ['storyboarding', 'analyzing', 'generating', 'startframing'];
 
 function useProject(id: string | null) {
   const [proj, setProj] = useState<ProjectFull | null>(null);
@@ -30,11 +32,14 @@ function useProject(id: string | null) {
     void reload();
   }, [id, reload]);
   const status = proj?.status;
+  // рендер живёт в generations: поллим и его, но реже (стадия долгая, удалённая)
+  const genActive = proj?.generations.some((g) => GEN_ACTIVE.includes(g.status)) ?? false;
   useEffect(() => {
-    if (!status || !BUSY.includes(status)) return;
-    const t = setInterval(() => void reload(), 1500);
+    const local = !!status && BUSY.includes(status);
+    if (!local && !genActive) return;
+    const t = setInterval(() => void reload(), local ? 1500 : 4000);
     return () => clearInterval(t);
-  }, [status, reload]);
+  }, [status, genActive, reload]);
   return { proj, err, reload };
 }
 
@@ -94,8 +99,89 @@ export default function NewSwap({
     <div className="space-y-5 sf-in">
       <VideoSection proj={proj} reload={reload} onNew={() => onProjectCreated('')} />
       <RefsSection proj={proj} reload={reload} />
-      <AnalysisView proj={proj} reload={reload} />
-      <PromptsView proj={proj} reload={reload} />
+      <SwapPanel proj={proj} reload={reload} />
+      <RenderPanel proj={proj} reload={reload} />
+      <UnderTheHood proj={proj} reload={reload} />
+    </div>
+  );
+}
+
+/** Промежуточные артефакты и ручной v1-режим — не мешают главному сценарию, но всё доступно. */
+function UnderTheHood({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
+  const [open, setOpen] = useState(() => localStorage.getItem('sf-hood') === '1');
+  const toggle = () => {
+    setOpen((v) => {
+      localStorage.setItem('sf-hood', v ? '0' : '1');
+      return !v;
+    });
+  };
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={toggle}
+        className="w-full flex items-center gap-2 text-xs text-dim hover:text-mut transition-colors py-2 select-none"
+      >
+        <span className={`transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
+        <span className="font-semibold uppercase tracking-wider">Под капотом</span>
+        <span>анализ · промты · старт-кадр · ручной режим</span>
+        <span className="flex-1 border-t border-line ml-2" />
+      </button>
+      {open && (
+        <div className="space-y-5 mt-2 sf-in">
+          {proj.flow === 'auto' && (
+            <div className="text-xs text-warn rounded-lg border border-warn/30 bg-warn/5 px-3 py-2">
+              проект в one-click режиме: после ручной генерации/итерации промтов авто-флоу сам
+              докатится до рендера WaveSpeed — это платно (см. смету выше)
+            </div>
+          )}
+          <AudioModeRow proj={proj} reload={reload} />
+          <AnalysisView proj={proj} reload={reload} />
+          <PromptsView proj={proj} reload={reload} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Звук результата: настройка «под капотом», третьей галочки на главном экране нет (решение Alex). */
+function AudioModeRow({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
+  const [native, setNative] = useState(proj.flags?.generateAudio ?? true);
+  const [saved, setSaved] = useState(false);
+  const save = async (v: boolean) => {
+    setNative(v);
+    try {
+      // сервер применит сохранённое значение при следующем свапе (тело запуска звук не шлёт)
+      await api.swapAudioPref(proj.id, v);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+      reload(); // освежаем proj.flags, чтобы весь UI видел актуальный выбор
+    } catch {
+      /* не критично — настройка сохранится при следующей попытке */
+    }
+  };
+  return (
+    <div className="rounded-xl border border-line bg-panel2 px-4 py-3 flex flex-wrap items-center gap-3 text-sm">
+      <span className="font-semibold">Звук результата</span>
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="radio"
+          checked={native}
+          onChange={() => void save(true)}
+          className="accent-[#C6F24E]"
+        />
+        нативная генерация (движок/среда под новый визуал)
+      </label>
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="radio"
+          checked={!native}
+          onChange={() => void save(false)}
+          className="accent-[#C6F24E]"
+        />
+        дорожка исходника как есть
+      </label>
+      {saved && <span className="text-xs text-ok">сохранено</span>}
     </div>
   );
 }
@@ -310,24 +396,9 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
     setBusy(true);
-    // роли для батча считаем заранее, а не по несвежему proj.refs в цикле
-    const have = {
-      model: proj.refs.some((r) => r.role === 'model'),
-      vehicle: proj.refs.some((r) => r.role === 'vehicle'),
-    };
-    const pickRole = (): RefRole => {
-      if (!have.model) {
-        have.model = true;
-        return 'model';
-      }
-      if (!have.vehicle) {
-        have.vehicle = true;
-        return 'vehicle';
-      }
-      return 'object';
-    };
+    // роль определяет сервер: vision-классификатор, при сбое — позиционная эвристика
     await run(async () => {
-      for (const f of Array.from(files)) await api.addRef(proj.id, f, pickRole(), '');
+      for (const f of Array.from(files)) await api.addRef(proj.id, f, 'auto', '');
     });
     setBusy(false);
   };
@@ -383,6 +454,14 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
                 <span className="absolute top-2 left-2 text-[11px] font-bold bg-black/70 text-lime rounded-md px-1.5 py-0.5">
                   ref {i + 2}
                 </span>
+                {r.roleSource === 'auto' && (
+                  <span
+                    className="absolute bottom-2 left-2 text-[11px] bg-black/70 rounded-md px-1.5 py-0.5"
+                    title={`роль определена автоматически${r.autoNote ? ` — ${r.autoNote}` : ''}`}
+                  >
+                    🤖
+                  </span>
+                )}
                 <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <MiniBtn onClick={() => void move(r, -1)} disabled={i === 0} label="←" />
                   <MiniBtn onClick={() => void move(r, 1)} disabled={i === arr.length - 1} label="→" />

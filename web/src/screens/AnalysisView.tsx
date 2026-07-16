@@ -85,7 +85,9 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
                 <Tag>{a.world.light}</Tag>
                 {a.world.weather && <Tag>{a.world.weather}</Tag>}
               </div>
-              {(a.world.reflections.length > 0 || a.world.background.length > 0) && (
+              {(a.world.reflections.length > 0 ||
+                a.world.background.length > 0 ||
+                (a.world.overlayText ?? []).length > 0) && (
                 <div className="mt-2 text-xs text-mut space-y-1">
                   {a.world.background.length > 0 && (
                     <div>Фон: {a.world.background.join(' · ')}</div>
@@ -94,6 +96,9 @@ export function AnalysisView({ proj, reload }: { proj: ProjectFull; reload: () =
                     <div className="text-warn/80">
                       Отражения (утечка identity): {a.world.reflections.join(' · ')}
                     </div>
+                  )}
+                  {(a.world.overlayText ?? []).length > 0 && (
+                    <div>Оверлеи (галочка «Убрать текст» снимет): {(a.world.overlayText ?? []).join(' · ')}</div>
                   )}
                 </div>
               )}

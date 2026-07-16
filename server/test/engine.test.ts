@@ -49,6 +49,7 @@ const ANALYSIS: Analysis = {
     background: ['neon signs', 'parked cars'],
     reflections: ['puddles'],
     surfaces: ['wet asphalt'],
+    overlayText: [],
   },
   subjects: [
     { kind: 'person', description: 'rider', pose: 'leaning forward', contact: ['hands on grips'], prominence: 'main' },

@@ -30,6 +30,9 @@ export const AnalysisZ = z.object({
     background: z.array(z.string()),
     reflections: z.array(z.string()),
     surfaces: z.array(z.string()),
+    /** Наложенный текст/графика (капшены, стикеры, вотермарки) — с содержимым, позицией, таймингом.
+     *  В старых analysis_json поля нет — читать с `?? []`. */
+    overlayText: z.array(z.string()).optional().default([]),
   }),
   subjects: z.array(
     z.object({
@@ -82,6 +85,7 @@ export const ANALYSIS_JSON_SCHEMA = obj({
     background: arr(str),
     reflections: arr(str),
     surfaces: arr(str),
+    overlayText: arr(str),
   }),
   subjects: arr(
     obj({ kind: str, description: str, pose: str, contact: arr(str), prominence: str }),

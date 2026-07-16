@@ -9,8 +9,17 @@ export type ProjectStatus =
   | 'analyzing'
   | 'analyzed'
   | 'generating'
+  | 'startframing'
   | 'complete'
   | 'error';
+
+export type GenerationStatus =
+  | 'uploading_assets'
+  | 'submitted'
+  | 'rendering'
+  | 'downloading'
+  | 'done'
+  | 'failed';
 
 export interface VideoMeta {
   durationSec: number;
@@ -33,6 +42,9 @@ export interface RefInfo {
   role: RefRole;
   file: string;
   note: string;
+  /** Кто назначил роль: эвристика по порядку, vision-классификатор или руками. */
+  roleSource?: 'heuristic' | 'auto' | 'manual';
+  autoNote?: string;
 }
 
 export interface PromptRow {
@@ -64,6 +76,47 @@ export interface SeedanceParams {
   durationNote: string;
 }
 
+export interface FlowFlagsDto {
+  removeText: boolean;
+  enhanceFigure: boolean;
+  /** Звук результата: true = нативная генерация, false = дорожка исходника. */
+  generateAudio: boolean;
+}
+
+export interface GenerationRow {
+  id: string;
+  version: number;
+  status: GenerationStatus;
+  /** Имя файла в media/renders (null — ещё нет или счищен ротацией). */
+  file: string | null;
+  bytes: number;
+  renderPurged: boolean;
+  error: string | null;
+  params: Record<string, unknown> | null;
+  costEst: { wavespeedUsd: number | null; billedSeconds: number } | null;
+  costActualUsd: number | null;
+  costSource: 'api' | 'balance_delta' | 'formula' | null;
+  rating: number | null; // 1 | -1 | null
+  artifacts: ArtifactType[];
+  notes: string;
+  retryOf: string | null;
+  wsPredictionId: string | null;
+  createdAt: string;
+  submittedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface ProjectCosts {
+  /** Всего по проекту: LLM (usage_events) + фактические списания рендеров. */
+  projectUsd: number;
+  /** Бегущий счётчик активного one-click прогона (null, если флоу не запускался). */
+  activeRun: {
+    openaiUsd: number;
+    wavespeedEstUsd: number | null;
+    wavespeedActualUsd: number | null;
+  } | null;
+}
+
 export interface ProjectSummary {
   id: string;
   title: string;
@@ -75,6 +128,7 @@ export interface ProjectSummary {
   worked: boolean | null; // null = нет фидбека
   videoPurged: boolean;
   promptVersions: number;
+  latestRender: { generationId: string; file: string; rating: number | null } | null;
 }
 
 export interface ProjectFull extends ProjectSummary {
@@ -86,6 +140,54 @@ export interface ProjectFull extends ProjectSummary {
   prompts: PromptRow[];
   feedback: FeedbackRow[];
   startFrames: Array<{ file: string; version: number }>;
+  flow: 'manual' | 'auto';
+  flags: FlowFlagsDto | null;
+  generations: GenerationRow[];
+  costs: ProjectCosts;
+}
+
+// ── v2: смета, тарифы, расход ────────────────────────────────────────────────
+
+export interface EstimateTaskRow {
+  task: string;
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+  usd: number | null;
+  /** history = скользящее среднее реальных прогонов; seed = стартовая эмпирика. */
+  basis: 'history' | 'seed';
+}
+
+export interface EstimateInfo {
+  /** Стадии, которые осталось прогнать (смета честная и для повторных запусков). */
+  stages: string[];
+  openai: { perTask: EstimateTaskRow[]; usd: number | null; priceDate: string | null };
+  wavespeed: {
+    usd: number | null;
+    billedSeconds: number;
+    perSecondUsd: number | null;
+    resolution: string;
+    priceDate: string | null;
+    unavailableReason: string | null;
+  };
+  totalUsd: number | null;
+  approximate: boolean;
+  balanceUsd: number | null;
+  warnings: string[];
+}
+
+export interface PricingInfo {
+  balanceUsd: number | null;
+  litellmFetchedAt: string | null;
+  wavespeedFetchedAt: string | null;
+}
+
+export interface UsageSummary {
+  month: string;
+  openaiUsd: number;
+  wavespeedUsd: number;
+  totalUsd: number;
+  runs: number;
 }
 
 export interface HealthInfo {

@@ -4,8 +4,32 @@ import OpenAI, { toFile } from 'openai';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
-import { projectDir, refsDir } from '../storage';
+import { refsDir, startDir } from '../storage';
+import { recordUsage } from '../usage';
+import { FIGURE_TIER1, FIGURE_TIER2 } from './doctrine';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
+
+export { startDir } from '../storage';
+
+/** Модерационный отказ Images API — сигнал к детерминированному смягчению фразы фигуры. */
+export function isModerationRefusal(msg: string): boolean {
+  return /safety|moderation|content.?policy|policy violation|rejected|not allowed|invalid_prompt/i.test(msg);
+}
+
+/**
+ * Двухъярусное смягчение: tier1 → tier2 → без фразы вовсе (свап-промт фразу сохраняет —
+ * модерация Seedance отдельная). Возвращает цепочку промтов на попытки.
+ */
+export function moderationLadder(prompt: string): string[] {
+  const ladder = [prompt];
+  if (prompt.includes(FIGURE_TIER1)) {
+    ladder.push(prompt.replace(FIGURE_TIER1, FIGURE_TIER2));
+    ladder.push(prompt.replace(FIGURE_TIER1, '').replace(/ {2,}/g, ' ').trim());
+  } else if (prompt.includes(FIGURE_TIER2)) {
+    ladder.push(prompt.replace(FIGURE_TIER2, '').replace(/ {2,}/g, ' ').trim());
+  }
+  return ladder;
+}
 
 /** Гибкие размеры (кратно 16) поддерживает только gpt-image-2; у остальных — фиксированная тройка. */
 export function imageModelFlexible(id: string): boolean {
@@ -33,13 +57,16 @@ export function startFrameSize(
   return `${snap(longSide)}x${snap(longSide / ar)}`;
 }
 
-export function startDir(projectId: string): string {
-  return path.join(projectDir(projectId), 'start');
-}
-
 interface ImagesResponse {
   data?: Array<{ b64_json?: string }>;
   usage?: { input_tokens?: number; output_tokens?: number };
+}
+
+export interface StartFrameOpts {
+  /** Кадр строго 9:16 (авто-флоу: выход рендера фиксирован 9:16 независимо от AR исходника). */
+  forceNineSixteen?: boolean;
+  /** Тестовая инъекция вызова Images API. */
+  _editFn?: (params: Record<string, unknown>) => Promise<ImagesResponse>;
 }
 
 export async function generateStartFrame(
@@ -48,6 +75,7 @@ export async function generateStartFrame(
   imagePrompt: string,
   refs: RefInfo[],
   meta: VideoMeta,
+  opts: StartFrameOpts = {},
 ): Promise<string> {
   if (!config.openaiApiKey) {
     throw new Error('Для генерации стартового кадра нужен OpenAI-ключ (Images API)');
@@ -72,10 +100,11 @@ export async function generateStartFrame(
   );
   if (images.length === 0) throw new Error('Нет референсов — приложи фото модели');
 
-  const size = startFrameSize(meta.width, meta.height, model);
+  const size = opts.forceNineSixteen
+    ? startFrameSize(1080, 1920, model)
+    : startFrameSize(meta.width, meta.height, model);
   const params: Record<string, unknown> = {
     model,
-    prompt: imagePrompt,
     image: images,
     size,
     quality,
@@ -84,28 +113,63 @@ export async function generateStartFrame(
     n: 1,
   };
 
-  const edit = client.images.edit.bind(client.images) as unknown as (
-    p: Record<string, unknown>,
-  ) => Promise<ImagesResponse>;
+  const edit =
+    opts._editFn ??
+    (client.images.edit.bind(client.images) as unknown as (
+      p: Record<string, unknown>,
+    ) => Promise<ImagesResponse>);
 
-  let res: ImagesResponse;
-  try {
-    res = await edit(params);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/input_fidelity/i.test(msg)) {
-      delete params.input_fidelity; // модель без поддержки параметра — повтор без него
-      res = await edit(params);
-    } else if (e instanceof OpenAI.APIError && e.status === 429) {
-      throw new Error(`Лимит или квота OpenAI (429) — повтори позже. ${msg.slice(0, 160)}`);
-    } else {
+  /** Одна попытка с фолбэком input_fidelity (модели без параметра). */
+  const attempt = async (prompt: string): Promise<ImagesResponse> => {
+    const p: Record<string, unknown> = { ...params, prompt };
+    try {
+      return await edit(p);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/input_fidelity/i.test(msg)) {
+        delete p.input_fidelity; // модель без поддержки параметра — повтор без него
+        return edit(p);
+      }
+      throw e;
+    }
+  };
+
+  // Анти-модерационная лестница фразы фигуры: tier1 → tier2 → без фразы
+  const ladder = moderationLadder(imagePrompt);
+  let res: ImagesResponse | null = null;
+  for (let i = 0; i < ladder.length; i++) {
+    try {
+      res = await attempt(ladder[i]!);
+      if (i > 0) {
+        console.warn(
+          `[startframe-moderation] project=${projectId} фраза фигуры смягчена до яруса ${i + 1}/${ladder.length} (свап-промт не тронут)`,
+        );
+      }
+      break;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (i < ladder.length - 1 && isModerationRefusal(msg)) {
+        console.warn(`[startframe-moderation] отказ модерации, пробую мягче: ${msg.slice(0, 120)}`);
+        continue;
+      }
+      if (e instanceof OpenAI.APIError && e.status === 429) {
+        throw new Error(`Лимит или квота OpenAI (429) — повтори позже. ${msg.slice(0, 160)}`);
+      }
       throw new Error(`Images API: ${msg.slice(0, 300)}`);
     }
   }
+  if (!res) throw new Error('Images API не дал ответа');
 
   console.log(
     `[llm-usage] task=start_frame model=${String(params.model)} size=${size} in=${res.usage?.input_tokens ?? '?'} out=${res.usage?.output_tokens ?? '?'}`,
   );
+  recordUsage({
+    projectId,
+    task: 'start_frame',
+    model: String(params.model),
+    tokensIn: res.usage?.input_tokens ?? 0,
+    tokensOut: res.usage?.output_tokens ?? 0,
+  });
 
   const b64 = res.data?.[0]?.b64_json;
   if (!b64) throw new Error('Images API вернул ответ без изображения');

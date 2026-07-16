@@ -18,18 +18,30 @@ export const config = {
   wavespeedApiKey: env('WAVESPEED_API_KEY'),
   // Эндпоинт Seedance зафиксирован решением Alex: именно 2.0, не fast
   seedanceEndpoint: 'bytedance/seedance-2.0/video-edit',
+  // Выход всегда 720p/9:16; env-рычаг — только для дешёвого прод-смока (480p), не для UI
+  seedanceResolution: env('SEEDANCE_RESOLUTION', '720p'),
+  renderMaxBytes: Number(env('RENDER_MAX_MB', '500')) * 1024 ** 2,
+  renderPollBudgetMs: Number(env('RENDER_POLL_BUDGET_MIN', '30')) * 60_000,
+  pricingWsTtlMs: Number(env('PRICING_WS_TTL_H', '6')) * 3_600_000,
+  pricingLitellmTtlMs: Number(env('PRICING_LITELLM_TTL_H', '12')) * 3_600_000,
+  litellmPricesUrl: env(
+    'LITELLM_PRICES_URL',
+    'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json',
+  ),
+  /** JSON-оверрайд тарифов: {"<model>":{"inPerM":N,"outPerM":N}} — ручной аварийный рычаг. */
+  pricingOverrides: env('PRICING_OVERRIDES', ''),
   storageCapBytes: Number(env('STORAGE_CAP_GB', '10')) * 1024 ** 3,
   maxVideoBytes: Number(env('MAX_VIDEO_MB', '300')) * 1024 ** 2,
   maxImageBytes: Number(env('MAX_IMAGE_MB', '20')) * 1024 ** 2,
   maxFrames: Number(env('MAX_FRAMES', '40')),
-  version: '1.0.0',
+  version: '2.0.0',
 };
 
 export function llmKeyPresent(): boolean {
   return config.llmProvider === 'openai' ? !!config.openaiApiKey : !!config.anthropicApiKey;
 }
 
-export type LlmTask = 'analyze' | 'generate';
+export type LlmTask = 'analyze' | 'generate' | 'classify';
 
 /**
  * Авто-роутинг моделей: сервис сам берёт оптимально дешёвую под задачу, при сбое модели
@@ -42,6 +54,8 @@ export type LlmTask = 'analyze' | 'generate';
 const DEFAULT_CHAINS: Record<LlmTask, string[]> = {
   analyze: ['gpt-5.6-terra', 'gpt-5.4-mini', 'gpt-5.5'],
   generate: ['gpt-5.6-luna', 'gpt-5.5'],
+  // classify: одна маленькая картинка → роль рефа; дешевле некуда, качество не критично
+  classify: ['gpt-5.4-mini', 'gpt-5.6-terra'],
 };
 
 export function modelChainFor(task: LlmTask): string[] {

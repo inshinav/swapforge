@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
+import { recordUsage } from '../usage';
 import { parseJsonLoose, type LlmClient, type StructuredRequest } from './provider';
 
 let client: Anthropic | null = null;
@@ -49,6 +50,16 @@ async function complete(req: StructuredRequest, withSchemaFormat: boolean): Prom
   console.log(
     `[llm-usage] task=${req.schemaName} model=${usage.model ?? params.model} in=${usage.usage?.input_tokens ?? '?'} out=${usage.usage?.output_tokens ?? '?'}`,
   );
+  if (usage.usage) {
+    recordUsage({
+      projectId: req.meta?.projectId,
+      generationId: req.meta?.generationId,
+      task: req.schemaName,
+      model: String(usage.model ?? params.model),
+      tokensIn: usage.usage.input_tokens ?? 0,
+      tokensOut: usage.usage.output_tokens ?? 0,
+    });
+  }
   return parseJsonLoose(firstText(res));
 }
 
