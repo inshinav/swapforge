@@ -117,6 +117,7 @@ describe('энфорсмент длины промтов кодом', () => {
       notes: 'заметки',
     });
     expect(req).toContain('videoPrompt = 300 words');
+    expect(req).toContain('STRICTLY UNDER 200 words');
     expect(req).toContain('TARGET: videoPrompt 170–190 words');
     expect(req).toContain('DELETE the weakest KEEP anchors');
     expect(req).toContain('Keep verbatim: the reference-1 line');

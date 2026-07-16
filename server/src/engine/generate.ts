@@ -127,7 +127,8 @@ export const VIDEO_PROMPT_MAX_WORDS = 220;
 export function buildCompressionRequest(pair: PromptPair): string {
   return (
     `Your previous output is over the WORD BUDGET (videoPrompt = ${wordCount(pair.videoPrompt)} words).\n` +
-    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 170–190 words (hard ceiling 200); imagePrompt 100–140 (ceiling 160). Rules:\n` +
+    `Return a videoPrompt STRICTLY UNDER 200 words — an answer over 200 is invalid. Count the words before returning.\n` +
+    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 170–190 words; imagePrompt 100–140 (ceiling 160). Rules:\n` +
     `- Keep verbatim: the reference-1 line, identity-lock sentences, active mode sentences (REMOVE-text / figure).\n` +
     `- Keep every DO NOT guardrail (merging clauses into fewer sentences is fine).\n` +
     `- Merge the KEEP list down to the 8–12 strongest anchors (reflective/moving elements, light, camera path first).\n` +
@@ -158,33 +159,36 @@ export async function runGeneration(
   const parsed = PromptPairZ.safeParse(raw);
   if (!parsed.success) throw new Error('LLM вернул промты не по схеме — повтори генерацию');
 
-  // Бюджет слов — энфорсмент кодом: один дешёвый компресс-проход (без картинок),
-  // при любом сбое остаёмся на исходной паре (fail-soft)
-  const words = wordCount(parsed.data.videoPrompt);
-  if (words <= VIDEO_PROMPT_MAX_WORDS) return parsed.data;
-  try {
-    const rawC = await llm.structured({
-      system,
-      parts: [{ type: 'text', text: buildCompressionRequest(parsed.data) }],
-      schemaName: 'prompt_pair',
-      schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
-      maxTokens: 4000,
-      models: modelChainFor('generate'),
-      meta: { projectId },
-    });
-    const compressed = PromptPairZ.safeParse(rawC);
-    if (compressed.success && wordCount(compressed.data.videoPrompt) < words) {
+  // Бюджет слов — энфорсмент кодом: до 2 дешёвых компресс-проходов (без картинок),
+  // пока промт выше потолка; при любом сбое остаёмся на лучшей имеющейся паре (fail-soft)
+  let current = parsed.data;
+  for (let pass = 1; pass <= 2; pass++) {
+    const words = wordCount(current.videoPrompt);
+    if (words <= VIDEO_PROMPT_MAX_WORDS) break;
+    try {
+      const rawC = await llm.structured({
+        system,
+        parts: [{ type: 'text', text: buildCompressionRequest(current) }],
+        schemaName: 'prompt_pair',
+        schema: PROMPT_PAIR_JSON_SCHEMA as unknown as Record<string, unknown>,
+        maxTokens: 4000,
+        models: modelChainFor('generate'),
+        meta: { projectId },
+      });
+      const compressed = PromptPairZ.safeParse(rawC);
+      if (!compressed.success || wordCount(compressed.data.videoPrompt) >= words) break;
       console.log(
-        `[prompt-length] videoPrompt ${words} слов > ${VIDEO_PROMPT_MAX_WORDS} → сжат до ${wordCount(compressed.data.videoPrompt)}`,
+        `[prompt-length] проход ${pass}: videoPrompt ${words} слов > ${VIDEO_PROMPT_MAX_WORDS} → сжат до ${wordCount(compressed.data.videoPrompt)}`,
       );
-      return compressed.data;
+      current = compressed.data;
+    } catch (e) {
+      console.warn(
+        `[prompt-length] компресс-проход ${pass} не удался (${e instanceof Error ? e.message.slice(0, 120) : e}) — оставляю ${words} слов`,
+      );
+      break;
     }
-  } catch (e) {
-    console.warn(
-      `[prompt-length] компресс-проход не удался (${e instanceof Error ? e.message.slice(0, 120) : e}) — оставляю исходный промт (${words} слов)`,
-    );
   }
-  return parsed.data;
+  return current;
 }
 
 /** Параметр-блок WaveSpeed: код, не LLM — имена полей точные. Эндпоинт зафиксирован (seedance-2.0). */
