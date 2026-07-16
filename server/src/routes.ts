@@ -28,6 +28,7 @@ import {
   startRender,
 } from './engine/render';
 import { nextStageOf, parseFlags, snapshotProject } from './engine/orchestrator';
+import { PRESETS, applyPreset, getPreset, presetFilePath } from './presets';
 import { classifyRef } from './engine/classify';
 import { buildEstimate, getBalanceCached, pricingDates } from './pricing';
 import { monthSummary } from './usage';
@@ -200,6 +201,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  // ── Пресеты референсов ───────────────────────────────────────────────────
+
+  app.get('/api/presets', async () => {
+    return PRESETS.map((p) => ({
+      id: p.id,
+      title: p.title,
+      hint: p.hint,
+      refs: p.refs.map((r) => ({ role: r.role, note: r.note })),
+      thumb: `api/presets/${p.id}/file/${p.refs[0]!.file}`,
+    }));
+  });
+
+  app.get('/api/presets/:id/file/:file', async (req, reply) => {
+    const { id, file } = req.params as { id: string; file: string };
+    const preset = getPreset(id);
+    const full = preset ? presetFilePath(preset, file) : null;
+    if (!full) return bad(reply, 404, 'Файл пресета не найден');
+    reply.header('Cache-Control', 'private, max-age=86400');
+    reply.type(MEDIA_CT[path.extname(full).toLowerCase()] ?? 'application/octet-stream');
+    return reply.send(fs.createReadStream(full));
+  });
+
   // ── One-click свап и рендеры ─────────────────────────────────────────────
 
   app.post('/api/projects/:id/swap', async (req, reply) => {
@@ -216,17 +239,30 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return bad(reply, 409, 'Исходник очищен ротацией — залей ролик заново');
     }
     if (!llmKeyPresent()) return bad(reply, 503, 'LLM-ключ не настроен на сервере');
-    const hasModelRef = getDb()
-      .prepare(`SELECT 1 FROM refs WHERE project_id = ? AND role = 'model' LIMIT 1`)
-      .get(id);
-    if (!hasModelRef) return bad(reply, 409, 'Нужен хотя бы один референс с ролью «модель»');
 
     const body = (req.body ?? {}) as {
       flags?: { removeText?: boolean; enhanceFigure?: boolean };
       generateAudio?: boolean;
       lang?: string;
       confirmUnknownCost?: boolean;
+      preset?: string;
     };
+
+    // Пресет-кнопка: подкладываем фирменные реф-листы в чистый проект — дальше всё как обычно
+    if (body.preset) {
+      const preset = getPreset(body.preset);
+      if (!preset) return bad(reply, 404, 'Неизвестный пресет');
+      try {
+        applyPreset(id, preset);
+      } catch (e) {
+        return bad(reply, 409, e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    const hasModelRef = getDb()
+      .prepare(`SELECT 1 FROM refs WHERE project_id = ? AND role = 'model' LIMIT 1`)
+      .get(id);
+    if (!hasModelRef) return bad(reply, 409, 'Нужен хотя бы один референс с ролью «модель»');
     // Звук: если тело его не прислало — берём сохранённую настройку проекта («под капотом»),
     // а не дефолт: иначе свежий PATCH затирался бы протухшим значением из UI
     const flagsJson = JSON.stringify({

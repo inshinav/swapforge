@@ -34,6 +34,21 @@ export interface DbProject {
   flow: string;
   flags_json: string | null;
   flow_started_at: string | null;
+  stage_times_json?: string | null;
+}
+
+/** 'YYYY-MM-DD HH:MM:SS' (sqlite, UTC) → ms; null при отсутствии. */
+function dbMs(s: string | null): number | null {
+  if (!s) return null;
+  const t = Date.parse(s.includes('T') ? s : `${s.replace(' ', 'T')}Z`);
+  return Number.isFinite(t) ? t : null;
+}
+
+function secsBetween(a: string | null, b: string | null): number | null {
+  const ma = dbMs(a);
+  const mb = dbMs(b);
+  if (ma === null || mb === null || mb < ma) return null;
+  return Math.round((mb - ma) / 100) / 10;
 }
 
 function parse<T>(s: string | null): T | null {
@@ -128,6 +143,8 @@ function toGeneration(g: DbGeneration): GenerationRow {
     createdAt: g.created_at,
     submittedAt: g.submitted_at,
     finishedAt: g.finished_at,
+    uploadSec: secsBetween(g.created_at, g.submitted_at),
+    renderSec: g.status === 'done' || g.status === 'failed' ? secsBetween(g.submitted_at, g.finished_at) : null,
   };
 }
 
@@ -244,5 +261,6 @@ export function toFull(p: DbProject): ProjectFull {
       : null,
     generations,
     costs: costsOf(p, generations),
+    stageTimes: parse(p.stage_times_json ?? null),
   };
 }

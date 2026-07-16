@@ -1,15 +1,26 @@
 // Главная панель one-click: две галочки → смета из живых тарифов → одна кнопка.
-// После запуска — прогресс по стадиям с бегущей стоимостью; ошибки каждой стадии
-// закрываются одной кнопкой «Продолжить свап» (advanceFlow сам найдёт место остановки).
+// Чистый проект предлагает пресет-кнопки (фирменные реф-листы с сервера) или «свои референсы».
+// После запуска — прогресс по стадиям с бегущей стоимостью и фактическими таймингами.
 import { useCallback, useEffect, useState } from 'react';
-import type { EstimateInfo, GenerationRow, ProjectFull } from '@shared/api-types';
+import type { EstimateInfo, GenerationRow, PresetInfo, ProjectFull } from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 export const GEN_ACTIVE = ['uploading_assets', 'submitted', 'rendering', 'downloading'];
 const LOCAL_BUSY = ['storyboarding', 'analyzing', 'generating', 'startframing'];
 
-export function SwapPanel({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
+export function SwapPanel({
+  proj,
+  reload,
+  custom,
+  onCustom,
+}: {
+  proj: ProjectFull;
+  reload: () => void;
+  /** Режим «свои референсы»: секция рефов открыта в основном потоке. */
+  custom: boolean;
+  onCustom: () => void;
+}) {
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
   const [enhanceFigure, setEnhanceFigure] = useState(savedFlags?.enhanceFigure ?? false);
@@ -18,6 +29,11 @@ export function SwapPanel({ proj, reload }: { proj: ProjectFull; reload: () => v
   const [launchErr, setLaunchErr] = useState<string | null>(null);
   const [est, setEst] = useState<EstimateInfo | null>(null);
   const [estErr, setEstErr] = useState<string | null>(null);
+  const [presets, setPresets] = useState<PresetInfo[]>([]);
+
+  useEffect(() => {
+    api.presets().then(setPresets).catch(() => setPresets([]));
+  }, []);
 
   const activeGen = proj.generations.find((g) => GEN_ACTIVE.includes(g.status)) ?? null;
   const localBusy = LOCAL_BUSY.includes(proj.status);
@@ -41,7 +57,7 @@ export function SwapPanel({ proj, reload }: { proj: ProjectFull; reload: () => v
     // смета пересчитывается после каждого завершения стадий/рендера
   }, [proj.id, running, proj.generations.length, proj.promptVersions, loadEstimate]);
 
-  const launch = async () => {
+  const launch = async (preset?: string) => {
     setLaunching(true);
     setLaunchErr(null);
     try {
@@ -50,6 +66,7 @@ export function SwapPanel({ proj, reload }: { proj: ProjectFull; reload: () => v
       await api.swap(proj.id, {
         flags: { removeText, enhanceFigure },
         confirmUnknownCost: confirmUnknown || undefined,
+        preset,
       });
       reload();
     } catch (e) {
@@ -148,33 +165,82 @@ export function SwapPanel({ proj, reload }: { proj: ProjectFull; reload: () => v
               </label>
             )}
 
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                kind="primary"
-                busy={launching}
-                disabled={!hasModelRef || proj.videoPurged}
-                onClick={() => void launch()}
-                className="!px-6 !py-3 text-base"
-                title={
-                  !hasModelRef
-                    ? 'Добавь референс с ролью «модель»'
-                    : proj.videoPurged
-                      ? 'Исходник очищен ротацией'
-                      : undefined
-                }
-              >
-                ⚡ Сделать свап
-              </Button>
-              {!hasModelRef && (
-                <span className="text-xs text-warn">нужен реф с ролью «модель» (блок 2)</span>
-              )}
-              {proj.videoPurged && (
-                <span className="text-xs text-danger">исходник очищен ротацией — залей ролик заново</span>
-              )}
-              <span className="text-xs text-dim">
-                выход всегда 720p · 9:16{proj.meta && proj.meta.aspect !== '9:16' ? ' · кадр будет пересобран под вертикаль' : ''}
-              </span>
-            </div>
+            {proj.refs.length === 0 && !custom ? (
+              /* Чистый проект: пресеты одним нажатием или свои референсы */
+              <div className="space-y-2">
+                <div className="text-sm font-semibold">Кто в кадре?</div>
+                <div className="grid sm:grid-cols-3 gap-2">
+                  {presets.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={launching || proj.videoPurged}
+                      onClick={() => void launch(p.id)}
+                      className="group text-left rounded-xl border border-line hover:border-lime/60 bg-panel2 overflow-hidden transition-colors disabled:opacity-50"
+                      title={`${p.hint} — запустит весь свап сразу`}
+                    >
+                      <img
+                        src={api.presetThumbUrl(p.thumb)}
+                        alt={p.title}
+                        className="w-full h-24 object-cover object-top opacity-90 group-hover:opacity-100"
+                      />
+                      <div className="px-3 py-2">
+                        <div className="text-sm font-semibold">⚡ {p.title}</div>
+                        <div className="text-xs text-dim">жми — свап поедет сразу</div>
+                      </div>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={launching}
+                    onClick={onCustom}
+                    className="text-left rounded-xl border border-dashed border-line2 hover:border-lime/40 bg-panel2/50 px-3 py-2 transition-colors flex flex-col justify-center min-h-24"
+                  >
+                    <div className="text-sm font-semibold">📎 Свои референсы</div>
+                    <div className="text-xs text-dim">загрузить фото модели и техники вручную</div>
+                  </button>
+                </div>
+                {launching && (
+                  <div className="flex items-center gap-2 text-sm text-mut">
+                    <Spinner size={14} /> подкладываю референсы и запускаю…
+                  </div>
+                )}
+                {proj.videoPurged && (
+                  <span className="text-xs text-danger">исходник очищен ротацией — залей ролик заново</span>
+                )}
+                <div className="text-xs text-dim">
+                  выход всегда 720p · 9:16{proj.meta && proj.meta.aspect !== '9:16' ? ' · кадр будет пересобран под вертикаль' : ''}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  kind="primary"
+                  busy={launching}
+                  disabled={!hasModelRef || proj.videoPurged}
+                  onClick={() => void launch()}
+                  className="!px-6 !py-3 text-base"
+                  title={
+                    !hasModelRef
+                      ? 'Добавь референс с ролью «модель»'
+                      : proj.videoPurged
+                        ? 'Исходник очищен ротацией'
+                        : undefined
+                  }
+                >
+                  ⚡ Сделать свап
+                </Button>
+                {!hasModelRef && (
+                  <span className="text-xs text-warn">нужен реф с ролью «модель» (блок выше)</span>
+                )}
+                {proj.videoPurged && (
+                  <span className="text-xs text-danger">исходник очищен ротацией — залей ролик заново</span>
+                )}
+                <span className="text-xs text-dim">
+                  выход всегда 720p · 9:16{proj.meta && proj.meta.aspect !== '9:16' ? ' · кадр будет пересобран под вертикаль' : ''}
+                </span>
+              </div>
+            )}
             {launchErr && <ErrorNote text={launchErr} />}
           </>
         )}
@@ -274,26 +340,35 @@ interface Step {
   label: string;
   state: 'done' | 'active' | 'todo';
   hint?: string;
+  /** Фактическое время завершённой стадии — «сколько заняло», очень коротко. */
+  time?: string;
+}
+
+function fmtSec(s: number | null | undefined): string | undefined {
+  if (s === null || s === undefined || s <= 0) return undefined;
+  return s < 120 ? `${Math.round(s)}с` : `${(s / 60).toFixed(1)} мин`;
 }
 
 function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
   const s = proj.status;
   const genS = gen?.status ?? null;
+  const t = proj.stageTimes ?? {};
   const framesDone = proj.frames.length > 0;
   const analysisDone = !!proj.analysis;
   const promptsDone = proj.promptVersions > 0;
   const startframeDone = proj.startFrames.some((f) => f.version === proj.promptVersions);
-  const mark = (done: boolean, active: boolean, hint?: string): Omit<Step, 'key' | 'label'> => ({
+  const mark = (done: boolean, active: boolean, hint?: string, sec?: number | null): Omit<Step, 'key' | 'label'> => ({
     state: active ? 'active' : done ? 'done' : 'todo',
     hint: active ? hint : undefined,
+    time: !active && done ? fmtSec(sec) : undefined,
   });
   return [
-    { key: 'storyboard', label: 'Раскадровка', ...mark(framesDone, s === 'storyboarding', 'ffmpeg ищет смены сцен · ~10–30 с') },
-    { key: 'analyze', label: 'Анализ', ...mark(analysisDone, s === 'analyzing', 'vision смотрит кадры и строит карту рисков · ~30–90 с') },
-    { key: 'generate', label: 'Промты', ...mark(promptsDone, s === 'generating', 'доктрина куёт пару промтов · ~15–50 с') },
-    { key: 'startframe', label: 'Стартовый кадр', ...mark(startframeDone, s === 'startframing', 'gpt-image-2 · high · 9:16 · ~1–2 мин') },
-    { key: 'upload', label: 'Загрузка в WaveSpeed', ...mark(!!genS && genS !== 'uploading_assets', genS === 'uploading_assets', 'ролик + кадр + рефы улетают на WaveSpeed') },
-    { key: 'render', label: 'Рендер Seedance', ...mark(genS === 'downloading' || genS === 'done', genS === 'submitted' || genS === 'rendering', 'обычно 2–10 мин — можно уйти со страницы') },
+    { key: 'storyboard', label: 'Раскадровка', ...mark(framesDone, s === 'storyboarding', 'ffmpeg ищет смены сцен · ~10–30 с', t.storyboard) },
+    { key: 'analyze', label: 'Анализ', ...mark(analysisDone, s === 'analyzing', 'vision смотрит кадры и строит карту рисков · ~30–90 с', t.analyze) },
+    { key: 'generate', label: 'Промты', ...mark(promptsDone, s === 'generating', 'доктрина куёт пару промтов · ~15–50 с', t.generate) },
+    { key: 'startframe', label: 'Стартовый кадр', ...mark(startframeDone, s === 'startframing', 'gpt-image-2 · high · 9:16 · ~1–2 мин', t.startframe) },
+    { key: 'upload', label: 'Загрузка в WaveSpeed', ...mark(!!genS && genS !== 'uploading_assets', genS === 'uploading_assets', 'ролик + кадр + рефы улетают на WaveSpeed', gen?.uploadSec) },
+    { key: 'render', label: 'Рендер Seedance', ...mark(genS === 'downloading' || genS === 'done', genS === 'submitted' || genS === 'rendering', 'обычно 2–10 мин — можно уйти со страницы', gen?.renderSec) },
     { key: 'download', label: 'Скачивание', ...mark(genS === 'done', genS === 'downloading', 'забираю готовый ролик в библиотеку') },
   ];
 }
@@ -322,6 +397,7 @@ function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow 
                 }`}
               >
                 {st.label}
+                {st.time && <span className="text-xs text-dim"> · {st.time}</span>}
               </span>
               {st.hint && <span className="text-xs text-dim block">{st.hint}</span>}
             </div>

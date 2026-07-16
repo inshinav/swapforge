@@ -95,19 +95,45 @@ export default function NewSwap({
       </div>
     );
 
+  return <ProjectView proj={proj} reload={reload} onProjectCreated={onProjectCreated} />;
+}
+
+function ProjectView({
+  proj,
+  reload,
+  onProjectCreated,
+}: {
+  proj: ProjectFull;
+  reload: () => void;
+  onProjectCreated: (id: string) => void;
+}) {
+  // Пресетный проект: рефы подложены кнопкой — секция референсов уезжает «под капот»,
+  // главный сценарий остаётся бесшовным. «Свои референсы» раскрывает её обратно.
+  const presetRefs = proj.refs.length > 0 && proj.refs.every((r) => r.roleSource === 'preset');
+  const [custom, setCustom] = useState(false);
+  const refsInMain = custom || (proj.refs.length > 0 && !presetRefs);
+
   return (
     <div className="space-y-5 sf-in">
       <VideoSection proj={proj} reload={reload} onNew={() => onProjectCreated('')} />
-      <RefsSection proj={proj} reload={reload} />
-      <SwapPanel proj={proj} reload={reload} />
+      {refsInMain && <RefsSection proj={proj} reload={reload} />}
+      <SwapPanel proj={proj} reload={reload} custom={refsInMain} onCustom={() => setCustom(true)} />
       <RenderPanel proj={proj} reload={reload} />
-      <UnderTheHood proj={proj} reload={reload} />
+      <UnderTheHood proj={proj} reload={reload} showRefs={presetRefs && !custom} />
     </div>
   );
 }
 
 /** Промежуточные артефакты и ручной v1-режим — не мешают главному сценарию, но всё доступно. */
-function UnderTheHood({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
+function UnderTheHood({
+  proj,
+  reload,
+  showRefs,
+}: {
+  proj: ProjectFull;
+  reload: () => void;
+  showRefs?: boolean;
+}) {
   const [open, setOpen] = useState(() => localStorage.getItem('sf-hood') === '1');
   const toggle = () => {
     setOpen((v) => {
@@ -136,6 +162,7 @@ function UnderTheHood({ proj, reload }: { proj: ProjectFull; reload: () => void 
             </div>
           )}
           <AudioModeRow proj={proj} reload={reload} />
+          {showRefs && <RefsSection proj={proj} reload={reload} />}
           <AnalysisView proj={proj} reload={reload} />
           <PromptsView proj={proj} reload={reload} />
         </div>
@@ -188,11 +215,26 @@ function AudioModeRow({ proj, reload }: { proj: ProjectFull; reload: () => void 
 
 // ── Загрузка ролика ─────────────────────────────────────────────────────────
 
+const UPLOAD_LINES = [
+  'ролик залетает на сервер…',
+  'считаю байты…',
+  'скоро раскадровка: ffmpeg разомнётся…',
+  'ищу, где у ролика душа…',
+];
+
 function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
   const [drag, setDrag] = useState(false);
   const [pct, setPct] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [lineIdx, setLineIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // живая строка под прогрессом — загрузка не должна ощущаться мёртвой паузой
+  useEffect(() => {
+    if (pct === null) return;
+    const t = setInterval(() => setLineIdx((i) => (i + 1) % UPLOAD_LINES.length), 1600);
+    return () => clearInterval(t);
+  }, [pct]);
 
   const handle = async (file: File | undefined) => {
     if (!file) return;
@@ -245,6 +287,7 @@ function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
             <div className="mx-auto mt-4 h-1.5 w-64 rounded-full bg-panel2 overflow-hidden">
               <div className="h-full bg-lime transition-all" style={{ width: `${pct}%` }} />
             </div>
+            <div className="text-xs text-dim mt-3 sf-pulse">{UPLOAD_LINES[lineIdx]}</div>
           </>
         )}
         <input

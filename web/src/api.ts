@@ -1,6 +1,7 @@
 import type {
   EstimateInfo,
   HealthInfo,
+  PresetInfo,
   PricingInfo,
   ProjectFull,
   ProjectSummary,
@@ -92,8 +93,11 @@ export const api = {
       flags: { removeText: boolean; enhanceFigure: boolean };
       generateAudio?: boolean;
       confirmUnknownCost?: boolean;
+      preset?: string;
     },
   ) => post(u(`api/projects/${id}/swap`), body).then((r) => j<{ ok: true }>(r)),
+  presets: () => fetch(u('api/presets')).then((r) => j<PresetInfo[]>(r)),
+  presetThumbUrl: (thumb: string) => u(thumb),
   estimate: (id: string) =>
     fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>

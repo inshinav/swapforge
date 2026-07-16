@@ -23,6 +23,27 @@ export function isQueued(projectId: string): boolean {
   return queue.some((j) => j.projectId === projectId);
 }
 
+/** Фактическая длительность стадии — в projects.stage_times_json (кормит степпер UI). */
+function recordStageTime(projectId: string, label: string, seconds: number): void {
+  try {
+    const db = getDb();
+    const row = db.prepare(`SELECT stage_times_json FROM projects WHERE id = ?`).get(projectId) as
+      | { stage_times_json: string | null }
+      | undefined;
+    if (!row) return;
+    let times: Record<string, number> = {};
+    try {
+      times = row.stage_times_json ? (JSON.parse(row.stage_times_json) as Record<string, number>) : {};
+    } catch {
+      /* кривой JSON перезапишем */
+    }
+    times[label] = Math.round(seconds * 10) / 10;
+    db.prepare(`UPDATE projects SET stage_times_json = ? WHERE id = ?`).run(JSON.stringify(times), projectId);
+  } catch (e) {
+    console.warn(`[jobs] stage-time не записан (${label}):`, e instanceof Error ? e.message : e);
+  }
+}
+
 async function pump(): Promise<void> {
   if (running) return;
   running = true;
@@ -65,12 +86,14 @@ export function enqueueProjectJob(opts: {
     projectId: opts.projectId,
     label: opts.label,
     run: async () => {
+      const t0 = Date.now();
       try {
         await opts.fn();
         db.prepare(`UPDATE projects SET status = ?, error = NULL WHERE id = ?`).run(
           opts.doneStatus,
           opts.projectId,
         );
+        recordStageTime(opts.projectId, opts.label, (Date.now() - t0) / 1000);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[jobs] ${opts.label} (${opts.projectId}):`, msg);

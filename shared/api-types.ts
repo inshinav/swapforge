@@ -42,8 +42,8 @@ export interface RefInfo {
   role: RefRole;
   file: string;
   note: string;
-  /** Кто назначил роль: эвристика по порядку, vision-классификатор или руками. */
-  roleSource?: 'heuristic' | 'auto' | 'manual';
+  /** Кто назначил роль: эвристика по порядку, vision-классификатор, руками или пресет-пак. */
+  roleSource?: 'heuristic' | 'auto' | 'manual' | 'preset';
   autoNote?: string;
 }
 
@@ -104,6 +104,18 @@ export interface GenerationRow {
   createdAt: string;
   submittedAt: string | null;
   finishedAt: string | null;
+  /** Фактические длительности, сек: загрузка ассетов (created→submitted) и рендер+скачивание. */
+  uploadSec: number | null;
+  renderSec: number | null;
+}
+
+export interface PresetInfo {
+  id: string;
+  title: string;
+  hint: string;
+  refs: Array<{ role: RefRole; note: string }>;
+  /** Относительный URL превью (первый реф-лист пресета). */
+  thumb: string;
 }
 
 export interface ProjectCosts {
@@ -144,6 +156,8 @@ export interface ProjectFull extends ProjectSummary {
   flags: FlowFlagsDto | null;
   generations: GenerationRow[];
   costs: ProjectCosts;
+  /** Фактические длительности локальных стадий, сек: {storyboard, analyze, generate, startframe}. */
+  stageTimes: Record<string, number> | null;
 }
 
 // ── v2: смета, тарифы, расход ────────────────────────────────────────────────

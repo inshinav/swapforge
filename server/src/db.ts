@@ -124,6 +124,8 @@ export function applySchema(d: DatabaseSync): void {
   ensureColumn(d, 'projects', 'flags_json', `flags_json TEXT`);
   // формат как у datetime('now') — сравнивается строково с usage_events.created_at
   ensureColumn(d, 'projects', 'flow_started_at', `flow_started_at TEXT`);
+  // фактические длительности локальных стадий: {storyboard: сек, analyze: …} — для степпера
+  ensureColumn(d, 'projects', 'stage_times_json', `stage_times_json TEXT`);
   ensureColumn(d, 'prompts', 'flags_json', `flags_json TEXT`);
   ensureColumn(d, 'refs', 'role_source', `role_source TEXT NOT NULL DEFAULT 'manual'`);
   ensureColumn(d, 'refs', 'auto_note', `auto_note TEXT NOT NULL DEFAULT ''`);

@@ -113,6 +113,9 @@ function GenMeta({ g }: { g: GenerationRow }) {
       ) : (
         g.costEst?.wavespeedUsd != null && <Tag tone="warn">смета ≈ ${g.costEst.wavespeedUsd.toFixed(2)}</Tag>
       )}
+      {g.renderSec != null && g.renderSec > 0 && (
+        <Tag>рендер {g.renderSec < 120 ? `${Math.round(g.renderSec)}с` : `${(g.renderSec / 60).toFixed(1)} мин`}</Tag>
+      )}
       <Tag>{fmtDate(g.finishedAt ?? g.createdAt)}</Tag>
       {g.notes.includes('NSFW') && <Tag tone="warn">⚠ NSFW-флаг WaveSpeed</Tag>}
     </div>
