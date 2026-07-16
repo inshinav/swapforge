@@ -110,14 +110,15 @@ describe('доктрина v2: opener и режимные блоки', () => {
 describe('энфорсмент длины промтов кодом', () => {
   it('wordCount и компресс-запрос: verbatim-строки и бюджет в инструкции', () => {
     expect(wordCount('  one   two\nthree ')).toBe(3);
-    expect(VIDEO_PROMPT_MAX_WORDS).toBe(240);
+    expect(VIDEO_PROMPT_MAX_WORDS).toBe(220);
     const req = buildCompressionRequest({
       videoPrompt: Array(300).fill('word').join(' '),
       imagePrompt: 'img prompt',
       notes: 'заметки',
     });
     expect(req).toContain('videoPrompt = 300 words');
-    expect(req).toContain('hard band 130–200');
+    expect(req).toContain('TARGET: videoPrompt 170–190 words');
+    expect(req).toContain('DELETE the weakest KEEP anchors');
     expect(req).toContain('Keep verbatim: the reference-1 line');
     expect(req).toContain('every DO NOT guardrail');
     expect(req).toContain('img prompt');

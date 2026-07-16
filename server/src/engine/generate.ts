@@ -119,18 +119,20 @@ export function wordCount(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length;
 }
 
-/** Норма доктрины 130–200; выше этого порога — один принудительный компресс-проход. */
-export const VIDEO_PROMPT_MAX_WORDS = 240;
+/** Норма доктрины 130–200; выше потолка — один принудительный компресс-проход. */
+export const VIDEO_PROMPT_MAX_WORDS = 220;
 
-/** Текст компресс-прохода: без картинок и анализа — только прежний вывод и бюджет. */
+/** Текст компресс-прохода: без картинок и анализа — только прежний вывод и бюджет.
+ *  Точечная цель (170–190) вместо полосы: по полосе модели стабильно промахиваются вверх. */
 export function buildCompressionRequest(pair: PromptPair): string {
   return (
-    `Your previous output is over the WORD BUDGET (videoPrompt = ${wordCount(pair.videoPrompt)} words; hard band 130–200, imagePrompt ≤ 160).\n` +
-    `Rewrite BOTH prompts compressed to the budget. Rules:\n` +
+    `Your previous output is over the WORD BUDGET (videoPrompt = ${wordCount(pair.videoPrompt)} words).\n` +
+    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 170–190 words (hard ceiling 200); imagePrompt 100–140 (ceiling 160). Rules:\n` +
     `- Keep verbatim: the reference-1 line, identity-lock sentences, active mode sentences (REMOVE-text / figure).\n` +
     `- Keep every DO NOT guardrail (merging clauses into fewer sentences is fine).\n` +
     `- Merge the KEEP list down to the 8–12 strongest anchors (reflective/moving elements, light, camera path first).\n` +
-    `- Cut adjectives and repetition. Do NOT add any new content or change meaning. Keep "notes" as is.\n\n` +
+    `- Cut adjectives and repetition. If still over the ceiling, DELETE the weakest KEEP anchors until it fits.\n` +
+    `- Do NOT add any new content or change meaning. Keep "notes" as is. Count words before returning.\n\n` +
     `Previous videoPrompt:\n${pair.videoPrompt}\n\nPrevious imagePrompt:\n${pair.imagePrompt}\n\nPrevious notes:\n${pair.notes}`
   );
 }
