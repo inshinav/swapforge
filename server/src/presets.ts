@@ -25,14 +25,14 @@ export interface PresetDef {
 const BIKE_REF: PresetRefDef = {
   file: 'zx6r.jpg',
   role: 'vehicle',
-  note: 'Kawasaki Ninja ZX-6R, оранжево-чёрный — референс-лист со всех ракурсов (бок/фронт/зад/3-четверти/сверху/кокпит)',
+  note: 'Kawasaki Ninja ZX-6R, оранжево-чёрный — референс-лист со всех ракурсов (бок/фронт/зад/3-четверти/сверху/кокпит). Использовать ТОЛЬКО если в исходнике есть мотоцикл; если мотоцикла в кадре нет — полностью игнорировать этот референс',
 };
 
 export const PRESETS: PresetDef[] = [
   {
     id: 'motolola-loose',
     title: 'MotoLola · распущенные',
-    hint: 'модель со всех ракурсов (волосы распущены) + Kawasaki ZX-6R',
+    hint: 'модель со всех ракурсов (волосы распущены); Kawasaki подставится, только если в кадре есть мотоцикл',
     refs: [
       {
         file: 'motolola-loose.jpg',
@@ -45,7 +45,7 @@ export const PRESETS: PresetDef[] = [
   {
     id: 'motolola-braid',
     title: 'MotoLola · коса',
-    hint: 'модель со всех ракурсов (волосы в косе) + Kawasaki ZX-6R',
+    hint: 'модель со всех ракурсов (волосы в косе); Kawasaki подставится, только если в кадре есть мотоцикл',
     refs: [
       {
         file: 'motolola-braid.jpg',

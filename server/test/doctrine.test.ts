@@ -61,6 +61,18 @@ describe('доктрина v2: opener и режимные блоки', () => {
     expect(DOCTRINE_SYSTEM).toContain('LIGHT the new');
   });
 
+  it('v3.1 любой формат: роль из видео, эмоции/перформанс исходника, игнор лишнего рефа, без артефактов', () => {
+    expect(DOCTRINE_SYSTEM).toContain('their actual role in THIS video');
+    expect(DOCTRINE_SYSTEM).toContain('with or without a vehicle');
+    expect(DOCTRINE_SYSTEM).toContain("Preserve the original person's performance exactly");
+    expect(DOCTRINE_SYSTEM).toContain('expressions, emotions, laughter, gaze and lip movement');
+    expect(DOCTRINE_SYSTEM).toContain('IGNORE references that have no counterpart');
+    expect(DOCTRINE_SYSTEM).toContain('no morphing, no warping, no artifacts');
+    // и в старт-кадре: эмоция исходного кадра + игнор рефа без пары в кадре
+    expect(DOCTRINE_SYSTEM).toContain("ORIGINAL figure's facial expression and emotion");
+    expect(DOCTRINE_SYSTEM).toContain('IGNORE that reference entirely');
+  });
+
   it('v3 «не сковывать»: без инвентарей в KEEP, подавители — только в итерациях, без форматов', () => {
     expect(DOCTRINE_SYSTEM).toContain('TRUST THE SOURCE VIDEO');
     expect(DOCTRINE_SYSTEM).toContain('NEVER enumerate scene objects');
