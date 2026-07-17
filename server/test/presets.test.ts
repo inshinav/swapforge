@@ -58,7 +58,7 @@ function project(id = randomUUID()): string {
 
 describe('пресеты: манифест и применение', () => {
   it('манифест валиден: файлы существуют, модель первой, роли корректны', () => {
-    expect(PRESETS.length).toBe(2);
+    expect(PRESETS.length).toBe(3);
     for (const p of PRESETS) {
       expect(p.refs[0]!.role).toBe('model'); // нумерация: модель = ref 2 после старт-кадра
       expect(p.refs.some((r) => r.role === 'vehicle')).toBe(true);
@@ -106,7 +106,7 @@ describe('пресеты: роуты', () => {
     const list = await app.inject({ method: 'GET', url: '/api/presets' });
     expect(list.statusCode).toBe(200);
     const items = JSON.parse(list.body) as Array<{ id: string; thumb: string }>;
-    expect(items.map((i) => i.id).sort()).toEqual(['motolola-braid', 'motolola-loose']);
+    expect(items.map((i) => i.id).sort()).toEqual(['motolola-braid', 'motolola-loose', 'motolola-twinbraids']);
 
     const ok = await app.inject({ method: 'GET', url: `/${items[0]!.thumb}` });
     expect(ok.statusCode).toBe(200);

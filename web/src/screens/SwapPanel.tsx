@@ -169,7 +169,7 @@ export function SwapPanel({
               /* Чистый проект: пресеты одним нажатием или свои референсы */
               <div className="space-y-2">
                 <div className="text-sm font-semibold">Кто в кадре?</div>
-                <div className="grid sm:grid-cols-3 gap-2">
+                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
                   {presets.map((p) => (
                     <button
                       key={p.id}
