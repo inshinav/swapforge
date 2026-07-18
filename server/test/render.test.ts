@@ -567,7 +567,7 @@ describe('роуты: rating-мост и ручной рендер', () => {
     };
     expect(p.flow).toBe('auto');
     expect(p.flow_started_at).toBeTruthy();
-    expect(JSON.parse(p.flags_json)).toEqual({ removeText: true, enhanceFigure: false, generateAudio: false });
+    expect(JSON.parse(p.flags_json)).toEqual({ removeText: true, enhanceFigure: false, wish: '', generateAudio: false });
     finishActive();
     await app.close();
   });

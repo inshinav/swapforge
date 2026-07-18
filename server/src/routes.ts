@@ -342,6 +342,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       generateAudio?: boolean;
       lang?: string;
       confirmUnknownCost?: boolean;
+      /** v4: пожелания к ролику (подчинены доктрине; лучше не использовать — менее стабильно). */
+      wish?: string;
       /** v4: кнопка-вариант модели пользователя. */
       variantId?: string;
       /** legacy-алиас захардкоженных пресетов (уходит после чекпоинта этапа 1). */
@@ -375,6 +377,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const flagsJson = JSON.stringify({
       removeText: !!body.flags?.removeText,
       enhanceFigure: !!body.flags?.enhanceFigure,
+      wish: typeof body.wish === 'string' ? body.wish.trim().slice(0, 500) : '',
       generateAudio:
         body.generateAudio === undefined ? parseGenerateAudio(p.flags_json) : !!body.generateAudio,
     });
@@ -796,7 +799,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       /* кривой JSON перезапишем */
     }
     db.prepare(`UPDATE projects SET flags_json = ? WHERE id = ?`).run(
-      JSON.stringify({ ...curFlags, removeText: inherited.removeText, enhanceFigure: inherited.enhanceFigure }),
+      JSON.stringify({
+        ...curFlags,
+        removeText: inherited.removeText,
+        enhanceFigure: inherited.enhanceFigure,
+        wish: inherited.wish,
+      }),
       id,
     );
     startGeneration(id, {

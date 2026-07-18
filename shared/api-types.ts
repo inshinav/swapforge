@@ -80,6 +80,8 @@ export interface SeedanceParams {
 export interface FlowFlagsDto {
   removeText: boolean;
   enhanceFigure: boolean;
+  /** Пожелания к ролику ('' = базовый режим; менее стабильно). */
+  wish: string;
   /** Звук результата: true = нативная генерация, false = дорожка исходника. */
   generateAudio: boolean;
 }

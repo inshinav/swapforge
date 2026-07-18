@@ -234,7 +234,7 @@ describe('оркестратор: флаги и решающая таблица'
   it('parseFlags: null/мусор → дефолты; flagsEqual сравнивает по значению', () => {
     expect(parseFlags(null)).toEqual(DEFAULT_FLAGS);
     expect(parseFlags('не json')).toEqual(DEFAULT_FLAGS);
-    expect(parseFlags('{"removeText":true}')).toEqual({ removeText: true, enhanceFigure: false });
+    expect(parseFlags('{"removeText":true}')).toEqual({ removeText: true, enhanceFigure: false, wish: '' });
     expect(flagsEqual(parseFlags(null), DEFAULT_FLAGS)).toBe(true);
   });
   it('таблица переходов', () => {
@@ -242,7 +242,7 @@ describe('оркестратор: флаги и решающая таблица'
     expect(nextStageOf({ ...base, analysisReady: false })).toBe('analyze');
     expect(nextStageOf({ ...base, latestVersion: 0, latestPromptFlags: null })).toBe('generate');
     expect(
-      nextStageOf({ ...base, wantedFlags: { removeText: true, enhanceFigure: false } }),
+      nextStageOf({ ...base, wantedFlags: { removeText: true, enhanceFigure: false, wish: '' } }),
     ).toBe('generate'); // смена галочек → регенерация
     expect(nextStageOf({ ...base, startframeReady: false })).toBe('startframe');
     expect(nextStageOf(base)).toBe('render');
@@ -273,7 +273,7 @@ describe('оркестратор: флаги и решающая таблица'
     fs.writeFileSync(path.join(startDir('sp1'), 'start_v2_2026-07-16T00-00-00.png'), 'png');
     const s = snapshotProject({ id: 'sp1', frames_json: '[]', analysis_json: '{}', flags_json: '{"removeText":true}' });
     expect(s.latestVersion).toBe(2);
-    expect(s.latestPromptFlags).toEqual({ removeText: true, enhanceFigure: false });
+    expect(s.latestPromptFlags).toEqual({ removeText: true, enhanceFigure: false, wish: '' });
     expect(s.startframeReady).toBe(true);
     expect(s.latestGenStatus).toBe('done');
     expect(nextStageOf(s)).toBe('done');

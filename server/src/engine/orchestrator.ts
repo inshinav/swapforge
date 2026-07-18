@@ -7,23 +7,30 @@ import { startDir } from '../storage';
 export interface FlowFlags {
   removeText: boolean;
   enhanceFigure: boolean;
+  /** Пожелания к ролику (подчинены доктрине; '' = базовый режим). */
+  wish: string;
 }
 
-export const DEFAULT_FLAGS: FlowFlags = { removeText: false, enhanceFigure: false };
+export const DEFAULT_FLAGS: FlowFlags = { removeText: false, enhanceFigure: false, wish: '' };
 
 /** Старые записи без flags_json = оба флага выключены (поведение v1). */
 export function parseFlags(json: string | null | undefined): FlowFlags {
   if (!json) return { ...DEFAULT_FLAGS };
   try {
     const raw = JSON.parse(json) as Partial<FlowFlags>;
-    return { removeText: !!raw.removeText, enhanceFigure: !!raw.enhanceFigure };
+    return {
+      removeText: !!raw.removeText,
+      enhanceFigure: !!raw.enhanceFigure,
+      wish: typeof raw.wish === 'string' ? raw.wish.slice(0, 500) : '',
+    };
   } catch {
     return { ...DEFAULT_FLAGS };
   }
 }
 
+/** Смена пожелания = смена флагов = регенерация промтов на следующем свапе. */
 export function flagsEqual(a: FlowFlags, b: FlowFlags): boolean {
-  return a.removeText === b.removeText && a.enhanceFigure === b.enhanceFigure;
+  return a.removeText === b.removeText && a.enhanceFigure === b.enhanceFigure && a.wish === b.wish;
 }
 
 export type StageName = 'storyboard' | 'analyze' | 'generate' | 'startframe' | 'render' | 'done';

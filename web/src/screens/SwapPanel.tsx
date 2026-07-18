@@ -64,6 +64,8 @@ export function SwapPanel({
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
   const [enhanceFigure, setEnhanceFigure] = useState(savedFlags?.enhanceFigure ?? false);
+  const [wish, setWish] = useState(savedFlags?.wish ?? '');
+  const [wishOpen, setWishOpen] = useState(!!savedFlags?.wish);
   const [confirmUnknown, setConfirmUnknown] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState<string | null>(null);
@@ -108,6 +110,7 @@ export function SwapPanel({
       // между поллингами может быть протухшим, а платный рендер должен уйти с актуальной
       await api.swap(proj.id, {
         flags: { removeText, enhanceFigure },
+        wish: wish.trim() || undefined,
         confirmUnknownCost: confirmUnknown || undefined,
         variantId,
       });
@@ -193,6 +196,31 @@ export function SwapPanel({
                 title="Усилить фигуру"
                 hint="шире бёдра, выпуклее ягодицы, уже талия, больше грудь — лицо не трогаем"
               />
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={() => setWishOpen(!wishOpen)}
+                className="text-xs text-dim hover:text-lime"
+              >
+                {wishOpen ? '▾' : '▸'} пожелания к ролику{wish.trim() ? ' · заданы' : ''}
+              </button>
+              {wishOpen && (
+                <div className="mt-2 space-y-1.5">
+                  <textarea
+                    value={wish}
+                    onChange={(e) => setWish(e.target.value.slice(0, 500))}
+                    rows={2}
+                    placeholder="Например: «пусть на футболке будет логотип X», «сделай закат»…"
+                    className="w-full rounded-lg bg-panel2 border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
+                  />
+                  <p className="text-[11px] text-warn">
+                    ⚠ Лучше не использовать: результат менее стабильный. Рекомендуемый режим — базовый:
+                    меняем только модель и объекты, весь реализм, локацию и движение оставляем как в исходнике.
+                  </p>
+                </div>
+              )}
             </div>
 
             <EstimateLine est={est} err={estErr} onRefresh={loadEstimate} />

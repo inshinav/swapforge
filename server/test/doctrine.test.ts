@@ -163,7 +163,7 @@ describe('buildGenerationRequest: флаги в задании', () => {
       lang: 'en',
       fewshot: [],
       iteration: null,
-      flags: { removeText: true, enhanceFigure: false },
+      flags: { removeText: true, enhanceFigure: false, wish: '' },
     });
     const task = (req.parts[0] as { text: string }).text;
     expect(task).toContain('remove overlay text = ON');

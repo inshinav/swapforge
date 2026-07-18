@@ -6,9 +6,10 @@ import Library from './screens/Library';
 import Login from './screens/Login';
 import Models from './screens/Models';
 import Billing from './screens/Billing';
+import Guide from './screens/Guide';
 import { Spinner } from './ui';
 
-type View = 'new' | 'models' | 'library' | 'billing';
+type View = 'new' | 'models' | 'library' | 'billing' | 'guide';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
@@ -98,6 +99,9 @@ export default function App() {
               Баланс
             </TabBtn>
           )}
+          <TabBtn active={view === 'guide'} onClick={() => setView('guide')}>
+            Гайд
+          </TabBtn>
         </nav>
         <div className="flex-1" />
         {health && health.keyPresent === false && (
@@ -127,6 +131,8 @@ export default function App() {
           <Models />
         ) : view === 'billing' ? (
           <Billing />
+        ) : view === 'guide' ? (
+          <Guide />
         ) : (
           <Library onOpen={openProject} />
         )}

@@ -210,6 +210,37 @@ describe('запрос генерации', () => {
     expect(text).toContain(ARTIFACTS.pasted_on.fix.slice(0, 60));
     expect(text).toContain('imagePrompt language: Russian');
   });
+  it('пожелания: секция subordinate только при непустом wish, контракт не расширяется', async () => {
+    const { parseFlags, flagsEqual, DEFAULT_FLAGS } = await import('../src/engine/orchestrator');
+    const withWish = buildGenerationRequest('missing-project', ANALYSIS, META, REFS, {
+      lang: 'en',
+      fewshot: [],
+      iteration: null,
+      flags: { removeText: false, enhanceFigure: false, wish: 'сделай закат' },
+    });
+    const text = withWish.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
+    expect(text).toContain('USER WISHES (subordinate)');
+    expect(text).toContain('сделай закат');
+    expect(text).toContain('never expand the KEEP line');
+    expect(text).toContain('silently ignore');
+
+    const noWish = buildGenerationRequest('missing-project', ANALYSIS, META, REFS, {
+      lang: 'en',
+      fewshot: [],
+      iteration: null,
+      flags: { ...DEFAULT_FLAGS },
+    });
+    const text2 = noWish.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
+    expect(text2).not.toContain('USER WISHES');
+
+    // round-trip флагов + «смена пожелания = регенерация»
+    const flags = parseFlags(JSON.stringify({ removeText: true, enhanceFigure: false, wish: 'закат' }));
+    expect(flags.wish).toBe('закат');
+    expect(flagsEqual(flags, { ...flags })).toBe(true);
+    expect(flagsEqual(flags, { ...flags, wish: 'рассвет' })).toBe(false);
+    expect(parseFlags('{"removeText":true}').wish).toBe(''); // легаси-записи без wish
+  });
+
   it('few-shot попадает в запрос', () => {
     const { parts } = buildGenerationRequest('missing-project', ANALYSIS, META, REFS, {
       lang: 'en',

@@ -43,6 +43,75 @@ function useProject(id: string | null) {
   return { proj, err, reload };
 }
 
+/**
+ * Первые шаги нового пользователя: чеклист над загрузкой, пока не создана модель
+ * или нет ни одного проекта. Скрывается крестиком (localStorage) или сам собой.
+ */
+function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem('sf-onboard') === '1');
+  const [hasModels, setHasModels] = useState<boolean | null>(null);
+  const [hasProjects, setHasProjects] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (dismissed) return;
+    api.models().then((m) => setHasModels(m.some((x) => x.variants.length > 0))).catch(() => setHasModels(null));
+    api.projects().then((p) => setHasProjects(p.length > 0)).catch(() => setHasProjects(null));
+  }, [dismissed]);
+
+  if (dismissed || hasModels === null || hasProjects === null) return null;
+  if (hasModels && hasProjects) return null; // путь пройден — чеклист не нужен
+
+  const dismiss = () => {
+    localStorage.setItem('sf-onboard', '1');
+    setDismissed(true);
+  };
+
+  const Step = ({ done, n, title, sub, onClick }: { done: boolean; n: number; title: string; sub: string; onClick?: () => void }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className={`flex items-start gap-2.5 text-left rounded-lg border px-3 py-2 transition-colors ${
+        done ? 'border-lime/40 bg-lime/5' : onClick ? 'border-line hover:border-lime/40' : 'border-line opacity-80'
+      }`}
+    >
+      <span className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${done ? 'bg-lime text-black' : 'bg-panel2 border border-line2 text-mut'}`}>
+        {done ? '✓' : n}
+      </span>
+      <span>
+        <span className="text-sm font-semibold block">{title}</span>
+        <span className="text-xs text-mut">{sub}</span>
+      </span>
+    </button>
+  );
+
+  return (
+    <Card glow>
+      <div className="p-4 sm:p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex-1">
+            <div className="text-sm font-bold mb-2">Первые шаги — 5 минут до первого свапа</div>
+            <div className="grid sm:grid-cols-3 gap-2">
+              <Step
+                done={hasModels}
+                n={1}
+                title="Создай модель"
+                sub="загрузи реф-листы персонажа один раз"
+                onClick={hasModels ? undefined : onOpenModels}
+              />
+              <Step done={hasProjects} n={2} title="Загрузи ролик" sub="4–15 секунд, один герой в кадре" />
+              <Step done={false} n={3} title="Жми кнопку модели" sub="весь конвейер поедет сам" />
+            </div>
+          </div>
+          <button type="button" onClick={dismiss} className="text-dim hover:text-ink text-sm" title="Скрыть">
+            ×
+          </button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 /** XHR — ради прогресса загрузки больших роликов. */
 function uploadVideo(file: File, onProgress: (pct: number) => void): Promise<{ id: string }> {
   return new Promise((resolve, reject) => {
@@ -80,7 +149,14 @@ export default function NewSwap({
 }) {
   const { proj, err, reload } = useProject(projectId);
 
-  if (!projectId) return <UploadZone onCreated={onProjectCreated} />;
+  if (!projectId) {
+    return (
+      <div className="space-y-4">
+        <WelcomeChecklist onOpenModels={onOpenModels} />
+        <UploadZone onCreated={onProjectCreated} />
+      </div>
+    );
+  }
   if (err?.includes('не найден')) {
     // проект удалили — забываем его и показываем загрузку
     return (

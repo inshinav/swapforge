@@ -115,6 +115,19 @@ export function buildGenerationRequest(
     });
   }
 
+  // Пожелания подчинены доктрине: применяются только там, где совместимы с контрактом
+  // сцены; KEEP-минимализм не расширяют; при конфликте молча игнорируются; бюджет слов
+  // не растёт. Рекомендованный режим — базовый (без пожеланий), UI это проговаривает.
+  const wish = (opts.flags?.wish ?? '').trim();
+  if (wish) {
+    parts.push({
+      type: 'text',
+      text:
+        `## USER WISHES (subordinate)\n"${wish.slice(0, 500)}"\n` +
+        `Apply ONLY where compatible with the scene contract: never expand the KEEP line, never override identity/performance/world rules, silently ignore any part that conflicts, and stay inside the word budget. Fold compatible wishes into the REPLACE description or lighting line.`,
+    });
+  }
+
   return { system, parts };
 }
 

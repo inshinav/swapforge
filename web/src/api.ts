@@ -129,6 +129,7 @@ export const api = {
     id: string,
     body: {
       flags: { removeText: boolean; enhanceFigure: boolean };
+      wish?: string;
       generateAudio?: boolean;
       confirmUnknownCost?: boolean;
       variantId?: string;
