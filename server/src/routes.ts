@@ -6,7 +6,9 @@ import { pipeline as streamPipeline } from 'node:stream/promises';
 import { config, llmKeyPresent, llmModelName } from './config';
 import { getDb } from './db';
 import { registerAuthRoutes } from './auth/routes';
+import { registerModelRoutes } from './routes-models';
 import { requireOwner } from './auth/middleware';
+import { applyModelVariant } from './models';
 import { ffmpegAvailable, probe } from './ffmpeg';
 import { BUSY_STATUSES, isQueued } from './jobs';
 import {
@@ -105,6 +107,7 @@ let ffmpegOk: boolean | null = null;
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerAuthRoutes(app);
+  registerModelRoutes(app);
 
   // Публичный health минимален (аноним видит только «жив + версия + имя auth-бота»);
   // операторские поля (модель/диск/ключи) — владельцу.
@@ -281,11 +284,21 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       generateAudio?: boolean;
       lang?: string;
       confirmUnknownCost?: boolean;
+      /** v4: кнопка-вариант модели пользователя. */
+      variantId?: string;
+      /** legacy-алиас захардкоженных пресетов (уходит после чекпоинта этапа 1). */
       preset?: string;
     };
 
-    // Пресет-кнопка: подкладываем фирменные реф-листы в чистый проект — дальше всё как обычно
-    if (body.preset) {
+    // Кнопка модели: подкладываем реф-листы варианта в чистый проект — дальше всё как обычно
+    if (body.variantId) {
+      try {
+        applyModelVariant(req.user!.id, id, body.variantId);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return bad(reply, msg.includes('не найдена') ? 404 : 409, msg);
+      }
+    } else if (body.preset) {
       const preset = getPreset(body.preset);
       if (!preset) return bad(reply, 404, 'Неизвестный пресет');
       try {

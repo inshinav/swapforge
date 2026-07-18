@@ -8,6 +8,8 @@ import type { UsageSummary } from '../../shared/api-types';
 export interface UsageEventInput {
   projectId?: string | null;
   generationId?: string | null;
+  /** Явный плательщик для внепроектных задач (describe в конструкторе моделей). */
+  userId?: string | null;
   task: string;
   model: string;
   tokensIn: number;
@@ -21,11 +23,13 @@ export function recordUsage(ev: UsageEventInput): void {
     const cost = price ? (ev.tokensIn * price.inPerM + ev.tokensOut * price.outPerM) / 1e6 : null;
     // user_id денормализуем НА ЗАПИСИ (а не join-ом на чтении): строка расхода
     // обязана пережить удаление проекта с уже присвоенным плательщиком
-    const owner = ev.projectId
-      ? ((getDb().prepare(`SELECT user_id FROM projects WHERE id = ?`).get(ev.projectId) as
-          | { user_id: string | null }
-          | undefined)?.user_id ?? null)
-      : null;
+    const owner =
+      ev.userId ??
+      (ev.projectId
+        ? ((getDb().prepare(`SELECT user_id FROM projects WHERE id = ?`).get(ev.projectId) as
+            | { user_id: string | null }
+            | undefined)?.user_id ?? null)
+        : null);
     getDb()
       .prepare(
         `INSERT INTO usage_events (id, project_id, generation_id, task, model, tokens_in, tokens_out, cost_usd, price_date, user_id)

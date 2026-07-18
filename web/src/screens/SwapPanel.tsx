@@ -1,10 +1,38 @@
 // Главная панель one-click: две галочки → смета из живых тарифов → одна кнопка.
-// Чистый проект предлагает пресет-кнопки (фирменные реф-листы с сервера) или «свои референсы».
+// Чистый проект предлагает кнопки МОДЕЛЕЙ пользователя (из конструктора) или «свои референсы».
 // После запуска — прогресс по стадиям с бегущей стоимостью и фактическими таймингами.
 import { useCallback, useEffect, useState } from 'react';
-import type { EstimateInfo, GenerationRow, PresetInfo, ProjectFull } from '@shared/api-types';
+import type { EstimateInfo, GenerationRow, ModelInfo, ProjectFull } from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
+
+/** Кнопка «Кто в кадре?» = вариант модели; собирается из ModelInfo на клиенте. */
+interface VariantButton {
+  variantId: string;
+  label: string;
+  hint: string;
+  thumb: string | null;
+}
+
+function variantButtons(models: ModelInfo[]): VariantButton[] {
+  const out: VariantButton[] = [];
+  for (const m of models) {
+    for (const v of m.variants) {
+      const sheet =
+        m.refs.find((r) => r.variantId === v.id && r.role === 'model') ??
+        m.refs.find((r) => r.variantId === v.id) ??
+        m.refs.find((r) => r.role === 'model') ??
+        null;
+      out.push({
+        variantId: v.id,
+        label: m.variants.length > 1 ? `${m.name} · ${v.title}` : m.name,
+        hint: v.hint || `${m.name}: свап этой кнопкой поедет сразу`,
+        thumb: sheet ? api.modelFileUrl(m.id, sheet.file) : null,
+      });
+    }
+  }
+  return out;
+}
 
 export const GEN_ACTIVE = ['uploading_assets', 'submitted', 'rendering', 'downloading'];
 const LOCAL_BUSY = ['storyboarding', 'analyzing', 'generating', 'startframing'];
@@ -14,12 +42,15 @@ export function SwapPanel({
   reload,
   custom,
   onCustom,
+  onOpenModels,
 }: {
   proj: ProjectFull;
   reload: () => void;
   /** Режим «свои референсы»: секция рефов открыта в основном потоке. */
   custom: boolean;
   onCustom: () => void;
+  /** Переход в конструктор «Мои модели» (пустой стейт кнопок). */
+  onOpenModels: () => void;
 }) {
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
@@ -29,10 +60,13 @@ export function SwapPanel({
   const [launchErr, setLaunchErr] = useState<string | null>(null);
   const [est, setEst] = useState<EstimateInfo | null>(null);
   const [estErr, setEstErr] = useState<string | null>(null);
-  const [presets, setPresets] = useState<PresetInfo[]>([]);
+  const [buttons, setButtons] = useState<VariantButton[] | null>(null); // null = грузятся
 
   useEffect(() => {
-    api.presets().then(setPresets).catch(() => setPresets([]));
+    api
+      .models()
+      .then((ms) => setButtons(variantButtons(ms)))
+      .catch(() => setButtons([]));
   }, []);
 
   const activeGen = proj.generations.find((g) => GEN_ACTIVE.includes(g.status)) ?? null;
@@ -57,7 +91,7 @@ export function SwapPanel({
     // смета пересчитывается после каждого завершения стадий/рендера
   }, [proj.id, running, proj.generations.length, proj.promptVersions, loadEstimate]);
 
-  const launch = async (preset?: string) => {
+  const launch = async (variantId?: string) => {
     setLaunching(true);
     setLaunchErr(null);
     try {
@@ -66,7 +100,7 @@ export function SwapPanel({
       await api.swap(proj.id, {
         flags: { removeText, enhanceFigure },
         confirmUnknownCost: confirmUnknown || undefined,
-        preset,
+        variantId,
       });
       reload();
     } catch (e) {
@@ -166,40 +200,62 @@ export function SwapPanel({
             )}
 
             {proj.refs.length === 0 && !custom ? (
-              /* Чистый проект: пресеты одним нажатием или свои референсы */
+              /* Чистый проект: кнопки моделей пользователя или свои референсы */
               <div className="space-y-2">
                 <div className="text-sm font-semibold">Кто в кадре?</div>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                  {presets.map((p) => (
+                {buttons === null ? (
+                  <div className="flex items-center gap-2 text-sm text-mut">
+                    <Spinner size={14} /> загружаю твои модели…
+                  </div>
+                ) : (
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                    {buttons.map((b) => (
+                      <button
+                        key={b.variantId}
+                        type="button"
+                        disabled={launching || proj.videoPurged}
+                        onClick={() => void launch(b.variantId)}
+                        className="group text-left rounded-xl border border-line hover:border-lime/60 bg-panel2 overflow-hidden transition-colors disabled:opacity-50"
+                        title={`${b.hint} — запустит весь свап сразу`}
+                      >
+                        {b.thumb ? (
+                          <img
+                            src={b.thumb}
+                            alt={b.label}
+                            className="w-full h-24 object-cover object-top opacity-90 group-hover:opacity-100"
+                          />
+                        ) : (
+                          <div className="w-full h-24 bg-panel flex items-center justify-center text-2xl">👤</div>
+                        )}
+                        <div className="px-3 py-2">
+                          <div className="text-sm font-semibold">⚡ {b.label}</div>
+                          <div className="text-xs text-dim">жми — свап поедет сразу</div>
+                        </div>
+                      </button>
+                    ))}
+                    {buttons.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={onOpenModels}
+                        className="text-left rounded-xl border border-lime/40 hover:border-lime/70 bg-lime/5 px-3 py-2 transition-colors flex flex-col justify-center min-h-24"
+                      >
+                        <div className="text-sm font-semibold">✨ Создай свою модель</div>
+                        <div className="text-xs text-mut">
+                          загрузи реф-листы один раз — кнопка появится здесь навсегда
+                        </div>
+                      </button>
+                    )}
                     <button
-                      key={p.id}
                       type="button"
-                      disabled={launching || proj.videoPurged}
-                      onClick={() => void launch(p.id)}
-                      className="group text-left rounded-xl border border-line hover:border-lime/60 bg-panel2 overflow-hidden transition-colors disabled:opacity-50"
-                      title={`${p.hint} — запустит весь свап сразу`}
+                      disabled={launching}
+                      onClick={onCustom}
+                      className="text-left rounded-xl border border-dashed border-line2 hover:border-lime/40 bg-panel2/50 px-3 py-2 transition-colors flex flex-col justify-center min-h-24"
                     >
-                      <img
-                        src={api.presetThumbUrl(p.thumb)}
-                        alt={p.title}
-                        className="w-full h-24 object-cover object-top opacity-90 group-hover:opacity-100"
-                      />
-                      <div className="px-3 py-2">
-                        <div className="text-sm font-semibold">⚡ {p.title}</div>
-                        <div className="text-xs text-dim">жми — свап поедет сразу</div>
-                      </div>
+                      <div className="text-sm font-semibold">📎 Свои референсы</div>
+                      <div className="text-xs text-dim">загрузить фото модели и техники вручную</div>
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    disabled={launching}
-                    onClick={onCustom}
-                    className="text-left rounded-xl border border-dashed border-line2 hover:border-lime/40 bg-panel2/50 px-3 py-2 transition-colors flex flex-col justify-center min-h-24"
-                  >
-                    <div className="text-sm font-semibold">📎 Свои референсы</div>
-                    <div className="text-xs text-dim">загрузить фото модели и техники вручную</div>
-                  </button>
-                </div>
+                  </div>
+                )}
                 {launching && (
                   <div className="flex items-center gap-2 text-sm text-mut">
                     <Spinner size={14} /> подкладываю референсы и запускаю…

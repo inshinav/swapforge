@@ -71,7 +71,7 @@ export function llmKeyPresent(): boolean {
   return config.llmProvider === 'openai' ? !!config.openaiApiKey : !!config.anthropicApiKey;
 }
 
-export type LlmTask = 'analyze' | 'generate' | 'classify';
+export type LlmTask = 'analyze' | 'generate' | 'classify' | 'describe';
 
 /**
  * Авто-роутинг моделей: сервис сам берёт оптимально дешёвую под задачу, при сбое модели
@@ -86,6 +86,9 @@ const DEFAULT_CHAINS: Record<LlmTask, string[]> = {
   generate: ['gpt-5.6-luna', 'gpt-5.5'],
   // classify: одна маленькая картинка → роль рефа; дешевле некуда, качество не критично
   classify: ['gpt-5.4-mini', 'gpt-5.6-terra'],
+  // describe: автоописание реф-листа для конструктора — качество ноты = качество
+  // пресета юзера, поэтому топ-tier как у generate (вход всё равно крошечный)
+  describe: ['gpt-5.6-luna', 'gpt-5.5'],
 };
 
 export function modelChainFor(task: LlmTask): string[] {

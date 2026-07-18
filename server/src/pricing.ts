@@ -9,7 +9,7 @@ import { wavespeed, type WaveSpeed, type WsModelEntry } from './wavespeed';
 import { remainingStages, snapshotProject, type ProjectRowLike, type StageName } from './engine/orchestrator';
 import type { EstimateInfo, EstimateTaskRow, VideoMeta } from '../../shared/api-types';
 
-export type UsageTask = 'video_analysis' | 'prompt_pair' | 'start_frame' | 'classify_ref';
+export type UsageTask = 'video_analysis' | 'prompt_pair' | 'start_frame' | 'classify_ref' | 'describe_ref';
 
 const STAGE_TASK: Partial<Record<StageName, UsageTask>> = {
   analyze: 'video_analysis',
@@ -26,12 +26,15 @@ export const SEED_TOKENS: Record<UsageTask, { tin: number; tout: number }> = {
   prompt_pair: { tin: 11_000, tout: 1_400 },
   start_frame: { tin: 3_400, tout: 5_700 },
   classify_ref: { tin: 1_000, tout: 60 },
+  // одна high-detail картинка листа + компактная RU-нота на выходе
+  describe_ref: { tin: 2_500, tout: 250 },
 };
 
 function taskModel(task: UsageTask): string {
   if (task === 'start_frame') return config.openaiImageModel;
   if (task === 'video_analysis') return modelChainFor('analyze')[0]!;
   if (task === 'classify_ref') return modelChainFor('classify')[0]!;
+  if (task === 'describe_ref') return modelChainFor('describe')[0]!;
   return modelChainFor('generate')[0]!;
 }
 

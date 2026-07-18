@@ -139,6 +139,39 @@ export function applySchema(d: DatabaseSync): void {
       applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- v4: модели пользователей (персонажи). visibility заложена под будущую витрину,
+    -- в v4 всегда 'private' — шаринга нет.
+    CREATE TABLE IF NOT EXISTS models (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','public')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+
+    -- Вариант образа (причёска/аутфит) = одна пресет-кнопка в «Кто в кадре?».
+    CREATE TABLE IF NOT EXISTS model_variants (
+      id TEXT PRIMARY KEY,
+      model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      hint TEXT NOT NULL DEFAULT '',
+      idx INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Реф-листы модели. variant_id NULL = общий для всех вариантов (мотоцикл/объект).
+    CREATE TABLE IF NOT EXISTS model_refs (
+      id TEXT PRIMARY KEY,
+      model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+      variant_id TEXT REFERENCES model_variants(id) ON DELETE CASCADE,
+      file TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('model','vehicle','object')),
+      note TEXT NOT NULL DEFAULT '',
+      auto_note TEXT NOT NULL DEFAULT '',
+      idx INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_refs_project ON refs(project_id, idx);
     CREATE INDEX IF NOT EXISTS idx_prompts_project ON prompts(project_id, version);
     CREATE INDEX IF NOT EXISTS idx_feedback_project ON feedback(project_id, version);
@@ -147,6 +180,9 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_events(project_id);
     CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_events(created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_models_user ON models(user_id);
+    CREATE INDEX IF NOT EXISTS idx_model_variants_model ON model_variants(model_id, idx);
+    CREATE INDEX IF NOT EXISTS idx_model_refs_model ON model_refs(model_id, idx);
   `);
 
   // Микромиграции v1 → v2

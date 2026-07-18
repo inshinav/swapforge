@@ -3,6 +3,7 @@ import type {
   EstimateInfo,
   HealthInfo,
   MeInfo,
+  ModelInfo,
   PresetInfo,
   PricingInfo,
   ProjectFull,
@@ -126,11 +127,70 @@ export const api = {
       flags: { removeText: boolean; enhanceFigure: boolean };
       generateAudio?: boolean;
       confirmUnknownCost?: boolean;
+      variantId?: string;
       preset?: string;
     },
   ) => post(u(`api/projects/${id}/swap`), body).then((r) => j<{ ok: true }>(r)),
   presets: () => fetch(u('api/presets')).then((r) => j<PresetInfo[]>(r)),
   presetThumbUrl: (thumb: string) => u(thumb),
+
+  // ── v4: модели пользователя (конструктор) ────────────────────────────────
+  models: () => fetch(u('api/models')).then((r) => j<ModelInfo[]>(r)),
+  createModel: (name: string) => post(u('api/models'), { name }).then((r) => j<{ id: string }>(r)),
+  renameModel: (id: string, name: string) =>
+    fetch(u(`api/models/${id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify({ name }),
+    }).then((r) => j<{ ok: true }>(r)),
+  deleteModel: (id: string) =>
+    fetch(u(`api/models/${id}`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
+      j<{ ok: true }>(r),
+    ),
+  addModelVariant: (modelId: string, title: string, hint?: string) =>
+    post(u(`api/models/${modelId}/variants`), { title, hint }).then((r) => j<{ id: string }>(r)),
+  patchModelVariant: (modelId: string, vid: string, body: { title?: string; hint?: string }) =>
+    fetch(u(`api/models/${modelId}/variants/${vid}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ ok: true }>(r)),
+  deleteModelVariant: (modelId: string, vid: string) =>
+    fetch(u(`api/models/${modelId}/variants/${vid}`), {
+      method: 'DELETE',
+      headers: csrfHeader(),
+    }).then((r) => j<{ ok: true }>(r)),
+  addModelRef: (modelId: string, file: File, role: string, variantId: string | null, note = '') => {
+    const fd = new FormData();
+    fd.append('role', role);
+    if (variantId) fd.append('variantId', variantId);
+    fd.append('note', note);
+    fd.append('photo', file);
+    return fetch(u(`api/models/${modelId}/refs`), {
+      method: 'POST',
+      headers: csrfHeader(),
+      body: fd,
+    }).then((r) => j<{ id: string; file: string; warnings: string[] }>(r));
+  },
+  patchModelRef: (
+    modelId: string,
+    refId: string,
+    body: { role?: string; note?: string; variantId?: string | null },
+  ) =>
+    fetch(u(`api/models/${modelId}/refs/${refId}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ ok: true }>(r)),
+  deleteModelRef: (modelId: string, refId: string) =>
+    fetch(u(`api/models/${modelId}/refs/${refId}`), {
+      method: 'DELETE',
+      headers: csrfHeader(),
+    }).then((r) => j<{ ok: true }>(r)),
+  describeModelRef: (modelId: string, refId: string) =>
+    post(u(`api/models/${modelId}/refs/${refId}/describe`)).then((r) => j<{ note: string }>(r)),
+  modelFileUrl: (modelId: string, file: string) =>
+    u(`api/models/${modelId}/file/${encodeURIComponent(file)}`),
   estimate: (id: string) =>
     fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>

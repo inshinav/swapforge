@@ -118,6 +118,33 @@ export interface PresetInfo {
   thumb: string;
 }
 
+// ── v4: модели пользователей (конструктор) ──────────────────────────────────
+
+export interface ModelRefInfo {
+  id: string;
+  /** null = общий реф модели (техника/объект) — едет с каждым вариантом. */
+  variantId: string | null;
+  file: string;
+  role: RefRole;
+  note: string;
+  idx: number;
+}
+
+export interface ModelVariantInfo {
+  id: string;
+  title: string;
+  hint: string;
+  idx: number;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  createdAt: string;
+  variants: ModelVariantInfo[];
+  refs: ModelRefInfo[];
+}
+
 export interface ProjectCosts {
   /** Всего по проекту: LLM (usage_events) + фактические списания рендеров. */
   projectUsd: number;

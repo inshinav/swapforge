@@ -54,6 +54,7 @@ async function complete(req: StructuredRequest, withSchemaFormat: boolean): Prom
     recordUsage({
       projectId: req.meta?.projectId,
       generationId: req.meta?.generationId,
+      userId: req.meta?.userId,
       task: req.schemaName,
       model: String(usage.model ?? params.model),
       tokensIn: usage.usage.input_tokens ?? 0,

@@ -4,9 +4,10 @@ import { ApiError, api } from './api';
 import NewSwap from './screens/NewSwap';
 import Library from './screens/Library';
 import Login from './screens/Login';
+import Models from './screens/Models';
 import { Spinner } from './ui';
 
-type View = 'new' | 'library';
+type View = 'new' | 'models' | 'library';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
@@ -82,6 +83,9 @@ export default function App() {
           <TabBtn active={view === 'new'} onClick={() => setView('new')}>
             Свап
           </TabBtn>
+          <TabBtn active={view === 'models'} onClick={() => setView('models')}>
+            Мои модели
+          </TabBtn>
           <TabBtn active={view === 'library'} onClick={() => setView('library')}>
             Библиотека
           </TabBtn>
@@ -105,7 +109,13 @@ export default function App() {
 
       <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6">
         {view === 'new' ? (
-          <NewSwap projectId={projectId} onProjectCreated={openProject} />
+          <NewSwap
+            projectId={projectId}
+            onProjectCreated={openProject}
+            onOpenModels={() => setView('models')}
+          />
+        ) : view === 'models' ? (
+          <Models />
         ) : (
           <Library onOpen={openProject} />
         )}

@@ -74,6 +74,7 @@ async function complete(
     recordUsage({
       projectId: req.meta?.projectId,
       generationId: req.meta?.generationId,
+      userId: req.meta?.userId,
       task: req.schemaName,
       model: res.model,
       tokensIn: res.usage.prompt_tokens ?? 0,

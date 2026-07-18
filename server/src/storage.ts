@@ -25,6 +25,37 @@ export function ensureProjectDirs(id: string): void {
   fs.mkdirSync(refsDir(id), { recursive: true });
 }
 
+// ── v4: хранилище моделей пользователей ─────────────────────────────────────
+// dataDir/models/<modelId>/refs/ — сиблинг projects/. Ротация enforceStorageCap
+// структурно не заходит в models/ (её SQL целится только в project-исходники и
+// рендеры): реф-листы — постоянный актив пользователя, не кэш.
+
+export function modelDir(id: string): string {
+  return path.join(config.dataDir, 'models', id);
+}
+export function modelRefsDir(id: string): string {
+  return path.join(modelDir(id), 'refs');
+}
+export function ensureModelDirs(id: string): void {
+  fs.mkdirSync(modelRefsDir(id), { recursive: true });
+}
+export function deleteModelFiles(id: string): void {
+  fs.rmSync(modelDir(id), { recursive: true, force: true });
+  usageCache = null;
+}
+
+/** Как safeMediaPath, но для файлов реф-листов модели. */
+export function safeModelRefPath(modelId: string, file: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
+  const full = path.join(modelRefsDir(modelId), file);
+  if (!full.startsWith(modelDir(modelId))) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
+}
+
 function dirSize(dir: string): number {
   let total = 0;
   if (!fs.existsSync(dir)) return 0;
