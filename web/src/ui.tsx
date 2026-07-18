@@ -56,14 +56,14 @@ export function SectionTitle({
 }) {
   return (
     <div className="flex items-start justify-between gap-4 px-5 pt-4 pb-3 border-b border-line">
-      <div className="flex items-baseline gap-3 min-w-0">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 min-w-0">
         {step && (
           <span className="text-[11px] font-bold text-lime bg-lime/10 border border-lime/25 rounded-md px-1.5 py-0.5 shrink-0">
             {step}
           </span>
         )}
-        <h2 className="font-bold tracking-tight truncate">{title}</h2>
-        {hint && <span className="text-xs text-mut hidden sm:inline truncate">{hint}</span>}
+        <h2 className="font-bold tracking-tight min-w-0">{title}</h2>
+        {hint && <span className="text-xs text-mut basis-full sm:basis-auto">{hint}</span>}
       </div>
       {right}
     </div>

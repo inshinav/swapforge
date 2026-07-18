@@ -356,7 +356,7 @@ function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
               mp4 / mov · до 300 МБ · идеально 4–15 секунд
             </div>
             <div className="text-xs text-dim mt-4">
-              Дальше: референсы → анализ → два промта (стартовый кадр + Seedance)
+              Дальше выбери свою модель — анализ, промты и рендер поедут сами
             </div>
           </>
         ) : (

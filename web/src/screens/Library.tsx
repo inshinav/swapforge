@@ -151,7 +151,7 @@ function LibCard({
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="text-[11px] text-dim hover:text-danger transition-colors ml-auto opacity-0 group-hover:opacity-100"
+            className="text-[11px] text-dim hover:text-danger transition-colors ml-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
           >
             удалить
           </button>

@@ -31,6 +31,12 @@ body {
   -webkit-font-smoothing: antialiased;
   background-image: radial-gradient(ellipse 900px 480px at 50% -140px, rgba(198, 242, 78, 0.055), transparent);
   background-repeat: no-repeat;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+#root {
+  min-width: 0;
 }
 
 ::selection {
