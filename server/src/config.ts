@@ -35,7 +35,37 @@ export const config = {
   maxImageBytes: Number(env('MAX_IMAGE_MB', '20')) * 1024 ** 2,
   maxFrames: Number(env('MAX_FRAMES', '40')),
   version: '2.0.0',
+  // ── v4: мультитенант ──────────────────────────────────────────────────────
+  isProduction: env('NODE_ENV') === 'production',
+  /** telegram_id владельца: role='owner', unmetered; обязателен в prod. */
+  ownerTelegramId: env('OWNER_TELEGRAM_ID'),
+  /** Токен auth-бота (проверка подписи Login Widget). НЕ Tribute-бот. */
+  telegramBotToken: env('TELEGRAM_BOT_TOKEN'),
+  /** username auth-бота без @ — нужен виджету на клиенте. */
+  telegramBotName: env('TELEGRAM_BOT_NAME'),
+  /** Cookie-scope; '/swapforge' работает и за nginx-префиксом, и в dev-Vite base. */
+  cookiePath: env('COOKIE_PATH', '/swapforge'),
+  /** Дев-вход без Telegram (localhost не привязать к BotFather). Запрещён в prod. */
+  devAuthBypass: env('AUTH_DEV_BYPASS') === '1',
 };
+
+/**
+ * Fail-loud на буте prod: сервис с публичной регистрацией не имеет права подняться
+ * с дырявым auth-конфигом (молчаливый фолбэк = открытая дверь).
+ */
+export function assertAuthConfig(): void {
+  if (!config.isProduction) return;
+  const missing: string[] = [];
+  if (!config.telegramBotToken) missing.push('TELEGRAM_BOT_TOKEN');
+  if (!config.telegramBotName) missing.push('TELEGRAM_BOT_NAME');
+  if (!config.ownerTelegramId) missing.push('OWNER_TELEGRAM_ID');
+  if (missing.length) {
+    throw new Error(`Production-бут без auth-конфига: задай ${missing.join(', ')} в /etc/swapforge.env`);
+  }
+  if (config.devAuthBypass) {
+    throw new Error('AUTH_DEV_BYPASS=1 в production запрещён — убери переменную из /etc/swapforge.env');
+  }
+}
 
 export function llmKeyPresent(): boolean {
   return config.llmProvider === 'openai' ? !!config.openaiApiKey : !!config.anthropicApiKey;

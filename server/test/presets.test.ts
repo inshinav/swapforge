@@ -3,17 +3,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import Fastify from 'fastify';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-presets-test-'));
 process.env.WAVESPEED_API_KEY = 'test-key';
 process.env.OPENAI_API_KEY = 'test-key';
+process.env.AUTH_DEV_BYPASS = '1';
 // тесты гоняются из server/ — ассеты пресетов лежат в репо
 process.env.PRESETS_DIR = path.resolve('assets/presets');
 
 const { getDb } = await import('../src/db');
 const { PRESETS, getPreset, applyPreset, presetFilePath, presetsDir } = await import('../src/presets');
-const { registerRoutes } = await import('../src/routes');
+const { makeAuthedApp } = await import('./helpers');
 const { enqueueProjectJob } = await import('../src/jobs');
 const { refsDir, projectDir } = await import('../src/storage');
 const { ensureLitellmFresh, estimateRender, getBalanceCached, _resetPricingMemory } = await import(
@@ -105,8 +105,7 @@ describe('пресеты: манифест и применение', () => {
 
 describe('пресеты: роуты', () => {
   it('GET /api/presets отдаёт список с thumb; файл пресета отдаётся, чужое имя — 404', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app } = await makeAuthedApp();
     const list = await app.inject({ method: 'GET', url: '/api/presets' });
     expect(list.statusCode).toBe(200);
     const items = JSON.parse(list.body) as Array<{ id: string; thumb: string }>;
@@ -130,9 +129,9 @@ describe('пресеты: роуты', () => {
 
   it('POST /swap {preset} на чистом проекте подкладывает рефы и запускает флоу; на проекте с рефами — 409', async () => {
     await warmPricing();
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     const pid = project();
+    own(pid);
     const res = await app.inject({
       method: 'POST',
       url: `/api/projects/${pid}/swap`,
@@ -152,12 +151,15 @@ describe('пресеты: роуты', () => {
     });
     expect(again.statusCode).toBe(409);
 
+    const pid3 = project();
+    own(pid3); // владение есть → 404 именно про неизвестный ПРЕСЕТ, не про проект
     const unknown = await app.inject({
       method: 'POST',
-      url: `/api/projects/${project()}/swap`,
+      url: `/api/projects/${pid3}/swap`,
       payload: { preset: 'wat' },
     });
     expect(unknown.statusCode).toBe(404);
+    expect(JSON.parse(unknown.body).error).toContain('пресет');
     await app.close();
   });
 });

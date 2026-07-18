@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import Fastify from 'fastify';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-render-test-'));
 process.env.WAVESPEED_API_KEY = 'test-key';
 process.env.OPENAI_API_KEY = 'test-key';
+process.env.AUTH_DEV_BYPASS = '1'; // роут-тесты логинятся dev-входом (см. helpers.makeAuthedApp)
 
 const { getDb } = await import('../src/db');
 const {
@@ -26,7 +26,7 @@ const { advanceFlow } = await import('../src/engine/pipeline');
 const { ensureLitellmFresh, estimateRender, getBalanceCached, _resetPricingMemory } = await import(
   '../src/pricing'
 );
-const { registerRoutes } = await import('../src/routes');
+const { makeAuthedApp } = await import('./helpers');
 const { projectDir, refsDir, startDir, rendersDir, safeMediaPath } = await import('../src/storage');
 const { config } = await import('../src/config');
 import type { WaveSpeed, WsPrediction } from '../src/wavespeed';
@@ -459,9 +459,9 @@ describe('вспомогательное', () => {
 
 describe('роуты: rating-мост и ручной рендер', () => {
   it('rating 👍 создаёт feedback, флип на 👎 обновляет ту же строку', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     const pid = readyProject();
+    own(pid);
     const genId = randomUUID();
     getDb()
       .prepare(
@@ -500,10 +500,10 @@ describe('роуты: rating-мост и ручной рендер', () => {
   });
 
   it('POST /projects/:id/generations запускает ручной рендер; активный гейт → 409', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     // все прайс-кэши в памяти уже тёплые от предыдущих тестов не нужны — рендер их не требует
     const pid = readyProject();
+    own(pid);
     getDb()
       .prepare(
         `INSERT INTO generations (id, project_id, version, status, params_json) VALUES (?, ?, 1, 'rendering', '{}')`,
@@ -529,15 +529,16 @@ describe('роуты: rating-мост и ручной рендер', () => {
     await estimateRender(6, fakeWs());
     await getBalanceCached(fakeWs({ balances: [10] }), true);
 
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     const pid = readyProject();
+    own(pid);
     getDb().prepare(`DELETE FROM refs WHERE project_id = ? AND role = 'model'`).run(pid);
     const noModel = await app.inject({ method: 'POST', url: `/api/projects/${pid}/swap`, payload: {} });
     expect(noModel.statusCode).toBe(409);
     expect(JSON.parse(noModel.body).error).toContain('модель');
 
     const pid2 = readyProject();
+    own(pid2);
     const ok = await app.inject({
       method: 'POST',
       url: `/api/projects/${pid2}/swap`,
@@ -557,9 +558,9 @@ describe('роуты: rating-мост и ручной рендер', () => {
   });
 
   it('POST /swap без поля звука сохраняет настройку проекта (не затирает дефолтом)', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     const pid = readyProject();
+    own(pid);
     getDb().prepare(`UPDATE projects SET flags_json = '{"generateAudio":false}' WHERE id = ?`).run(pid);
     const ok = await app.inject({
       method: 'POST',
@@ -574,10 +575,10 @@ describe('роуты: rating-мост и ручной рендер', () => {
   });
 
   it('повторный /swap при готовом рендере запускает новый рендер, при failed → 409 с подсказкой', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     // done-ветка: всё готово, последний рендер done → явный клик = «прогнать ещё раз»
     const pid = readyProject();
+    own(pid);
     getDb()
       .prepare(
         `INSERT INTO generations (id, project_id, version, status, file, params_json) VALUES (?, ?, 1, 'done', 'gen.mp4', '{}')`,
@@ -597,6 +598,7 @@ describe('роуты: rating-мост и ручной рендер', () => {
 
     // failed-ветка: авто-пересабмит запрещён — 409 направляет к recheck/retry
     const pid2 = readyProject();
+    own(pid2);
     getDb()
       .prepare(
         `INSERT INTO generations (id, project_id, version, status, error, ws_prediction_id, params_json)
@@ -617,9 +619,9 @@ describe('роуты: rating-мост и ручной рендер', () => {
   });
 
   it('iterate синхронизирует галочки проекта с итерируемой версией (advanceFlow не перетрёт фиксы)', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app, own } = await makeAuthedApp();
     const pid = readyProject(); // prompts v1 с flags '{}' → оба false
+    own(pid);
     getDb()
       .prepare(
         `UPDATE projects SET flow = 'auto', flags_json = '{"removeText":true,"enhanceFigure":false,"generateAudio":false}' WHERE id = ?`,
@@ -639,8 +641,7 @@ describe('роуты: rating-мост и ручной рендер', () => {
   });
 
   it('денежные POST без same-origin (cross-site) → 403', async () => {
-    const app = Fastify();
-    await registerRoutes(app);
+    const { app } = await makeAuthedApp();
     for (const url of [
       '/api/generations/xxx/retry',
       '/api/generations/xxx/recheck',

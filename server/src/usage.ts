@@ -19,10 +19,17 @@ export function recordUsage(ev: UsageEventInput): void {
   try {
     const price = priceForCached(ev.model);
     const cost = price ? (ev.tokensIn * price.inPerM + ev.tokensOut * price.outPerM) / 1e6 : null;
+    // user_id денормализуем НА ЗАПИСИ (а не join-ом на чтении): строка расхода
+    // обязана пережить удаление проекта с уже присвоенным плательщиком
+    const owner = ev.projectId
+      ? ((getDb().prepare(`SELECT user_id FROM projects WHERE id = ?`).get(ev.projectId) as
+          | { user_id: string | null }
+          | undefined)?.user_id ?? null)
+      : null;
     getDb()
       .prepare(
-        `INSERT INTO usage_events (id, project_id, generation_id, task, model, tokens_in, tokens_out, cost_usd, price_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usage_events (id, project_id, generation_id, task, model, tokens_in, tokens_out, cost_usd, price_date, user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         randomUUID(),
@@ -34,6 +41,7 @@ export function recordUsage(ev: UsageEventInput): void {
         Math.max(0, Math.round(ev.tokensOut)),
         cost,
         price?.date ?? null,
+        owner,
       );
   } catch (e) {
     console.warn(`[usage] не записал событие: ${e instanceof Error ? e.message : e}`);

@@ -225,22 +225,44 @@ describe('запрос генерации', () => {
 });
 
 describe('few-shot ретрив (реальная БД)', () => {
+  const USER_A = 'user-a-fewshot';
+  const USER_B = 'user-b-fewshot';
+
   beforeAll(() => {
     const db = getDb();
-    const mk = (id: string, tags: string[], worked: number, promptText: string) => {
-      db.prepare(`INSERT INTO projects (id, title, status, tags_json, analysis_json) VALUES (?, ?, 'complete', ?, '{}')`).run(id, id, JSON.stringify(tags));
+    for (const [uid, tg] of [
+      [USER_A, 901],
+      [USER_B, 902],
+    ] as const) {
+      db.prepare(`INSERT INTO users (id, telegram_id) VALUES (?, ?)`).run(uid, tg);
+    }
+    const mk = (id: string, userId: string, tags: string[], worked: number, promptText: string) => {
+      db.prepare(
+        `INSERT INTO projects (id, user_id, title, status, tags_json, analysis_json) VALUES (?, ?, ?, 'complete', ?, '{}')`,
+      ).run(id, userId, id, JSON.stringify(tags));
       db.prepare(`INSERT INTO prompts (id, project_id, version, kind, lang, text) VALUES (?, ?, 1, 'video', 'en', ?)`).run(randomUUID(), id, promptText);
       db.prepare(`INSERT INTO feedback (id, project_id, version, worked) VALUES (?, ?, 1, ?)`).run(randomUUID(), id, worked);
     };
-    mk('p-similar', ['night city', 'neon', 'motorcycle', 'tracking shot'], 1, 'SIMILAR WORKED PROMPT');
-    mk('p-far', ['beach', 'daylight', 'drone'], 1, 'FAR PROMPT');
-    mk('p-failed', ['night city', 'neon', 'motorcycle'], 0, 'FAILED PROMPT');
+    mk('p-similar', USER_A, ['night city', 'neon', 'motorcycle', 'tracking shot'], 1, 'SIMILAR WORKED PROMPT');
+    mk('p-far', USER_A, ['beach', 'daylight', 'drone'], 1, 'FAR PROMPT');
+    mk('p-failed', USER_A, ['night city', 'neon', 'motorcycle'], 0, 'FAILED PROMPT');
+    // Чужой пользователь с ИДЕАЛЬНО совпадающими тегами — не имеет права попасть в выдачу
+    mk('p-foreign', USER_B, ['night city', 'neon', 'motorcycle', 'wet asphalt'], 1, 'FOREIGN PROMPT');
   });
 
   it('берёт похожий сработавший, отсекает далёкие и несработавшие', () => {
-    const res = findSimilarWorked('self-id', ['night city', 'neon', 'motorcycle', 'wet asphalt']);
+    const res = findSimilarWorked(USER_A, 'self-id', ['night city', 'neon', 'motorcycle', 'wet asphalt']);
     expect(res.map((r) => r.projectId)).toEqual(['p-similar']);
     expect(res[0]!.videoPrompt).toBe('SIMILAR WORKED PROMPT');
+  });
+
+  it('ИЗОЛЯЦИЯ: чужие сработавшие промты не попадают в выдачу даже при полном совпадении тегов', () => {
+    const res = findSimilarWorked(USER_A, 'self-id', ['night city', 'neon', 'motorcycle', 'wet asphalt']);
+    expect(res.map((r) => r.projectId)).not.toContain('p-foreign');
+    expect(res.map((r) => r.videoPrompt).join()).not.toContain('FOREIGN');
+    // и наоборот: юзер B видит только своё
+    const resB = findSimilarWorked(USER_B, 'self-id', ['night city', 'neon', 'motorcycle']);
+    expect(resB.map((r) => r.projectId)).toEqual(['p-foreign']);
   });
 
   it('jaccard основные случаи', () => {

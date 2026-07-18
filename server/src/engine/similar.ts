@@ -23,8 +23,15 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
 /**
  * Few-shot ретрив: 2–3 наиболее похожих проекта (по overlap тегов анализа),
  * у которых есть версия промта с фидбеком «сработало».
+ * СТРОГО в пределах одного пользователя: удачный промт несёт описание внешности
+ * его модели — межтенантный ретрив был бы утечкой чужих образов в чужой контекст.
  */
-export function findSimilarWorked(excludeId: string, tags: string[], limit = 3): SimilarExample[] {
+export function findSimilarWorked(
+  userId: string,
+  excludeId: string,
+  tags: string[],
+  limit = 3,
+): SimilarExample[] {
   const db = getDb();
   const rows = db
     .prepare(
@@ -34,10 +41,10 @@ export function findSimilarWorked(excludeId: string, tags: string[], limit = 3):
                  LIMIT 1) AS video_prompt
          FROM projects p
          JOIN feedback f ON f.project_id = p.id AND f.worked = 1
-        WHERE p.id != ? AND p.tags_json IS NOT NULL
+        WHERE p.user_id = ? AND p.id != ? AND p.tags_json IS NOT NULL
         ORDER BY f.created_at DESC`,
     )
-    .all(excludeId) as Array<{
+    .all(userId, excludeId) as Array<{
     id: string;
     title: string;
     tags_json: string;

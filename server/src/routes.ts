@@ -5,6 +5,8 @@ import path from 'node:path';
 import { pipeline as streamPipeline } from 'node:stream/promises';
 import { config, llmKeyPresent, llmModelName } from './config';
 import { getDb } from './db';
+import { registerAuthRoutes } from './auth/routes';
+import { requireOwner } from './auth/middleware';
 import { ffmpegAvailable, probe } from './ffmpeg';
 import { BUSY_STATUSES, isQueued } from './jobs';
 import {
@@ -66,8 +68,32 @@ function crossSite(req: FastifyRequest): boolean {
   return typeof s === 'string' && s !== 'same-origin' && s !== 'same-site' && s !== 'none';
 }
 
-function getProject(id: string): DbProject | undefined {
-  return getDb().prepare(`SELECT * FROM projects WHERE id = ?`).get(id) as DbProject | undefined;
+/** Единственный вход к проекту: только строка ТЕКУЩЕГО пользователя. Чужой id = 404 (не оракул). */
+function getOwnedProject(req: FastifyRequest, id: string): DbProject | undefined {
+  if (!req.user) return undefined;
+  return getDb()
+    .prepare(`SELECT * FROM projects WHERE id = ? AND user_id = ?`)
+    .get(id, req.user.id) as DbProject | undefined;
+}
+
+interface OwnedGen {
+  id: string;
+  project_id: string;
+  version: number;
+  feedback_id: string | null;
+  status: string;
+}
+
+/** Генерация через JOIN к владельцу проекта — genId-роуты не обходят тенантность. */
+function getOwnedGeneration(req: FastifyRequest, genId: string): OwnedGen | undefined {
+  if (!req.user) return undefined;
+  return getDb()
+    .prepare(
+      `SELECT g.id, g.project_id, g.version, g.feedback_id, g.status
+         FROM generations g JOIN projects p ON p.id = g.project_id
+        WHERE g.id = ? AND p.user_id = ?`,
+    )
+    .get(genId, req.user.id) as OwnedGen | undefined;
 }
 
 function fieldValue(fields: unknown, name: string): string {
@@ -78,12 +104,22 @@ function fieldValue(fields: unknown, name: string): string {
 let ffmpegOk: boolean | null = null;
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/health', async (): Promise<HealthInfo> => {
+  registerAuthRoutes(app);
+
+  // Публичный health минимален (аноним видит только «жив + версия + имя auth-бота»);
+  // операторские поля (модель/диск/ключи) — владельцу.
+  app.get('/api/health', async (req): Promise<HealthInfo> => {
+    const base: HealthInfo = {
+      ok: true,
+      version: config.version,
+      tgBot: config.telegramBotName || null,
+      devAuth: config.devAuthBypass && !config.isProduction,
+    };
+    if (req.user?.role !== 'owner') return base;
     if (ffmpegOk === null) ffmpegOk = await ffmpegAvailable();
     const dataBytes = dataUsageBytes();
     return {
-      ok: true,
-      version: config.version,
+      ...base,
       provider: config.llmProvider,
       model: llmModelName(),
       keyPresent: llmKeyPresent(),
@@ -94,9 +130,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // ── Цены и расход ────────────────────────────────────────────────────────
+  // ── Цены и расход (USD оператора — только владельцу) ─────────────────────
 
-  app.get('/api/pricing', async (): Promise<PricingInfo> => {
+  app.get('/api/pricing', { preHandler: requireOwner }, async (): Promise<PricingInfo> => {
     const balanceUsd = await getBalanceCached();
     const dates = pricingDates();
     return {
@@ -106,7 +142,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.get('/api/usage/summary', async (req, reply) => {
+  app.get('/api/usage/summary', { preHandler: requireOwner }, async (req, reply) => {
     const q = (req.query ?? {}) as { month?: string };
     const month = q.month ?? new Date().toISOString().slice(0, 7);
     try {
@@ -118,7 +154,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/projects/:id/estimate', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     try {
       return await buildEstimate(p);
@@ -159,10 +195,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const title = fieldValue(part.fields, 'title') || part.filename || 'Без названия';
       getDb()
         .prepare(
-          `INSERT INTO projects (id, title, status, video_file, video_bytes, meta_json)
-           VALUES (?, ?, 'uploaded', ?, ?, ?)`,
+          `INSERT INTO projects (id, title, status, video_file, video_bytes, meta_json, user_id)
+           VALUES (?, ?, 'uploaded', ?, ?, ?, ?)`,
         )
-        .run(id, title.slice(0, 200), videoFile, meta.sizeBytes, JSON.stringify(meta));
+        .run(id, title.slice(0, 200), videoFile, meta.sizeBytes, JSON.stringify(meta), req.user!.id);
       startStoryboard(id);
       const { purged } = enforceStorageCap();
       if (purged.length) app.log.info({ purged }, 'ротация: удалены исходники старых проектов');
@@ -174,23 +210,23 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get('/api/projects', async () => {
+  app.get('/api/projects', async (req) => {
     const rows = getDb()
-      .prepare(`SELECT * FROM projects ORDER BY created_at DESC`)
-      .all() as unknown as DbProject[];
+      .prepare(`SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC`)
+      .all(req.user!.id) as unknown as DbProject[];
     return rows.map(toSummary);
   });
 
   app.get('/api/projects/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     return toFull(p);
   });
 
   app.delete('/api/projects/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Дождись окончания текущей задачи');
     if (projectHasActiveGeneration(id)) {
@@ -228,7 +264,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/projects/:id/swap', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     const active = activeGeneration();
@@ -321,7 +357,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // Точечное обновление флагов без запуска (сейчас — режим звука «под капотом»)
   app.patch('/api/projects/:id/flags', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     const body = (req.body ?? {}) as { generateAudio?: boolean };
     if (typeof body.generateAudio !== 'boolean') return bad(reply, 400, 'Нечего обновлять');
@@ -340,7 +376,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/projects/:id/generations', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     const body = (req.body ?? {}) as { version?: number };
     const version = body.version ?? snapshotProject(p).latestVersion;
@@ -357,6 +393,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/generations/:genId/retry', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { genId } = req.params as { genId: string };
+    if (!getOwnedGeneration(req, genId)) return bad(reply, 404, 'Генерация не найдена');
     try {
       return { id: await retryGeneration(genId) };
     } catch (e) {
@@ -368,6 +405,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/generations/:genId/recheck', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { genId } = req.params as { genId: string };
+    if (!getOwnedGeneration(req, genId)) return bad(reply, 404, 'Генерация не найдена');
     try {
       const status = await recheckGeneration(genId);
       return { status };
@@ -381,11 +419,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { genId } = req.params as { genId: string };
     const db = getDb();
-    const gen = db
-      .prepare(`SELECT id, project_id, version, feedback_id, status FROM generations WHERE id = ?`)
-      .get(genId) as
-      | { id: string; project_id: string; version: number; feedback_id: string | null; status: string }
-      | undefined;
+    const gen = getOwnedGeneration(req, genId);
     if (!gen) return bad(reply, 404, 'Генерация не найдена');
     if (gen.status !== 'done') return bad(reply, 409, 'Оценивать можно только готовый ролик');
     const body = (req.body ?? {}) as { rating?: number; artifacts?: string[]; notes?: string };
@@ -422,7 +456,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/projects/:id/refs', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     const part = await req.file({ limits: { fileSize: config.maxImageBytes } });
     if (!part) return bad(reply, 400, 'Нет файла референса');
@@ -486,7 +520,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch('/api/projects/:id/refs', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!getProject(id)) return bad(reply, 404, 'Проект не найден');
+    if (!getOwnedProject(req, id)) return bad(reply, 404, 'Проект не найден');
     const body = (req.body ?? {}) as {
       order?: string[];
       updates?: Array<{ id: string; role?: string; note?: string }>;
@@ -516,6 +550,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete('/api/projects/:id/refs/:refId', async (req, reply) => {
     const { id, refId } = req.params as { id: string; refId: string };
+    if (!getOwnedProject(req, id)) return bad(reply, 404, 'Проект не найден');
     const db = getDb();
     const ref = db
       .prepare(`SELECT file FROM refs WHERE id = ? AND project_id = ?`)
@@ -536,7 +571,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/projects/:id/storyboard', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.video_file || p.video_purged === 1)
@@ -547,7 +582,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/projects/:id/analyze', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.frames_json) return bad(reply, 409, 'Сначала должна завершиться раскадровка');
@@ -558,7 +593,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/projects/:id/generate', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.analysis_json) return bad(reply, 409, 'Сначала нужен анализ ролика');
@@ -576,7 +611,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/projects/:id/feedback', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     const body = (req.body ?? {}) as {
       version?: number;
@@ -610,7 +645,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/projects/:id/iterate', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     const body = (req.body ?? {}) as {
@@ -662,7 +697,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // Стартовый кадр по Images API: длинный await прямо в роуте (nginx timeout 300с покрывает)
   app.post('/api/projects/:id/startframe', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (!p.meta_json) return bad(reply, 409, 'Нет метаданных видео');
     const body = (req.body ?? {}) as { version?: number };
@@ -690,7 +725,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/projects/:id/media/:sub/:file', async (req, reply) => {
     const { id, sub, file } = req.params as { id: string; sub: string; file: string };
-    const p = getProject(id);
+    const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     let full: string | null = null;
     if (sub === 'frames' || sub === 'refs' || sub === 'start' || sub === 'renders') {

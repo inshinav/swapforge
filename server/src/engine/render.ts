@@ -157,6 +157,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
   const p = d.prepare(`SELECT * FROM projects WHERE id = ?`).get(projectId) as
     | {
         id: string;
+        user_id: string | null;
         video_file: string | null;
         video_purged: number;
         meta_json: string | null;
@@ -194,9 +195,9 @@ export function startRender(projectId: string, version: number, opts: StartRende
     flags,
   };
   d.prepare(
-    `INSERT INTO generations (id, project_id, version, status, params_json, retry_of)
-     VALUES (?, ?, ?, 'uploading_assets', ?, ?)`,
-  ).run(genId, projectId, version, JSON.stringify(params), opts.retryOf ?? null);
+    `INSERT INTO generations (id, project_id, version, status, params_json, retry_of, user_id)
+     VALUES (?, ?, ?, 'uploading_assets', ?, ?, ?)`,
+  ).run(genId, projectId, version, JSON.stringify(params), opts.retryOf ?? null, p.user_id);
 
   // Смета на момент запуска — снапшотом в строку (фиксирует ожидание против факта)
   void (async () => {

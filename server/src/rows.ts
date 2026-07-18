@@ -20,6 +20,7 @@ import type { ArtifactType } from '../../shared/taxonomy';
 
 export interface DbProject {
   id: string;
+  user_id?: string | null;
   title: string;
   status: string;
   error: string | null;

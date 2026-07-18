@@ -16,6 +16,7 @@ import type { RefInfo, VideoMeta } from '../../../shared/api-types';
 
 interface ProjectRow {
   id: string;
+  user_id: string | null;
   video_file: string | null;
   video_purged: number;
   meta_json: string | null;
@@ -30,7 +31,7 @@ interface ProjectRow {
 function loadProject(id: string): ProjectRow {
   const row = getDb()
     .prepare(
-      `SELECT id, video_file, video_purged, meta_json, frames_json, analysis_json, tags_json, flags_json, flow, status
+      `SELECT id, user_id, video_file, video_purged, meta_json, frames_json, analysis_json, tags_json, flags_json, flow, status
          FROM projects WHERE id = ?`,
     )
     .get(id) as ProjectRow | undefined;
@@ -117,7 +118,9 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
       if (refs.length === 0) throw new Error('Добавь хотя бы один референс (модель)');
 
       const flags = opts.flagsOverride ?? parseFlags(p.flags_json);
-      const fewshot = findSimilarWorked(projectId, analysis.tags);
+      // few-shot строго из проектов ЭТОГО пользователя; проект без владельца
+      // (легаси до m001) — пустой ретрив, не чужие примеры
+      const fewshot = p.user_id ? findSimilarWorked(p.user_id, projectId, analysis.tags) : [];
       const pair = await runGeneration(projectId, analysis, meta, refs, {
         lang: opts.lang,
         fewshot,

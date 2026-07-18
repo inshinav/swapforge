@@ -204,14 +204,49 @@ export interface UsageSummary {
   runs: number;
 }
 
+/**
+ * Публичная часть health минимальна; операторские поля приходят ТОЛЬКО владельцу
+ * (модель/диск/ключи — внутренняя кухня, не для тенантов).
+ */
 export interface HealthInfo {
   ok: boolean;
   version: string;
-  provider: string;
-  model: string;
-  keyPresent: boolean;
-  ffmpeg: boolean;
-  dataBytes: number;
-  storageCapBytes: number;
-  diskUsedPct: number;
+  /** username auth-бота для Login Widget (null = не сконфигурирован). */
+  tgBot: string | null;
+  /** Дев-режим входа без Telegram (никогда не true в prod). */
+  devAuth: boolean;
+  provider?: string;
+  model?: string;
+  keyPresent?: boolean;
+  ffmpeg?: boolean;
+  dataBytes?: number;
+  storageCapBytes?: number;
+  diskUsedPct?: number;
+}
+
+// ── v4: auth ────────────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: string;
+  telegramId: number;
+  username: string;
+  firstName: string;
+  photoUrl: string;
+  role: 'user' | 'owner';
+}
+
+export interface MeInfo {
+  user: AuthUser;
+  counts: { projects: number };
+}
+
+/** Payload Telegram Login Widget (data-onauth) — уходит на POST /api/auth/telegram как есть. */
+export interface TgWidgetPayload {
+  id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  auth_date: number;
+  hash: string;
 }

@@ -1,10 +1,13 @@
 import type {
+  AuthUser,
   EstimateInfo,
   HealthInfo,
+  MeInfo,
   PresetInfo,
   PricingInfo,
   ProjectFull,
   ProjectSummary,
+  TgWidgetPayload,
   UsageSummary,
 } from '@shared/api-types';
 
@@ -15,6 +18,15 @@ import type {
 export const appBase = import.meta.env.BASE_URL;
 const u = (p: string) => `${window.location.origin}${appBase}${p}`;
 
+/** Ошибка API со статусом: 401 = «не залогинен», UI разводит по-разному. */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
@@ -24,24 +36,42 @@ async function j<T>(r: Response): Promise<T> {
     } catch {
       /* не-JSON ответ */
     }
-    throw new Error(msg);
+    throw new ApiError(r.status, msg);
   }
   return r.json() as Promise<T>;
 }
 
+/** Double-submit CSRF: значение из JS-читаемой cookie уходит заголовком на каждой мутации. */
+export function csrfToken(): string {
+  const m = /(?:^|;\s*)sf_csrf=([^;]*)/.exec(document.cookie);
+  return m ? decodeURIComponent(m[1]!) : '';
+}
+
+export const csrfHeader = (): Record<string, string> => ({ 'x-sf-csrf': csrfToken() });
+
 const post = (url: string, body?: unknown) =>
   fetch(url, {
     method: 'POST',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: { ...csrfHeader(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
 
 export const api = {
+  // ── auth ─────────────────────────────────────────────────────────────────
+  me: () => fetch(u('api/me')).then((r) => j<MeInfo>(r)),
+  authTelegram: (payload: TgWidgetPayload) =>
+    post(u('api/auth/telegram'), payload).then((r) => j<{ user: AuthUser }>(r)),
+  devLogin: (telegramId: number, name?: string) =>
+    post(u('api/auth/dev-login'), { telegramId, name }).then((r) => j<{ user: AuthUser }>(r)),
+  logout: () => post(u('api/auth/logout')).then((r) => j<{ ok: true }>(r)),
+
   health: () => fetch(u('api/health')).then((r) => j<HealthInfo>(r)),
   projects: () => fetch(u('api/projects')).then((r) => j<ProjectSummary[]>(r)),
   project: (id: string) => fetch(u(`api/projects/${id}`)).then((r) => j<ProjectFull>(r)),
   deleteProject: (id: string) =>
-    fetch(u(`api/projects/${id}`), { method: 'DELETE' }).then((r) => j<{ ok: true }>(r)),
+    fetch(u(`api/projects/${id}`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
+      j<{ ok: true }>(r),
+    ),
 
   uploadUrl: () => u('api/projects'),
 
@@ -50,9 +80,11 @@ export const api = {
     fd.append('role', role);
     fd.append('note', note);
     fd.append('photo', file);
-    return fetch(u(`api/projects/${projectId}/refs`), { method: 'POST', body: fd }).then((r) =>
-      j<{ id: string }>(r),
-    );
+    return fetch(u(`api/projects/${projectId}/refs`), {
+      method: 'POST',
+      headers: csrfHeader(),
+      body: fd,
+    }).then((r) => j<{ id: string }>(r));
   },
   patchRefs: (
     projectId: string,
@@ -60,13 +92,14 @@ export const api = {
   ) =>
     fetch(u(`api/projects/${projectId}/refs`), {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify(body),
     }).then((r) => j<{ ok: true }>(r)),
   deleteRef: (projectId: string, refId: string) =>
-    fetch(u(`api/projects/${projectId}/refs/${refId}`), { method: 'DELETE' }).then((r) =>
-      j<{ ok: true }>(r),
-    ),
+    fetch(u(`api/projects/${projectId}/refs/${refId}`), {
+      method: 'DELETE',
+      headers: csrfHeader(),
+    }).then((r) => j<{ ok: true }>(r)),
 
   storyboardRetry: (id: string) =>
     post(u(`api/projects/${id}/storyboard`)).then((r) => j<{ ok: true }>(r)),
@@ -103,7 +136,7 @@ export const api = {
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ generateAudio }),
     }).then((r) => j<{ ok: true }>(r)),
   renderVersion: (id: string, body: { version?: number }) =>

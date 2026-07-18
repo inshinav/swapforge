@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectFull, RefInfo } from '@shared/api-types';
 import { REF_ROLES, type RefRole } from '@shared/taxonomy';
-import { api } from '../api';
+import { api, csrfToken } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 import { AnalysisView } from './AnalysisView';
 import { PromptsView } from './PromptsView';
@@ -51,6 +51,7 @@ function uploadVideo(file: File, onProgress: (pct: number) => void): Promise<{ i
     fd.append('video', file);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', api.uploadUrl());
+    xhr.setRequestHeader('x-sf-csrf', csrfToken());
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
     };

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { config } from './config';
+import { runDataMigrations } from './migrations';
 
 let db: DatabaseSync | null = null;
 
@@ -110,6 +111,34 @@ export function applySchema(d: DatabaseSync): void {
       fetched_at TEXT NOT NULL
     );
 
+    -- v4: пользователи (вход через Telegram Login Widget; identity = telegram_id).
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      telegram_id INTEGER NOT NULL UNIQUE,
+      tg_username TEXT NOT NULL DEFAULT '',
+      tg_first_name TEXT NOT NULL DEFAULT '',
+      tg_photo_url TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user','owner')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','blocked')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_login_at TEXT
+    );
+
+    -- v4: сессии — в БД только sha256 сырого токена, сам токен живёт в httpOnly-cookie.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL,
+      last_seen_at TEXT
+    );
+
+    -- v4: exactly-once миграции ДАННЫХ (backfill/сиды); DDL остаётся на applySchema.
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_refs_project ON refs(project_id, idx);
     CREATE INDEX IF NOT EXISTS idx_prompts_project ON prompts(project_id, version);
     CREATE INDEX IF NOT EXISTS idx_feedback_project ON feedback(project_id, version);
@@ -117,6 +146,7 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_generations_status ON generations(status);
     CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_events(project_id);
     CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
   `);
 
   // Микромиграции v1 → v2
@@ -129,6 +159,17 @@ export function applySchema(d: DatabaseSync): void {
   ensureColumn(d, 'prompts', 'flags_json', `flags_json TEXT`);
   ensureColumn(d, 'refs', 'role_source', `role_source TEXT NOT NULL DEFAULT 'manual'`);
   ensureColumn(d, 'refs', 'auto_note', `auto_note TEXT NOT NULL DEFAULT ''`);
+
+  // Микромиграции v2 → v4: владелец строки. projects — корень тенантности; на generations
+  // и usage_events user_id денормализован (биллинг-запросы без join, ledger переживает
+  // удаление проекта). NOT NULL не навешиваем: легаси-строки добирает m001-backfill.
+  ensureColumn(d, 'projects', 'user_id', `user_id TEXT`);
+  ensureColumn(d, 'generations', 'user_id', `user_id TEXT`);
+  ensureColumn(d, 'usage_events', 'user_id', `user_id TEXT`);
+  d.exec(`
+    CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events(user_id, created_at);
+  `);
 }
 
 export function getDb(): DatabaseSync {
@@ -140,6 +181,7 @@ export function getDb(): DatabaseSync {
     PRAGMA foreign_keys = ON;
   `);
   applySchema(db);
+  runDataMigrations(db, { ownerTelegramId: config.ownerTelegramId || null });
   return db;
 }
 

@@ -1,22 +1,25 @@
-import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
-import multipart from '@fastify/multipart';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { config } from './config';
+import { assertAuthConfig, config } from './config';
 import { getDb, resetInterruptedJobs } from './db';
-import { registerRoutes } from './routes';
+import { buildApp } from './app';
 import { warmPricing } from './pricing';
 import { resumeGenerations } from './engine/render';
 import { enforceStorageCap, sweepOrphanRefFiles } from './storage';
+import { purgeExpiredSessions } from './auth/sessions';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 async function main(): Promise<void> {
+  assertAuthConfig(); // prod без auth-env не поднимается — молчаливый фолбэк = открытая дверь
   fs.mkdirSync(config.dataDir, { recursive: true });
   getDb();
   resetInterruptedJobs();
+  const purgedSessions = purgeExpiredSessions();
+  if (purgedSessions) console.log(`[auth] удалено протухших сессий: ${purgedSessions}`);
+  setInterval(() => purgeExpiredSessions(), 24 * 3_600_000).unref();
   // Рендеры переживают рестарт: submitted/rendering/downloading снова поллятся,
   // прерванные аплоады помечаются failed (ретрай дёшев — URL переиспользуются)
   resumeGenerations();
@@ -29,20 +32,7 @@ async function main(): Promise<void> {
     console.warn(`[pricing] прогрев не удался: ${e instanceof Error ? e.message : e}`),
   );
 
-  const app = Fastify({
-    logger: true,
-    bodyLimit: 1024 * 1024, // JSON-роуты; файлы идут через multipart со своими лимитами
-  });
-
-  await app.register(multipart, {
-    limits: {
-      fileSize: config.maxVideoBytes,
-      files: 1,
-      fields: 10,
-    },
-  });
-
-  await registerRoutes(app);
+  const app = await buildApp();
 
   // Статика фронта (prod): web/dist рядом с server/dist
   const webDist = config.webDist || path.resolve(here, '../../web/dist');
