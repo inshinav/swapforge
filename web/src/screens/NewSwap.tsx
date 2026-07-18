@@ -54,7 +54,17 @@ function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
 
   useEffect(() => {
     if (dismissed) return;
-    api.models().then((m) => setHasModels(m.some((x) => x.variants.length > 0))).catch(() => setHasModels(null));
+    api.models()
+      .then((models) =>
+        setHasModels(
+          models.some((model) =>
+            model.variants.some((variant) =>
+              model.refs.some((ref) => ref.variantId === variant.id && ref.role === 'model'),
+            ),
+          ),
+        ),
+      )
+      .catch(() => setHasModels(null));
     api.projects().then((p) => setHasProjects(p.length > 0)).catch(() => setHasProjects(null));
   }, [dismissed]);
 
@@ -95,8 +105,8 @@ function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
               <Step
                 done={hasModels}
                 n={1}
-                title="Создай модель"
-                sub="загрузи реф-листы персонажа один раз"
+                title="Подготовь модель"
+                sub="создай её и добавь реф-лист персонажа"
                 onClick={hasModels ? undefined : onOpenModels}
               />
               <Step done={hasProjects} n={2} title="Загрузи ролик" sub="4–15 секунд, один герой в кадре" />

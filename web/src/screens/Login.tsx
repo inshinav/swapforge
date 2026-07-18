@@ -19,6 +19,8 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
   const [packs, setPacks] = useState<CreditPackInfo[]>([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [widgetState, setWidgetState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [widgetAttempt, setWidgetAttempt] = useState(0);
   const widgetRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,6 +32,7 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
     const bot = health?.tgBot;
     const host = widgetRef.current;
     if (!bot || !host) return;
+    setWidgetState('loading');
     window.onTelegramAuth = (user) => {
       setBusy(true);
       setErr('');
@@ -46,12 +49,18 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
     s.setAttribute('data-size', 'large');
     s.setAttribute('data-radius', '12');
     s.setAttribute('data-onauth', 'onTelegramAuth(user)');
+    s.onload = () => setWidgetState('ready');
+    s.onerror = () => setWidgetState('error');
     host.appendChild(s);
+    const timeout = window.setTimeout(() => {
+      if (!host.querySelector('iframe')) setWidgetState('error');
+    }, 8_000);
     return () => {
+      window.clearTimeout(timeout);
       host.innerHTML = '';
       delete window.onTelegramAuth;
     };
-  }, [health?.tgBot, onAuthed]);
+  }, [health?.tgBot, onAuthed, widgetAttempt]);
 
   const devLogin = (id: number, name: string) => {
     setBusy(true);
@@ -64,9 +73,9 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
   };
 
   return (
-    <div className="min-h-[70vh] flex items-center justify-center px-4">
-      <Card glow>
-        <div className="p-8 sm:p-10 max-w-md text-center flex flex-col items-center gap-5">
+    <div className="min-h-screen flex items-center justify-center px-4 py-8">
+      <Card glow className="w-full max-w-md">
+        <div className="p-6 sm:p-10 text-center flex flex-col items-center gap-5">
           <div className="text-4xl">⚡</div>
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight">
@@ -91,7 +100,34 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
             </p>
           )}
 
+          {(health?.tgBot || health?.devAuth) && (
+            <div className="w-full rounded-xl border border-line bg-panel2/60 px-4 py-3">
+              <div className="font-semibold">Войти через Telegram</div>
+              <div className="text-xs text-mut mt-1 leading-relaxed">
+                Один клик, без пароля и регистрации по email. Telegram привяжет твои модели,
+                проекты и кредиты к одному аккаунту.
+              </div>
+            </div>
+          )}
+
           <div ref={widgetRef} className="min-h-[46px] flex items-center justify-center" />
+          {health?.tgBot && widgetState === 'loading' && (
+            <div className="flex items-center gap-2 text-sm text-mut" aria-live="polite">
+              <Spinner size={14} /> загружаю кнопку Telegram…
+            </div>
+          )}
+          {health?.tgBot && widgetState === 'error' && (
+            <div className="w-full space-y-2" aria-live="polite">
+              <ErrorNote text="Кнопка Telegram не загрузилась. Проверь соединение и попробуй ещё раз." />
+              <button
+                type="button"
+                onClick={() => setWidgetAttempt((n) => n + 1)}
+                className="min-h-11 rounded-lg border border-line2 bg-panel2 px-4 py-2 text-sm font-semibold hover:border-lime/50 hover:text-lime"
+              >
+                ↻ Загрузить кнопку снова
+              </button>
+            </div>
+          )}
           {busy && <Spinner />}
           {err && <ErrorNote text={err} />}
 

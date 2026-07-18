@@ -159,6 +159,13 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
     }
   };
 
+  const addVariant = () => {
+    const title = newVariant.trim();
+    if (!title) return;
+    setNewVariant('');
+    void act(() => api.addModelVariant(model.id, title));
+  };
+
   return (
     <Card>
       <div className="p-5 space-y-4">
@@ -214,19 +221,24 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
           >
             🏍 общее
           </button>
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1 w-full sm:w-auto">
             <input
               value={newVariant}
               onChange={(e) => setNewVariant(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && newVariant.trim()) {
-                  void act(() => api.addModelVariant(model.id, newVariant.trim()));
-                  setNewVariant('');
-                }
+                if (e.key === 'Enter') addVariant();
               }}
               placeholder="+ вариант (коса…)"
-              className="w-36 rounded-lg bg-panel2 border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
+              className="min-h-10 flex-1 sm:w-36 rounded-lg bg-panel2 border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
             />
+            <Button
+              kind="ghost"
+              disabled={!newVariant.trim()}
+              className="min-h-10 !px-3 text-xs"
+              onClick={addVariant}
+            >
+              Добавить
+            </Button>
           </span>
         </div>
 
@@ -331,50 +343,92 @@ function VariantChip({
 }) {
   const [editing, setEditing] = useState(false);
   const [v, setV] = useState(title);
+  const [confirming, setConfirming] = useState(false);
   useEffect(() => setV(title), [title]);
+  const save = () => {
+    const next = v.trim();
+    if (next && next !== title) onRename(next);
+    else setV(title);
+    setEditing(false);
+  };
   if (editing) {
     return (
-      <input
-        autoFocus
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={() => {
-          setEditing(false);
-          if (v.trim() && v.trim() !== title) onRename(v.trim());
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          if (e.key === 'Escape') {
+      <span className="flex items-center gap-1 rounded-lg border border-lime/50 bg-panel2 p-1">
+        <input
+          autoFocus
+          value={v}
+          onChange={(e) => setV(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') {
+              setV(title);
+              setEditing(false);
+            }
+          }}
+          className="w-28 min-h-8 rounded-md bg-panel border border-line px-2 py-1 text-xs outline-none"
+        />
+        <button type="button" onClick={save} className="min-w-8 min-h-8 rounded-md text-ok hover:bg-ok/10" aria-label="Сохранить название">
+          ✓
+        </button>
+        <button
+          type="button"
+          onClick={() => {
             setV(title);
             setEditing(false);
-          }
-        }}
-        className="w-28 rounded-lg bg-panel2 border border-lime/50 px-2 py-1 text-xs outline-none"
-      />
+          }}
+          className="min-w-8 min-h-8 rounded-md text-dim hover:text-ink"
+          aria-label="Отменить переименование"
+        >
+          ×
+        </button>
+      </span>
     );
   }
   return (
     <span
-      className={`group flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border cursor-pointer transition-colors ${
+      className={`group flex items-center rounded-lg text-xs border transition-colors ${
         active ? 'border-lime/60 bg-lime/10 text-ink' : 'border-line text-mut hover:text-ink'
       }`}
-      onClick={onSelect}
-      onDoubleClick={() => setEditing(true)}
-      title="Клик — выбрать, двойной клик — переименовать"
     >
-      ⚡ {title}
+      <button type="button" onClick={onSelect} className="min-h-10 px-2.5 py-1 text-left">
+        ⚡ {title}
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="min-w-8 min-h-10 text-dim hover:text-lime opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+        aria-label={`Переименовать вариант «${title}»`}
+      >
+        ✎
+      </button>
       {onDelete && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="opacity-0 group-hover:opacity-100 text-dim hover:text-danger transition-opacity"
-          title="Удалить вариант (и его листы)"
-        >
-          ×
-        </button>
+        confirming ? (
+          <span className="flex items-center pr-1">
+            <button
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+                onDelete();
+              }}
+              className="min-h-8 px-1.5 text-[10px] text-danger"
+            >
+              удалить?
+            </button>
+            <button type="button" onClick={() => setConfirming(false)} className="min-w-7 min-h-8 text-dim" aria-label="Отменить удаление">
+              нет
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className="min-w-8 min-h-10 text-dim hover:text-danger opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+            aria-label={`Удалить вариант «${title}»`}
+            title="Удалить вариант (и его листы)"
+          >
+            ×
+          </button>
+        )
       )}
     </span>
   );
@@ -394,6 +448,7 @@ function RefTile({
   const [note, setNote] = useState(r.note);
   const [describing, setDescribing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   useEffect(() => setNote(r.note), [r.note]);
 
   const saveNote = async () => {
@@ -448,23 +503,33 @@ function RefTile({
             ))}
           </select>
           <div className="flex-1" />
-          <button
-            type="button"
-            onClick={() => {
-              void api
-                .deleteModelRef(modelId, r.id)
-                .then(onChanged)
-                .catch((er: Error) => onErr(er.message));
-            }}
-            className="text-xs text-dim hover:text-danger"
-          >
-            удалить
-          </button>
+          {confirmDel ? (
+            <span className="flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  void api
+                    .deleteModelRef(modelId, r.id)
+                    .then(onChanged)
+                    .catch((er: Error) => onErr(er.message));
+                }}
+                className="text-danger"
+              >
+                удалить?
+              </button>
+              <button type="button" onClick={() => setConfirmDel(false)} className="text-dim hover:text-ink">
+                нет
+              </button>
+            </span>
+          ) : (
+            <button type="button" onClick={() => setConfirmDel(true)} className="text-xs text-dim hover:text-danger">
+              удалить
+            </button>
+          )}
         </div>
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          onBlur={() => void saveNote()}
           rows={4}
           placeholder="Нота для промт-райтера: identity, аутфит, КАПСОМ ключевое…"
           className="w-full rounded-md bg-panel border border-line text-xs px-2 py-1.5 outline-none focus:border-lime/50 resize-y sf-scroll"
@@ -479,9 +544,15 @@ function RefTile({
           >
             ✨ Описать автоматически
           </Button>
-          {saving && <Spinner size={12} />}
-          {note !== r.note && !saving && (
-            <span className="text-[10px] text-warn">не сохранено — кликни вне поля</span>
+          {note !== r.note && (
+            <Button
+              kind="primary"
+              busy={saving}
+              className="!py-1 !px-2 text-xs"
+              onClick={() => void saveNote()}
+            >
+              Сохранить ноту
+            </Button>
           )}
         </div>
       </div>
