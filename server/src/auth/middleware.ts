@@ -19,9 +19,17 @@ export const PUBLIC_API_PATHS = new Set<string>([
   '/api/auth/dev-login',
   // logout чистит СВОЮ httpOnly-cookie — работает и с протухшей сессией
   '/api/auth/logout',
-  // вебхук Tribute: его auth — HMAC-подпись trbt-signature, сессии у Tribute нет
-  '/api/billing/tribute/webhook',
 ]);
+
+/** Публичные /api/*-пути с префиксной проверкой (вебхуки провайдеров, цены пакетов). */
+function isPublicApiPath(url: string, method: string): boolean {
+  if (PUBLIC_API_PATHS.has(url)) return true;
+  // вебхуки платёжных провайдеров: auth = подпись/секрет по телу, сессии у них нет
+  if (url.startsWith('/api/billing/webhook/')) return true;
+  // цены пакетов видны анониму (лендинг показывает их до входа)
+  if (url === '/api/billing/packs' && method === 'GET') return true;
+  return false;
+}
 
 export function attachAuth(req: FastifyRequest, _reply: FastifyReply, done: () => void): void {
   const cookies = parseCookies(req.headers.cookie);
@@ -47,9 +55,7 @@ export function verifyCsrf(req: FastifyRequest): boolean {
 export async function requireApiAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const url = (req.raw.url ?? req.url).split('?')[0]!;
   if (!url.startsWith('/api/')) return;
-  if (PUBLIC_API_PATHS.has(url)) return;
-  // цены пакетов видны анониму (лендинг показывает их до входа); ничего приватного там нет
-  if (url === '/api/billing/packs' && req.method === 'GET') return;
+  if (isPublicApiPath(url, req.method)) return;
   if (!req.user) {
     return reply.code(401).send({ error: 'Требуется вход через Telegram' });
   }

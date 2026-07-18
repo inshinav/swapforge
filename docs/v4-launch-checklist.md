@@ -7,7 +7,7 @@
 ## 1. Auth-бот Telegram (руками, ~5 минут)
 
 1. @BotFather → `/newbot` → отдельный бот для входа (например `SwapForgeAuthBot`).
-   НЕ используй Tribute-бота и НЕ шли токен в чаты.
+   Отдельный бот только для входа; НЕ шли токен в чаты.
 2. `/setdomain` для этого бота → `inshinlab.com` (виджет проверяет origin страницы).
 3. Свой telegram_id: напиши @userinfobot → число.
 4. В `/etc/swapforge.env` добавь (строки с реальными значениями):
@@ -25,35 +25,54 @@ ssh inshinlab-vps 'bash /opt/swapforge/deploy/deploy.sh'
 ```
 На буте пройдут миграции: m001 (все старые проекты → твой аккаунт) и m002
 (6 пресетов → модели «MotoLola» и «Lunaria» твоего аккаунта).
-Деплой также синкнет nginx-сниппет (в нём новая локация вебхука Tribute без basic auth).
+Деплой также синкнет nginx-сниппет (в нём новые локации вебхуков платёжных провайдеров без basic auth).
 
 **Чекпоинт 0/1 (руками, за basic auth):** зайди на https://inshinlab.com/swapforge/ →
 кнопка Telegram → вход; старые проекты на месте; вкладка «Мои модели» показывает
 MotoLola и Lunaria с вариантами; кнопки на экране свапа прежние 6. Вторым
 TG-аккаунтом (жена/тестовый) — пустая библиотека, чужих проектов нет.
 
-## 3. Tribute (руками)
+## 3. Платёжные провайдеры: Crypto Pay (крипта) + Lava.top (карты/СБП)
 
-1. В Tribute создай «цифровые продукты» — пакеты кредитов (например: Старт 300 кр /
-   299 ₽, Средний 700 кр / 599 ₽, Большой 1500 кр / 999 ₽). Цена = себестоимость×2
-   при курсе ~90₽/$ (1 кредит = 1 цент себестоимости с наценкой; 6-сек рендер ≈
-   $2.10+LLM ≈ 450 кредитов).
-2. Дашборд Tribute → Settings → API Keys → сгенерируй ключ; webhook URL:
-   `https://inshinlab.com/swapforge/api/billing/tribute/webhook`
-3. В `/etc/swapforge.env`:
-   ```
-   TRIBUTE_API_KEY=<api-ключ Tribute>
-   CREDIT_MARKUP=2
-   SWAPFORGE_PACKS_JSON=[{"id":"start","title":"Старт","credits":300,"priceLabel":"299 ₽","url":"<ссылка на продукт>","tributeProductId":<id продукта>},...]
-   ```
-   `tributeProductId` — числовой id продукта Tribute (приходит в вебхуке
-   `payload.product_id`); фолбэк-маппинг — по `amountMinor`+`currency` (29900+"rub").
-4. `systemctl restart swapforge`.
+Оба server-initiated: сервер сам создаёт инвойс через API и кладёт наш userId+packId
+в round-trip канал (payload у Crypto Pay, clientUtm у Lava) → вебхук возвращает их
+обратно, маппинг платёж→юзер 100%-й. Ценообразование одно на оба: 1 кредит = 1 цент
+себестоимости × CREDIT_MARKUP; 6-сек рендер ≈ $2.10+LLM ≈ 450 кредитов.
 
-**Чекпоинт 2 (руками, ~10 мин):** тест-аккаунтом купи самый дешёвый пакет живым
-платежом → кредиты пришли (вкладка «Баланс», строка «пополнение») → запусти свап
-→ в леджере «списание» ≤ сметы → у твоего аккаунта всё без ограничений (unmetered).
-Заодно проверить допущение: WaveSpeed НЕ биллит фейлы (если биллит — скажи Claude,
+**3a. Crypto Pay (@CryptoBot):**
+1. @CryptoBot → Crypto Pay → Create App → получи **API Token**.
+2. My Apps → выбери приложение → **Webhooks** → Enable → URL
+   `https://inshinlab.com/swapforge/api/billing/webhook/cryptopay`.
+3. Отладка бесплатно: @CryptoTestnetBot + `CRYPTO_PAY_TESTNET=1` (потом убрать).
+
+**3b. Lava.top:**
+1. ЛК lava.top → Профиль → Интеграция → **Добавить API-ключ** (это `X-Api-Key`).
+2. Там же настрой вебхук «Результат платежа» → URL
+   `https://inshinlab.com/swapforge/api/billing/webhook/lavatop`, тип авторизации
+   **ApiKeyWebhookAuth** → задай секрет (пойдёт в `LAVA_WEBHOOK_SECRET`).
+3. Создай продукты-офферы (пакеты), скопируй **offerId** каждого.
+4. (Опц.) в nginx-локации вебхука можно захардить их IP `158.160.60.174`.
+
+**3c. env `/etc/swapforge.env`:**
+```
+CREDIT_MARKUP=2
+BILLING_PROVIDERS=cryptopay,lavatop      # можно только один
+CRYPTO_PAY_TOKEN=<токен приложения Crypto Pay>
+CRYPTO_PAY_TESTNET=1                      # на время отладки, потом убрать
+LAVA_API_KEY=<X-Api-Key из ЛК lava.top>
+LAVA_WEBHOOK_SECRET=<секрет вебхука lava>
+PUBLIC_BASE_URL=https://inshinlab.com/swapforge/
+SWAPFORGE_PACKS_JSON=[{"id":"start","title":"Старт","credits":300,"priceLabel":"≈3 USDT / 299 ₽","cryptoAsset":"USDT","cryptoAmount":3,"lavaOfferId":"<offerId lava>","lavaCurrency":"RUB"},...]
+```
+Пакет платится провайдером, если у него задан канал: `cryptoAmount` (Crypto Pay) и/или
+`lavaOfferId` (Lava). Можно микс — часть пакетов только криптой, часть только картой.
+Затем `systemctl restart swapforge`.
+
+**Чекпоинт 2 (руками, ~15 мин):** тест-аккаунт → вкладка «Баланс» → пакет:
+- «💎 Криптой» → редирект на Crypto Pay (testnet) → оплата → кредиты пришли;
+- «💳 Картой/СБП» → форма email → редирект на Lava → оплата → кредиты пришли.
+Леджер показывает «пополнение»; запусти свап → «списание» ≤ сметы; у владельца всё
+unmetered. Проверь допущение: WaveSpeed НЕ биллит фейлы (если биллит — скажи Claude,
 переключим release-политику).
 
 ## 4. Опциональные env (дефолты разумные)
@@ -70,7 +89,7 @@ LIMIT_MANUAL_LLM_PER_DAY=40
 ## 5. Живая приёмка (Claude гоняет с тобой, ≤$10 API)
 
 Свежий TG-аккаунт: вход → модель из 2 листов (автоописание) → ролик 6–8с → смета
-в кредитах → пакет через Tribute → рендер → 👍 → леджер честный → второй аккаунт
+в кредитах → пакет (Crypto Pay или Lava.top) → рендер → 👍 → леджер честный → второй аккаунт
 ничего чужого не видит → одна очередь двумя аккаунтами → один retry-путь.
 
 ## 6. Запуск = снять basic auth (только ты)

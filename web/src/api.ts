@@ -1,8 +1,9 @@
 import type {
   AuthUser,
+  BillingPacksInfo,
+  BillingProviderId,
   CreditBalanceInfo,
   CreditLedgerEntry,
-  CreditPackInfo,
   EstimateForUser,
   EstimateInfo,
   HealthInfo,
@@ -203,7 +204,9 @@ export const api = {
   creditBalance: () => fetch(u('api/billing/balance')).then((r) => j<CreditBalanceInfo>(r)),
   creditLedger: () =>
     fetch(u('api/billing/ledger')).then((r) => j<{ entries: CreditLedgerEntry[] }>(r)),
-  creditPacks: () => fetch(u('api/billing/packs')).then((r) => j<CreditPackInfo[]>(r)),
+  creditPacks: () => fetch(u('api/billing/packs')).then((r) => j<BillingPacksInfo>(r)),
+  checkout: (packId: string, provider: BillingProviderId, email?: string) =>
+    post(u('api/billing/checkout'), { packId, provider, email }).then((r) => j<{ payUrl: string }>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',

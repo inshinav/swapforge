@@ -50,9 +50,17 @@ export const config = {
   // ── v4: кредиты/биллинг ──────────────────────────────────────────────────
   /** 1 кредит = 1 «цена-цент»: priceCredits(usd) = ceil(usd × markup × 100). */
   creditMarkup: Number(env('CREDIT_MARKUP', '2')),
-  /** API-ключ Tribute: подпись вебхука (trbt-signature = HMAC-SHA256 тела). Вставляет Alex. */
-  tributeApiKey: env('TRIBUTE_API_KEY'),
-  /** Пакеты кредитов: [{id,title,credits,priceLabel,url,tributeProductId}] — см. billing/packs.ts. */
+  /** Какие платёжные провайдеры активны: 'cryptopay,lavatop'. */
+  billingProviders: env('BILLING_PROVIDERS', 'cryptopay'),
+  /** Crypto Pay (@CryptoBot): токен приложения + флаг тестовой сети. */
+  cryptoPayToken: env('CRYPTO_PAY_TOKEN'),
+  cryptoPayTestnet: env('CRYPTO_PAY_TESTNET') === '1',
+  /** Lava.top: ключ API (X-Api-Key) + секрет заголовка вебхука. */
+  lavaApiKey: env('LAVA_API_KEY'),
+  lavaWebhookSecret: env('LAVA_WEBHOOK_SECRET'),
+  /** Публичная база сервиса для redirect-кнопок провайдеров. */
+  publicBaseUrl: env('PUBLIC_BASE_URL', 'https://inshinlab.com/swapforge/'),
+  /** Пакеты кредитов: [{id,title,credits,priceLabel,cryptoAsset,cryptoAmount,lavaOfferId,lavaCurrency}]. */
   packsJson: env('SWAPFORGE_PACKS_JSON', '[]'),
   // ── v4: лимиты/квоты (владелец exempt везде) ─────────────────────────────
   /** Персональный кап хранилища не-владельца (проекты + модели). */

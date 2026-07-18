@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CreditPackInfo, HealthInfo, TgWidgetPayload } from '@shared/api-types';
+// packs приходят объектом {providers, packs}; на лендинге берём только список
 import { api, appBase } from '../api';
 import { Card, ErrorNote, Spinner } from '../ui';
 
@@ -22,7 +23,7 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
-    api.creditPacks().then(setPacks).catch(() => setPacks([]));
+    api.creditPacks().then((r) => setPacks(r.packs)).catch(() => setPacks([]));
   }, []);
 
   useEffect(() => {

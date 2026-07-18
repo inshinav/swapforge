@@ -250,12 +250,20 @@ export interface CreditLedgerEntry {
   createdAt: string;
 }
 
+export type BillingProviderId = 'cryptopay' | 'lavatop';
+
 export interface CreditPackInfo {
   id: string;
   title: string;
   credits: number;
   priceLabel: string;
-  url: string;
+  /** Какими провайдерами этот пакет оплачивается (есть offer/цена). */
+  pay: BillingProviderId[];
+}
+
+export interface BillingPacksInfo {
+  providers: Array<{ id: BillingProviderId; needsEmail: boolean }>;
+  packs: CreditPackInfo[];
 }
 
 export interface PricingInfo {

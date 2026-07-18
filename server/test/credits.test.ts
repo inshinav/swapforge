@@ -1,10 +1,10 @@
-// Кредиты: hold/settle/release, идемпотентность вебхука Tribute, изоляция USD
-// от не-владельца (regex по сериализованным payload), политика release при фейлах.
+// Кредиты: hold/settle/release, провайдер-агностичный вебхук (Crypto Pay + Lava.top),
+// изоляция USD от не-владельца (regex по сериализованным payload), release при фейлах.
 import { beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-credits-'));
 process.env.AUTH_DEV_BYPASS = '1';
@@ -12,10 +12,13 @@ process.env.OWNER_TELEGRAM_ID = '9500';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.WAVESPEED_API_KEY = 'test-key';
 process.env.CREDIT_MARKUP = '2';
-process.env.TRIBUTE_API_KEY = 'trbt-test-key';
+process.env.BILLING_PROVIDERS = 'cryptopay,lavatop';
+process.env.CRYPTO_PAY_TOKEN = 'cp-test-token';
+process.env.LAVA_API_KEY = 'lava-test-key';
+process.env.LAVA_WEBHOOK_SECRET = 'lava-hook-secret';
 process.env.SWAPFORGE_PACKS_JSON = JSON.stringify([
-  { id: 'start', title: 'Старт', credits: 300, priceLabel: '299 ₽', url: 'https://t.me/x', tributeProductId: 456 },
-  { id: 'big', title: 'Большой', credits: 1200, priceLabel: '999 ₽', url: 'https://t.me/y', amountMinor: 99900, currency: 'rub' },
+  { id: 'start', title: 'Старт', credits: 300, priceLabel: '≈3 USDT / 299 ₽', cryptoAsset: 'USDT', cryptoAmount: 3, lavaOfferId: 'offer-start', lavaCurrency: 'RUB' },
+  { id: 'big', title: 'Большой', credits: 1200, priceLabel: '≈12 USDT / 999 ₽', cryptoAsset: 'USDT', cryptoAmount: 12, lavaOfferId: 'offer-big', lavaCurrency: 'RUB' },
 ]);
 
 const { getDb } = await import('../src/db');
@@ -34,7 +37,9 @@ const {
 const { reconcileOrphanHolds, releaseFlowHoldOnFailure, settleProjectHold, toUserEstimate } = await import(
   '../src/billing/flow'
 );
-const { parseTributeEvent, verifyTributeSignature } = await import('../src/billing/tribute');
+const { encodeRef } = await import('../src/billing/provider');
+const { parseCryptoPayEvent, verifyCryptoPaySignature } = await import('../src/billing/cryptopay');
+const { parseLavaEvent } = await import('../src/billing/lavatop');
 const { makeAuthedApp } = await import('./helpers');
 import type { EstimateInfo } from '../../shared/api-types';
 
@@ -213,151 +218,191 @@ describe('сверка осиротевших холдов на старте (F3
   });
 });
 
-describe('Tribute адаптер', () => {
-  const KEY = 'trbt-test-key';
-  const purchase = {
-    name: 'new_digital_product',
-    created_at: '2026-07-19T10:00:00Z',
-    sent_at: '2026-07-19T10:00:01Z',
-    payload: {
-      product_id: 456,
-      product_name: 'Старт',
-      amount: 29900,
-      currency: 'rub',
-      telegram_user_id: 555001,
-      purchase_id: 78901,
-      transaction_id: 1,
-      purchase_created_at: '2026-07-19T10:00:00Z',
-    },
-  };
+describe('Crypto Pay адаптер', () => {
+  const TOKEN = 'cp-test-token';
+  const invoice = (userId: string, packId: string, invoiceId = 55501) => ({
+    update_id: 1,
+    update_type: 'invoice_paid',
+    request_date: 'x',
+    payload: { invoice_id: invoiceId, status: 'paid', asset: 'USDT', amount: '3', payload: encodeRef(userId, packId) },
+  });
+  const signed = (body: Buffer, token = TOKEN) =>
+    createHmac('sha256', createHash('sha256').update(token).digest()).update(body).digest('hex');
 
-  const signed = (body: Buffer, key = KEY) => createHmac('sha256', key).update(body).digest('hex');
-
-  it('подпись: hex и base64 валидны, чужой ключ/подмена тела — нет', () => {
-    const body = Buffer.from(JSON.stringify(purchase));
-    expect(verifyTributeSignature(body, signed(body), KEY)).toBe(true);
-    const b64 = createHmac('sha256', KEY).update(body).digest('base64');
-    expect(verifyTributeSignature(body, b64, KEY)).toBe(true);
-    expect(verifyTributeSignature(body, signed(body, 'другой'), KEY)).toBe(false);
-    expect(verifyTributeSignature(Buffer.from('{}'), signed(body), KEY)).toBe(false);
-    expect(verifyTributeSignature(body, '', KEY)).toBe(false);
+  it('подпись: HMAC(body, SHA256(token)); чужой токен/подмена тела — нет', () => {
+    const body = Buffer.from(JSON.stringify(invoice('u1', 'start')));
+    expect(verifyCryptoPaySignature(body, signed(body), TOKEN)).toBe(true);
+    expect(verifyCryptoPaySignature(body, signed(body, 'другой'), TOKEN)).toBe(false);
+    expect(verifyCryptoPaySignature(Buffer.from('{}'), signed(body), TOKEN)).toBe(false);
+    expect(verifyCryptoPaySignature(body, '', TOKEN)).toBe(false);
   });
 
-  it('parseTributeEvent: purchase/refund/ignored/invalid', () => {
-    const ev = parseTributeEvent(Buffer.from(JSON.stringify(purchase)));
+  it('parseCryptoPayEvent: purchase (payload round-trip) / ignored / invalid', () => {
+    const ev = parseCryptoPayEvent(Buffer.from(JSON.stringify(invoice('user-42', 'start', 777))));
     expect(ev).toMatchObject({
       kind: 'purchase',
-      paymentRef: 'tribute:78901',
-      telegramUserId: 555001,
-      productId: 456,
-      amountMinor: 29900,
-      currency: 'rub',
+      paymentRef: 'cryptopay:777',
+      userId: 'user-42',
+      packId: 'start',
+      paidAmount: 3,
+      paidAsset: 'USDT',
     });
-    const refund = parseTributeEvent(
-      Buffer.from(
-        JSON.stringify({ name: 'digital_product_refunded', payload: { ...purchase.payload } }),
-      ),
-    );
-    expect(refund).toMatchObject({ kind: 'refund', paymentRef: 'tribute-refund:78901' });
-    expect(parseTributeEvent(Buffer.from(JSON.stringify({ name: 'new_donation', payload: {} })))).toEqual({
-      kind: 'ignored',
-      name: 'new_donation',
-    });
-    expect(parseTributeEvent(Buffer.from('не json')).kind).toBe('invalid');
-    expect(
-      parseTributeEvent(Buffer.from(JSON.stringify({ name: 'new_digital_product', payload: {} }))).kind,
-    ).toBe('invalid');
+    // не invoice_paid → ignored
+    expect(parseCryptoPayEvent(Buffer.from(JSON.stringify({ update_type: 'invoice_created' }))).kind).toBe('ignored');
+    // invoice_paid, но status!=paid → ignored
+    const active = invoice('u', 'start');
+    active.payload.status = 'active';
+    expect(parseCryptoPayEvent(Buffer.from(JSON.stringify(active))).kind).toBe('ignored');
+    // без нашего payload → invalid
+    const noPayload = invoice('u', 'start');
+    (noPayload.payload as { payload?: string }).payload = 'чужая-строка';
+    expect(parseCryptoPayEvent(Buffer.from(JSON.stringify(noPayload))).kind).toBe('invalid');
+    expect(parseCryptoPayEvent(Buffer.from('не json')).kind).toBe('invalid');
+  });
+});
+
+describe('Lava.top адаптер', () => {
+  const ok = (userId: string, packId: string, contractId = 'c-123') => ({
+    eventType: 'payment.success',
+    product: { id: 'p1', title: 'Старт' },
+    contractId,
+    buyer: { email: 'x@y.z' },
+    amount: 299,
+    currency: 'RUB',
+    status: 'completed',
+    clientUtm: { utm_content: encodeRef(userId, packId), utm_term: packId },
   });
 
+  it('parseLavaEvent: purchase (utm round-trip) / ignored / invalid', () => {
+    const ev = parseLavaEvent(Buffer.from(JSON.stringify(ok('user-7', 'big', 'ctr-9'))));
+    expect(ev).toEqual({ kind: 'purchase', paymentRef: 'lavatop:ctr-9', userId: 'user-7', packId: 'big' });
+    // не payment.success → ignored
+    expect(parseLavaEvent(Buffer.from(JSON.stringify({ eventType: 'subscription.cancelled' }))).kind).toBe('ignored');
+    // success, но status!=completed → ignored
+    const failed = ok('u', 'big');
+    failed.status = 'failed';
+    expect(parseLavaEvent(Buffer.from(JSON.stringify(failed))).kind).toBe('ignored');
+    // без нашего utm_content → invalid
+    const noUtm = ok('u', 'big');
+    noUtm.clientUtm.utm_content = 'google';
+    expect(parseLavaEvent(Buffer.from(JSON.stringify(noUtm))).kind).toBe('invalid');
+  });
+});
+
+describe('леджер: идемпотентность grant/refund', () => {
   it('grantPurchase/applyRefund идемпотентны по payment_ref', () => {
     const u = mkUser(808);
-    expect(grantPurchase(u, 300, 'tribute:111', 'пакет')).toBe('granted');
-    expect(grantPurchase(u, 300, 'tribute:111', 'пакет')).toBe('replay');
+    expect(grantPurchase(u, 300, 'cryptopay:111', 'пакет')).toBe('granted');
+    expect(grantPurchase(u, 300, 'cryptopay:111', 'пакет')).toBe('replay');
     expect(creditBalance(u).balance).toBe(300);
-    expect(applyRefund(u, 300, 'tribute-refund:111', 'рефанд')).toBe('granted');
-    expect(applyRefund(u, 300, 'tribute-refund:111', 'рефанд')).toBe('replay');
+    expect(applyRefund(u, 300, 'lavatop-refund:111', 'рефанд')).toBe('granted');
+    expect(applyRefund(u, 300, 'lavatop-refund:111', 'рефанд')).toBe('replay');
     expect(creditBalance(u).balance).toBe(0);
     adjustCredits(u, 50, 'компенсация');
     expect(creditBalance(u).balance).toBe(50);
   });
 });
 
-describe('вебхук-роут (реальное приложение)', () => {
+describe('вебхук-роут /api/billing/webhook/:provider (реальное приложение)', () => {
   let app: Awaited<ReturnType<typeof makeAuthedApp>>;
-  const KEY = 'trbt-test-key';
+  const TOKEN = 'cp-test-token';
 
-  const send = (body: unknown, sigKey = KEY) => {
+  const sendCrypto = (body: unknown, token = TOKEN) => {
     const raw = Buffer.from(JSON.stringify(body));
     return app.app.inject({
       method: 'POST',
-      url: '/api/billing/tribute/webhook',
+      url: '/api/billing/webhook/cryptopay',
       headers: {
         'content-type': 'application/json',
-        'trbt-signature': createHmac('sha256', sigKey).update(raw).digest('hex'),
-        // вебхук публичный: cookie/csrf хелпера не мешают, но и не требуются
+        'crypto-pay-api-signature': createHmac('sha256', createHash('sha256').update(token).digest()).update(raw).digest('hex'),
       },
       payload: raw,
     });
   };
 
-  const purchaseFor = (tgId: number, purchaseId: number) => ({
-    name: 'new_digital_product',
-    created_at: 'x',
-    sent_at: 'x',
-    payload: {
-      product_id: 456,
-      product_name: 'Старт',
-      amount: 29900,
-      currency: 'rub',
-      telegram_user_id: tgId,
-      purchase_id: purchaseId,
-      transaction_id: 1,
-      purchase_created_at: 'x',
-    },
+  const invoiceFor = (userId: string, packId: string, invoiceId: number) => ({
+    update_type: 'invoice_paid',
+    payload: { invoice_id: invoiceId, status: 'paid', payload: encodeRef(userId, packId) },
   });
 
   beforeAll(async () => {
     app = await makeAuthedApp(9501, 'Покупатель');
   });
 
-  it('валидный платёж начисляет пакет один раз; replay — ноль', async () => {
-    const me = getDb().prepare(`SELECT id FROM users WHERE telegram_id = 9501`).get() as { id: string };
-    const r1 = await send(purchaseFor(9501, 90001));
+  it('валидный крипто-платёж начисляет пакет один раз; replay — ноль', async () => {
+    const me = app.userId;
+    const r1 = await sendCrypto(invoiceFor(me, 'start', 90001));
     expect(r1.statusCode).toBe(200);
-    expect(creditBalance(me.id).balance).toBe(300);
-    const r2 = await send(purchaseFor(9501, 90001));
+    expect(creditBalance(me).balance).toBe(300);
+    const r2 = await sendCrypto(invoiceFor(me, 'start', 90001));
     expect(r2.statusCode).toBe(200);
-    expect(creditBalance(me.id).balance).toBe(300); // не задвоилось
+    expect(creditBalance(me).balance).toBe(300); // не задвоилось (payment_ref UNIQUE)
   });
 
   it('битая подпись → 403, ничего не начислено', async () => {
-    const me = getDb().prepare(`SELECT id FROM users WHERE telegram_id = 9501`).get() as { id: string };
-    const before = creditBalance(me.id).balance;
-    const r = await send(purchaseFor(9501, 90002), 'wrong-key');
+    const before = creditBalance(app.userId).balance;
+    const r = await sendCrypto(invoiceFor(app.userId, 'start', 90002), 'wrong-token');
     expect(r.statusCode).toBe(403);
-    expect(creditBalance(me.id).balance).toBe(before);
+    expect(creditBalance(app.userId).balance).toBe(before);
   });
 
-  it('неопознанный продукт → adjust-0 след, деньги не теряются молча', async () => {
-    const me = getDb().prepare(`SELECT id FROM users WHERE telegram_id = 9501`).get() as { id: string };
-    const odd = purchaseFor(9501, 90003);
-    odd.payload.product_id = 999999;
-    odd.payload.amount = 12345;
-    const r = await send(odd);
+  it('неизвестный провайдер → 404', async () => {
+    const r = await app.app.inject({ method: 'POST', url: '/api/billing/webhook/paypal', payload: '{}' });
+    expect(r.statusCode).toBe(404);
+  });
+
+  it('платёж с чужим/несуществующим userId → 200 без начисления (не теряем молча)', async () => {
+    const r = await sendCrypto(invoiceFor('нет-такого', 'start', 90003));
     expect(r.statusCode).toBe(200);
-    const trace = getDb()
-      .prepare(`SELECT note FROM credit_ledger WHERE user_id = ? AND kind = 'adjust' AND delta_credits = 0`)
-      .get(me.id) as { note: string } | undefined;
-    expect(trace?.note).toContain('неопознанный');
+    expect((r.json() as { unmatched?: boolean }).unmatched).toBe(true);
   });
 
-  it('fallback-маппинг по amount+currency работает (пакет big)', async () => {
-    const buyer = await makeAuthedApp(9502, 'Второй');
-    const body = purchaseFor(9502, 90004);
-    body.payload.product_id = 31337; // незнакомый id → матч по сумме
-    body.payload.amount = 99900;
-    await send(body);
+  it('недоплата по сумме/активу → не начисляем (defense-in-depth)', async () => {
+    const me = app.userId;
+    const before = creditBalance(me).balance;
+    // пакет start ждёт 3 USDT — оплачено 1
+    const underpaid = {
+      update_type: 'invoice_paid',
+      payload: { invoice_id: 90010, status: 'paid', asset: 'USDT', amount: '1', payload: encodeRef(me, 'start') },
+    };
+    const r = await sendCrypto(underpaid);
+    expect(r.statusCode).toBe(200);
+    expect((r.json() as { unmatched?: boolean }).unmatched).toBe(true);
+    expect(creditBalance(me).balance).toBe(before); // ничего не начислено
+    // чужой актив (3 TON вместо 3 USDT) — тоже отклоняем
+    const wrongAsset = {
+      update_type: 'invoice_paid',
+      payload: { invoice_id: 90011, status: 'paid', asset: 'TON', amount: '3', payload: encodeRef(me, 'start') },
+    };
+    const r2 = await sendCrypto(wrongAsset);
+    expect((r2.json() as { unmatched?: boolean }).unmatched).toBe(true);
+    expect(creditBalance(me).balance).toBe(before);
+  });
+
+  it('Lava-вебхук по X-Api-Key секрету начисляет; чужой секрет → 403', async () => {
+    const buyer = await makeAuthedApp(9502, 'Картой');
+    const body = {
+      eventType: 'payment.success',
+      contractId: 'ctr-777',
+      status: 'completed',
+      clientUtm: { utm_content: encodeRef(buyer.userId, 'big'), utm_term: 'big' },
+    };
+    const good = await buyer.app.inject({
+      method: 'POST',
+      url: '/api/billing/webhook/lavatop',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'lava-hook-secret' },
+      payload: JSON.stringify(body),
+    });
+    expect(good.statusCode).toBe(200);
     expect(creditBalance(buyer.userId).balance).toBe(1200);
+
+    const bad = await buyer.app.inject({
+      method: 'POST',
+      url: '/api/billing/webhook/lavatop',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'wrong' },
+      payload: JSON.stringify({ ...body, contractId: 'ctr-778' }),
+    });
+    expect(bad.statusCode).toBe(403);
     await buyer.app.close();
   });
 });

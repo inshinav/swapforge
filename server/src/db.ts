@@ -241,6 +241,8 @@ export function applySchema(d: DatabaseSync): void {
   ensureColumn(d, 'projects', 'user_id', `user_id TEXT`);
   ensureColumn(d, 'generations', 'user_id', `user_id TEXT`);
   ensureColumn(d, 'usage_events', 'user_id', `user_id TEXT`);
+  // email покупателя (Lava.top требует в инвойсе; спрашиваем при первой оплате картой)
+  ensureColumn(d, 'users', 'email', `email TEXT`);
   d.exec(`
     CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events(user_id, created_at);

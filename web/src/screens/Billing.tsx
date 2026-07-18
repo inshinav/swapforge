@@ -1,9 +1,20 @@
-// Баланс кредитов: пакеты (платёж через Tribute в Telegram), леджер, резервы.
-// USD здесь не существует — юзер живёт в кредитах.
+// Баланс кредитов: пакеты (оплата криптой через Crypto Pay / картой через Lava.top),
+// леджер, резервы. USD здесь не существует — юзер живёт в кредитах.
 import { useCallback, useEffect, useState } from 'react';
-import type { CreditBalanceInfo, CreditLedgerEntry, CreditPackInfo } from '@shared/api-types';
+import type {
+  BillingPacksInfo,
+  BillingProviderId,
+  CreditBalanceInfo,
+  CreditLedgerEntry,
+  CreditPackInfo,
+} from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, Empty, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
+
+const PROVIDER_LABEL: Record<BillingProviderId, string> = {
+  cryptopay: '💎 Криптой',
+  lavatop: '💳 Картой / СБП',
+};
 
 const KIND_LABEL: Record<CreditLedgerEntry['kind'], { label: string; tone: 'ok' | 'mut' | 'warn' | 'danger' }> = {
   purchase: { label: 'пополнение', tone: 'ok' },
@@ -15,7 +26,7 @@ const KIND_LABEL: Record<CreditLedgerEntry['kind'], { label: string; tone: 'ok' 
 export default function Billing() {
   const [balance, setBalance] = useState<CreditBalanceInfo | null>(null);
   const [ledger, setLedger] = useState<CreditLedgerEntry[] | null>(null);
-  const [packs, setPacks] = useState<CreditPackInfo[]>([]);
+  const [packsInfo, setPacksInfo] = useState<BillingPacksInfo | null>(null);
   const [err, setErr] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
@@ -25,7 +36,7 @@ export default function Billing() {
       .then(([b, l, p]) => {
         setBalance(b);
         setLedger(l.entries);
-        setPacks(p);
+        setPacksInfo(p);
         setErr('');
       })
       .catch((e: Error) => setErr(e.message))
@@ -33,6 +44,9 @@ export default function Billing() {
   }, []);
 
   useEffect(reload, [reload]);
+
+  const packs = packsInfo?.packs ?? [];
+  const needsEmail = new Set(packsInfo?.providers.filter((p) => p.needsEmail).map((p) => p.id) ?? []);
 
   return (
     <div className="space-y-4 sf-in">
@@ -67,18 +81,7 @@ export default function Billing() {
             ) : (
               <div className="grid sm:grid-cols-3 gap-2">
                 {packs.map((p) => (
-                  <a
-                    key={p.id}
-                    href={p.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-xl border border-line hover:border-lime/60 bg-panel2 px-4 py-3 transition-colors block"
-                  >
-                    <div className="text-sm font-semibold">{p.title}</div>
-                    <div className="text-2xl font-extrabold text-lime">{p.credits}</div>
-                    <div className="text-xs text-mut">кредитов · {p.priceLabel}</div>
-                    <div className="text-[11px] text-dim mt-1.5">оплата в Telegram через Tribute</div>
-                  </a>
+                  <PackCard key={p.id} pack={p} needsEmail={needsEmail} onDone={reload} onError={setErr} />
                 ))}
               </div>
             )}
@@ -122,6 +125,75 @@ export default function Billing() {
           </div>
         </div>
       </Card>
+    </div>
+  );
+}
+
+/** Карточка пакета: выбор способа оплаты → server-initiated checkout → редирект. */
+function PackCard({
+  pack,
+  needsEmail,
+  onDone,
+  onError,
+}: {
+  pack: CreditPackInfo;
+  needsEmail: Set<BillingProviderId>;
+  onDone: () => void;
+  onError: (e: string) => void;
+}) {
+  const [busy, setBusy] = useState<BillingProviderId | null>(null);
+  const [emailFor, setEmailFor] = useState<BillingProviderId | null>(null);
+  const [email, setEmail] = useState('');
+
+  const pay = async (provider: BillingProviderId) => {
+    if (needsEmail.has(provider) && !email.trim() && emailFor !== provider) {
+      setEmailFor(provider); // сначала показать поле email
+      return;
+    }
+    setBusy(provider);
+    onError('');
+    try {
+      const { payUrl } = await api.checkout(pack.id, provider, email.trim() || undefined);
+      window.open(payUrl, '_blank', 'noopener');
+      setEmailFor(null);
+      onDone();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-line bg-panel2 px-4 py-3 flex flex-col">
+      <div className="text-sm font-semibold">{pack.title}</div>
+      <div className="text-2xl font-extrabold text-lime">{pack.credits}</div>
+      <div className="text-xs text-mut mb-2">кредитов · {pack.priceLabel}</div>
+
+      {emailFor && needsEmail.has(emailFor) && (
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="email для чека"
+          className="mb-2 rounded-lg bg-panel border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
+        />
+      )}
+
+      <div className="flex flex-col gap-1.5 mt-auto">
+        {pack.pay.length === 0 && <span className="text-[11px] text-dim">оплата недоступна</span>}
+        {pack.pay.map((provider) => (
+          <Button
+            key={provider}
+            kind="ghost"
+            busy={busy === provider}
+            className="!py-1.5 !px-2 text-xs"
+            onClick={() => void pay(provider)}
+          >
+            {PROVIDER_LABEL[provider]}
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }

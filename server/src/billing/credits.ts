@@ -175,7 +175,7 @@ export function grantPurchase(userId: string, credits: number, paymentRef: strin
   }
 }
 
-/** Рефанд Tribute: минус кредиты (может увести баланс в минус — долг, новые запуски не пройдут). */
+/** Рефанд платежа: минус кредиты (может увести баланс в минус — долг, новые запуски не пройдут). */
 export function applyRefund(userId: string, credits: number, paymentRef: string, note: string): GrantResult {
   const d = getDb();
   try {

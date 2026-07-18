@@ -1,22 +1,24 @@
 // Пакеты кредитов: конфиг в env SWAPFORGE_PACKS_JSON (правит Alex, без деплоя кода).
-// Формат: [{"id":"start","title":"Старт","credits":300,"priceLabel":"299 ₽",
-//           "url":"https://t.me/tribute/app?startapp=…","tributeProductId":456}]
-// Маппинг вебхука: по tributeProductId → по (amount,currency) → неопознанный платёж
-// НЕ теряется молча (adjust-0 строка + громкий лог, Alex доначисляет руками).
+// Server-initiated модель: сервер сам создаёт инвойс у провайдера и кладёт packId
+// в payload/UTM → маппинг платёж→пакт прямой по id, без угадывания по сумме.
+// Формат пакета:
+//   { "id":"start", "title":"Старт", "credits":300, "priceLabel":"≈3 USDT / 299 ₽",
+//     "cryptoAsset":"USDT", "cryptoAmount":3,            // Crypto Pay
+//     "lavaOfferId":"836b9fc5-…", "lavaCurrency":"RUB" } // Lava.top offer
 import { config } from '../config';
 
 export interface CreditPack {
   id: string;
   title: string;
   credits: number;
-  /** Человеческая цена («299 ₽») — сервер цен в валюте не считает, их держит Tribute. */
+  /** Человеческая цена («≈3 USDT / 299 ₽») — показывается юзеру. */
   priceLabel: string;
-  /** Платёжная ссылка Tribute (открывает Telegram). */
-  url: string;
-  tributeProductId: number | null;
-  /** Для fallback-маппинга по сумме, минимальные единицы + валюта (опционально). */
-  amountMinor?: number;
-  currency?: string;
+  /** Crypto Pay: актив и сумма (currency_type=crypto). */
+  cryptoAsset?: string;
+  cryptoAmount?: number;
+  /** Lava.top: id оффера (цены) и валюта инвойса. */
+  lavaOfferId?: string;
+  lavaCurrency?: string;
 }
 
 let cache: CreditPack[] | null = null;
@@ -39,10 +41,10 @@ export function parsePacks(json: string): CreditPack[] {
       title: r.title,
       credits: Math.round(r.credits),
       priceLabel: typeof r.priceLabel === 'string' ? r.priceLabel : '',
-      url: typeof r.url === 'string' ? r.url : '',
-      tributeProductId: typeof r.tributeProductId === 'number' ? r.tributeProductId : null,
-      amountMinor: typeof r.amountMinor === 'number' ? r.amountMinor : undefined,
-      currency: typeof r.currency === 'string' ? r.currency.toLowerCase() : undefined,
+      cryptoAsset: typeof r.cryptoAsset === 'string' ? r.cryptoAsset.toUpperCase() : undefined,
+      cryptoAmount: typeof r.cryptoAmount === 'number' && r.cryptoAmount > 0 ? r.cryptoAmount : undefined,
+      lavaOfferId: typeof r.lavaOfferId === 'string' ? r.lavaOfferId : undefined,
+      lavaCurrency: typeof r.lavaCurrency === 'string' ? r.lavaCurrency.toUpperCase() : undefined,
     });
   }
   return out;
@@ -53,18 +55,11 @@ export function listPacks(): CreditPack[] {
   return cache;
 }
 
+export function getPack(id: string): CreditPack | undefined {
+  return listPacks().find((p) => p.id === id);
+}
+
 /** Тестовый рычаг. */
 export function _resetPacksCache(): void {
   cache = null;
-}
-
-export function matchPack(productId: number | null, amountMinor: number, currency: string): CreditPack | null {
-  const packs = listPacks();
-  if (productId !== null) {
-    const byId = packs.find((p) => p.tributeProductId === productId);
-    if (byId) return byId;
-  }
-  return (
-    packs.find((p) => p.amountMinor === amountMinor && (p.currency ?? '') === currency.toLowerCase()) ?? null
-  );
 }
