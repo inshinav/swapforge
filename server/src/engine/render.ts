@@ -10,6 +10,13 @@ import { wavespeed, type WaveSpeed, type WsPrediction } from '../wavespeed';
 import { estimateRender } from '../pricing';
 import { enforceStorageCap, projectDir, refsDir, rendersDir, startDir } from '../storage';
 import { parseFlags, type FlowFlags } from './orchestrator';
+import { attachHoldGeneration, openHoldForProject, placeHold, priceCredits } from '../billing/credits';
+import {
+  forceReleaseProjectHold,
+  isMeteredUserId,
+  releaseFlowHoldOnFailure,
+  settleProjectHold,
+} from '../billing/flow';
 import type { VideoMeta } from '../../../shared/api-types';
 
 /** Ошибка с HTTP-статусом для роутов (409 = гейт, 404 = нет объекта). */
@@ -106,13 +113,27 @@ function saveAssets(genId: string, assets: Assets): void {
     .run(JSON.stringify(assets), genId);
 }
 
-function markFailed(genId: string, msg: string): void {
+function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean } = {}): void {
   stopPoller(genId);
   db()
     .prepare(
       `UPDATE generations SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ? AND status != 'done'`,
     )
     .run(msg.slice(0, 500), genId);
+  // Кредиты. Резерв возвращаем сразу в двух случаях:
+  // - задача НЕ была сабмитнута (нет prediction_id — WaveSpeed не бильнёт);
+  // - WaveSpeed сам сказал failed (wsTerminal) — задача мертва, добирать нечего.
+  // Иначе (таймаут/сеть при живом prediction_id) hold держим: recheck может добрать
+  // готовый ролик, и списание обязано состояться (гвард внутри release-функции).
+  const gen = loadGen(genId);
+  if (!gen) return;
+  if (!gen.ws_prediction_id) {
+    releaseFlowHoldOnFailure(gen.project_id, 'рендер не стартовал у WaveSpeed');
+  } else if (opts.wsTerminal) {
+    // WS сам сказал failed — задача мертва, recoverable-гвард не применим: форс-релиз
+    // (prediction_id сохраняем: retry делает защитный пре-полл, диагностика цела)
+    forceReleaseProjectHold(gen.project_id, 'WaveSpeed отклонил задачу');
+  }
 }
 
 /** Человеческая формулировка причин WaveSpeed. */
@@ -235,9 +256,13 @@ async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: num
   if (!gen) return;
   const projectId = gen.project_id;
   const p = d
-    .prepare(`SELECT video_file, flags_json FROM projects WHERE id = ?`)
-    .get(projectId) as { video_file: string | null; flags_json: string | null } | undefined;
+    .prepare(`SELECT video_file, flags_json, user_id FROM projects WHERE id = ?`)
+    .get(projectId) as
+    | { video_file: string | null; flags_json: string | null; user_id: string | null }
+    | undefined;
   if (!p?.video_file) throw new Error('Исходник недоступен');
+  // Не-владелец платит кредитами; тексты денежных отказов для него — без USD оператора
+  const metered = isMeteredUserId(p.user_id);
 
   const refs = d
     .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
@@ -252,24 +277,47 @@ async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: num
   } catch {
     /* без баланса гварда нет — останется формула для факта */
   }
-  if (balanceBefore !== null) {
-    try {
-      const metaRow = d
-        .prepare(`SELECT meta_json FROM projects WHERE id = ?`)
-        .get(projectId) as { meta_json: string | null } | undefined;
-      if (metaRow?.meta_json) {
-        const est = await estimateRender((JSON.parse(metaRow.meta_json) as VideoMeta).durationSec, ws);
-        if (est.usd !== null && est.usd > balanceBefore - 0.05) {
-          markFailed(
-            genId,
-            `Не хватает баланса WaveSpeed: рендер ≈ $${est.usd.toFixed(2)}, на счету $${balanceBefore.toFixed(2)} — пополни и нажми «Повторить рендер»`,
-          );
-          return;
-        }
-      }
-    } catch {
-      /* смета вторична — не блокируем */
+  let renderEstUsd: number | null = null;
+  try {
+    const metaRow = d
+      .prepare(`SELECT meta_json FROM projects WHERE id = ?`)
+      .get(projectId) as { meta_json: string | null } | undefined;
+    if (metaRow?.meta_json) {
+      renderEstUsd = (await estimateRender((JSON.parse(metaRow.meta_json) as VideoMeta).durationSec, ws)).usd;
     }
+  } catch {
+    /* смета вторична — не блокируем */
+  }
+  if (balanceBefore !== null && renderEstUsd !== null && renderEstUsd > balanceBefore - 0.05) {
+    markFailed(
+      genId,
+      metered
+        ? 'Рендер временно недоступен на стороне сервиса — попробуй позже, кредиты не списаны'
+        : `Не хватает баланса WaveSpeed: рендер ≈ $${renderEstUsd.toFixed(2)}, на счету $${balanceBefore.toFixed(2)} — пополни и нажми «Повторить рендер»`,
+    );
+    return;
+  }
+
+  // Кредитный гейт не-владельца: реюз открытого hold-а проекта (/swap уже поставил его
+  // на весь флоу; retry/manual-пути приходят сюда без hold-а → рендер-hold по смете).
+  if (metered) {
+    let holdId = openHoldForProject(projectId)?.id ?? null;
+    if (!holdId) {
+      if (renderEstUsd === null) {
+        markFailed(genId, 'Смета временно недоступна — попробуй чуть позже, кредиты не списаны');
+        return;
+      }
+      const res = placeHold(p.user_id!, projectId, priceCredits(renderEstUsd));
+      if (!res.ok) {
+        markFailed(
+          genId,
+          `Не хватает кредитов: нужно ≈ ${res.needCredits}, доступно ${res.availableCredits} — пополни на вкладке «Баланс» и нажми «Повторить рендер»`,
+        );
+        return;
+      }
+      holdId = res.holdId;
+    }
+    attachHoldGeneration(holdId, genId);
   }
 
   // Переиспользуем свежие URL (ретрай после сбоя не перезаливает сотни мегабайт)
@@ -418,7 +466,7 @@ export function attachPoller(genId: string, ws: WaveSpeed = wavespeed, baseMs?: 
     }
 
     if (r.status === 'failed') {
-      markFailed(genId, ruWsFailure(r.error));
+      markFailed(genId, ruWsFailure(r.error), { wsTerminal: true });
       return;
     }
     if (r.status === 'completed') {
@@ -471,6 +519,8 @@ async function completeFromResult(gen: GenRow, r: WsPrediction, ws: WaveSpeed): 
           notes = CASE WHEN notes = '' AND ? != '' THEN ? ELSE notes END
         WHERE id = ?`,
     ).run(file, bytes, cost.usd, cost.source, nsfw, nsfw, gen.id);
+    // Кредиты: единый финал → честный settle по факту (cap = hold); владельцу — no-op
+    settleProjectHold(gen.project_id, gen.id, cost.usd);
     enforceStorageCap();
     console.log(
       `[render] done gen=${gen.id} bytes=${bytes} cost=$${cost.usd ?? '?'} source=${cost.source ?? '-'}`,
@@ -625,7 +675,7 @@ export async function recheckGeneration(genId: string, ws: WaveSpeed = wavespeed
     return 'done';
   }
   if (r.status === 'failed') {
-    markFailed(genId, ruWsFailure(r.error));
+    markFailed(genId, ruWsFailure(r.error), { wsTerminal: true });
     return 'failed';
   }
   // всё ещё в работе на стороне WaveSpeed

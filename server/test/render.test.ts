@@ -99,13 +99,18 @@ function genRow(id: string) {
     | undefined;
 }
 
+// Легаси-тесты эмулируют ВЛАДЕЛЬЦА (unmetered): движок рендера/ретраев не зависит
+// от кредитов. Кредитная механика тестируется отдельно в credits.test.ts.
+const OWNER_TEST_ID = 'owner-render-tests';
+getDb().prepare(`INSERT INTO users (id, telegram_id, role) VALUES (?, 4242, 'owner')`).run(OWNER_TEST_ID);
+
 /** Проект, готовый к рендеру: видео+рефы на диске, промты v1, старт-кадр v1. */
 function readyProject(id = randomUUID()): string {
   const db = getDb();
   db.prepare(
-    `INSERT INTO projects (id, title, status, video_file, video_bytes, meta_json, frames_json, analysis_json)
-     VALUES (?, 'test', 'complete', 'source.mp4', 3000, ?, '[]', '{}')`,
-  ).run(id, JSON.stringify({ durationSec: 6, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 3000 }));
+    `INSERT INTO projects (id, user_id, title, status, video_file, video_bytes, meta_json, frames_json, analysis_json)
+     VALUES (?, ?, 'test', 'complete', 'source.mp4', 3000, ?, '[]', '{}')`,
+  ).run(id, OWNER_TEST_ID, JSON.stringify({ durationSec: 6, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 3000 }));
   fs.mkdirSync(refsDir(id), { recursive: true });
   fs.mkdirSync(startDir(id), { recursive: true });
   fs.writeFileSync(path.join(projectDir(id), 'source.mp4'), Buffer.alloc(3000, 2));

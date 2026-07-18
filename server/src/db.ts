@@ -179,10 +179,40 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_generations_status ON generations(status);
     CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_events(project_id);
     CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_events(created_at);
+    -- v4: кредиты. Леджер append-only (баланс = SUM), payment_ref UNIQUE даёт
+    -- идемпотентность вебхука бесплатно. Холды отдельно: available = SUM(ledger) − open-холды.
+    CREATE TABLE IF NOT EXISTS credit_ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      delta_credits INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('purchase','charge','refund','adjust')),
+      hold_id TEXT,
+      generation_id TEXT,
+      project_id TEXT,
+      payment_ref TEXT,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS credit_holds (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      project_id TEXT NOT NULL,
+      generation_id TEXT,
+      credits INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','settled','released')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      closed_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_models_user ON models(user_id);
     CREATE INDEX IF NOT EXISTS idx_model_variants_model ON model_variants(model_id, idx);
     CREATE INDEX IF NOT EXISTS idx_model_refs_model ON model_refs(model_id, idx);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_payment ON credit_ledger(payment_ref) WHERE payment_ref IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_holds_user_open ON credit_holds(user_id) WHERE status = 'open';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_holds_one_open_per_project ON credit_holds(project_id) WHERE status = 'open';
   `);
 
   // Микромиграции v1 → v2

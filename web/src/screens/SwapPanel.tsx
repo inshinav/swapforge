@@ -2,9 +2,18 @@
 // Чистый проект предлагает кнопки МОДЕЛЕЙ пользователя (из конструктора) или «свои референсы».
 // После запуска — прогресс по стадиям с бегущей стоимостью и фактическими таймингами.
 import { useCallback, useEffect, useState } from 'react';
-import type { EstimateInfo, GenerationRow, ModelInfo, ProjectFull } from '@shared/api-types';
+import type {
+  EstimateForUser,
+  EstimateInfo,
+  GenerationRow,
+  ModelInfo,
+  ProjectFull,
+} from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
+
+type AnyEstimate = EstimateInfo | EstimateForUser;
+const isCreditEst = (e: AnyEstimate): e is EstimateForUser => 'kind' in e && e.kind === 'credits';
 
 /** Кнопка «Кто в кадре?» = вариант модели; собирается из ModelInfo на клиенте. */
 interface VariantButton {
@@ -58,7 +67,7 @@ export function SwapPanel({
   const [confirmUnknown, setConfirmUnknown] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState<string | null>(null);
-  const [est, setEst] = useState<EstimateInfo | null>(null);
+  const [est, setEst] = useState<AnyEstimate | null>(null);
   const [estErr, setEstErr] = useState<string | null>(null);
   const [buttons, setButtons] = useState<VariantButton[] | null>(null); // null = грузятся
 
@@ -187,7 +196,7 @@ export function SwapPanel({
             </div>
 
             <EstimateLine est={est} err={estErr} onRefresh={loadEstimate} />
-            {est?.wavespeed.usd === null && (
+            {est && !isCreditEst(est) && est.wavespeed.usd === null && (
               <label className="flex items-center gap-2 text-xs text-warn cursor-pointer">
                 <input
                   type="checkbox"
@@ -339,7 +348,7 @@ function EstimateLine({
   err,
   onRefresh,
 }: {
-  est: EstimateInfo | null;
+  est: AnyEstimate | null;
   err: string | null;
   onRefresh: () => void;
 }) {
@@ -350,6 +359,34 @@ function EstimateLine({
         <Spinner size={14} /> считаю смету по живым тарифам…
       </div>
     );
+  // Не-владелец: смета и баланс в кредитах, USD в его мире не существует
+  if (isCreditEst(est)) {
+    const short = est.credits !== null && est.credits > est.balanceCredits;
+    return (
+      <div className="rounded-xl border border-line bg-panel2 px-4 py-3 text-sm space-y-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-bold text-base">
+            {est.credits !== null ? `≈ ${est.credits} кредитов` : 'смета недоступна'}
+            {est.approximate && est.credits !== null ? ' (примерно)' : ''}
+          </span>
+          <span className={short ? 'text-danger font-semibold' : 'text-mut'}>
+            доступно {est.balanceCredits}
+          </span>
+          <span className="text-dim text-xs">спишется по факту, не больше сметы</span>
+          <button type="button" onClick={onRefresh} className="text-xs text-dim hover:text-lime ml-auto">
+            ↻ обновить
+          </button>
+        </div>
+        {est.warnings.length > 0 && (
+          <ul className="text-xs text-warn space-y-0.5">
+            {est.warnings.map((w) => (
+              <li key={w}>• {w}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
   const ws = est.wavespeed;
   return (
     <div className="rounded-xl border border-line bg-panel2 px-4 py-3 text-sm space-y-1.5">
@@ -464,6 +501,11 @@ function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow 
               : run.wavespeedEstUsd !== null
                 ? ` · WaveSpeed ≈$${run.wavespeedEstUsd.toFixed(2)} (по завершении — факт)`
                 : ''}
+          </span>
+        )}
+        {!run && proj.costs.heldCredits != null && (
+          <span className="text-mut">
+            зарезервировано {proj.costs.heldCredits} кредитов — спишется по факту, не больше резерва
           </span>
         )}
         <span className="text-dim ml-auto">страницу можно закрыть — свап продолжится на сервере</span>

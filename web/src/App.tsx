@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { HealthInfo, MeInfo, PricingInfo, UsageSummary } from '@shared/api-types';
+import type { CreditBalanceInfo, HealthInfo, MeInfo, PricingInfo, UsageSummary } from '@shared/api-types';
 import { ApiError, api } from './api';
 import NewSwap from './screens/NewSwap';
 import Library from './screens/Library';
 import Login from './screens/Login';
 import Models from './screens/Models';
+import Billing from './screens/Billing';
 import { Spinner } from './ui';
 
-type View = 'new' | 'models' | 'library';
+type View = 'new' | 'models' | 'library' | 'billing';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
@@ -20,6 +21,7 @@ export default function App() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [pricing, setPricing] = useState<PricingInfo | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [credits, setCredits] = useState<CreditBalanceInfo | null>(null);
 
   const loadSession = useCallback(() => {
     api
@@ -42,6 +44,8 @@ export default function App() {
     if (isOwner) {
       api.pricing().then(setPricing).catch(() => setPricing(null));
       api.usageSummary().then(setUsage).catch(() => setUsage(null));
+    } else {
+      api.creditBalance().then(setCredits).catch(() => setCredits(null));
     }
   }, [view, session, isOwner]);
 
@@ -89,6 +93,11 @@ export default function App() {
           <TabBtn active={view === 'library'} onClick={() => setView('library')}>
             Библиотека
           </TabBtn>
+          {!isOwner && (
+            <TabBtn active={view === 'billing'} onClick={() => setView('billing')}>
+              Баланс
+            </TabBtn>
+          )}
         </nav>
         <div className="flex-1" />
         {health && health.keyPresent === false && (
@@ -116,6 +125,8 @@ export default function App() {
           />
         ) : view === 'models' ? (
           <Models />
+        ) : view === 'billing' ? (
+          <Billing />
         ) : (
           <Library onOpen={openProject} />
         )}
@@ -149,6 +160,12 @@ export default function App() {
         )}
         {isOwner && pricing?.litellmFetchedAt && (
           <span>тарифы от {pricing.litellmFetchedAt.slice(0, 10)}</span>
+        )}
+        {!isOwner && credits && (
+          <span className={credits.available <= 0 ? 'text-warn' : ''}>
+            баланс: {credits.available} кредитов
+            {credits.held > 0 ? ` (+${credits.held} в резерве)` : ''}
+          </span>
         )}
         <span className="ml-auto">SwapForge · INSHIN LAB</span>
       </footer>

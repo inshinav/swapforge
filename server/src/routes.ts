@@ -7,6 +7,9 @@ import { config, llmKeyPresent, llmModelName } from './config';
 import { getDb } from './db';
 import { registerAuthRoutes } from './auth/routes';
 import { registerModelRoutes } from './routes-models';
+import { registerBillingRoutes } from './billing/routes';
+import { openHoldForProject, placeHold, priceCredits } from './billing/credits';
+import { releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
 import { requireOwner } from './auth/middleware';
 import { applyModelVariant } from './models';
 import { ffmpegAvailable, probe } from './ffmpeg';
@@ -108,6 +111,7 @@ let ffmpegOk: boolean | null = null;
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerAuthRoutes(app);
   registerModelRoutes(app);
+  registerBillingRoutes(app);
 
   // Публичный health минимален (аноним видит только «жив + версия + имя auth-бота»);
   // операторские поля (модель/диск/ключи) — владельцу.
@@ -160,7 +164,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     try {
-      return await buildEstimate(p);
+      const est = await buildEstimate(p);
+      // Не-владельцу — только кредиты: USD оператора не существует в его мире
+      return req.user!.role === 'owner' ? est : toUserEstimate(est, req.user!.id);
     } catch (e) {
       return bad(reply, 502, `Смета недоступна: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -224,7 +230,23 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
-    return toFull(p);
+    const full = toFull(p);
+    // Не-владельцу USD не существует: счётчики нулятся, из генераций вычищаются
+    // цены; вместо них — открытый кредитный резерв (спишется по факту)
+    if (req.user!.role !== 'owner') {
+      full.costs = {
+        projectUsd: 0,
+        activeRun: null,
+        heldCredits: openHoldForProject(id)?.credits ?? null,
+      };
+      full.generations = full.generations.map((g) => ({
+        ...g,
+        costEst: null,
+        costActualUsd: null,
+        costSource: null,
+      }));
+    }
+    return full;
   });
 
   app.delete('/api/projects/:id', async (req, reply) => {
@@ -235,6 +257,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (projectHasActiveGeneration(id)) {
       return bad(reply, 409, 'Идёт рендер этого проекта — дождись окончания');
     }
+    // Открытый кредитный резерв возвращается (LLM-часть списывается) ДО удаления строк
+    releaseHoldForDeletedProject(id);
     getDb().prepare(`DELETE FROM projects WHERE id = ?`).run(id);
     deleteProjectFiles(id);
     return { ok: true };
@@ -321,10 +345,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         body.generateAudio === undefined ? parseGenerateAudio(p.flags_json) : !!body.generateAudio,
     });
 
-    // Гвард запуска по деньгам: смета WaveSpeed против живого баланса
+    // Гвард запуска по деньгам: смета WaveSpeed против живого баланса ОПЕРАТОРА
+    // (работает для всех: пустой баланс сервиса не запускает даже богатого кредитами).
+    // Тексты для не-владельца — без USD.
+    const isOwner = req.user!.role === 'owner';
     const draft = { ...p, flags_json: flagsJson };
     const est = await buildEstimate(draft);
     if (est.wavespeed.usd === null) {
+      if (!isOwner) {
+        return bad(reply, 409, 'Смета временно недоступна — попробуй чуть позже');
+      }
       if (!body.confirmUnknownCost) {
         return bad(reply, 409, `Оценка WaveSpeed недоступна (${est.wavespeed.unavailableReason ?? '?'}) — подтверди запуск явно`);
       }
@@ -332,8 +362,23 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return bad(
         reply,
         409,
-        `Не хватает баланса WaveSpeed: рендер ≈ $${est.wavespeed.usd.toFixed(2)}, на счету $${est.balanceUsd.toFixed(2)} — пополни и жми ещё раз`,
+        isOwner
+          ? `Не хватает баланса WaveSpeed: рендер ≈ $${est.wavespeed.usd.toFixed(2)}, на счету $${est.balanceUsd.toFixed(2)} — пополни и жми ещё раз`
+          : 'Рендер временно недоступен на стороне сервиса — попробуй позже, кредиты не списаны',
       );
+    }
+
+    // Кредитный резерв не-владельца на ВЕСЬ флоу (перечитка баланса — внутри sync-транзакции)
+    if (!isOwner) {
+      const holdCredits = priceCredits(est.totalUsd ?? est.wavespeed.usd ?? 0);
+      const hold = placeHold(req.user!.id, id, holdCredits);
+      if (!hold.ok) {
+        return bad(
+          reply,
+          402,
+          `Не хватает кредитов: нужно ≈ ${hold.needCredits}, доступно ${hold.availableCredits} — пополни на вкладке «Баланс»`,
+        );
+      }
     }
 
     getDb()
@@ -364,7 +409,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     } else {
       advanceFlow(id);
     }
-    return { ok: true, estimate: est };
+    return { ok: true, estimate: isOwner ? est : toUserEstimate(est, req.user!.id) };
   });
 
   // Точечное обновление флагов без запуска (сейчас — режим звука «под капотом»)

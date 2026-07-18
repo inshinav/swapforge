@@ -146,14 +146,16 @@ export interface ModelInfo {
 }
 
 export interface ProjectCosts {
-  /** Всего по проекту: LLM (usage_events) + фактические списания рендеров. */
+  /** Всего по проекту: LLM (usage_events) + фактические списания рендеров. Не-владельцу всегда 0. */
   projectUsd: number;
-  /** Бегущий счётчик активного one-click прогона (null, если флоу не запускался). */
+  /** Бегущий счётчик активного one-click прогона (null для не-владельца — у него кредиты). */
   activeRun: {
     openaiUsd: number;
     wavespeedEstUsd: number | null;
     wavespeedActualUsd: number | null;
   } | null;
+  /** Для не-владельца: открытый кредитный резерв проекта (null = нет). */
+  heldCredits?: number | null;
 }
 
 export interface ProjectSummary {
@@ -215,6 +217,40 @@ export interface EstimateInfo {
   approximate: boolean;
   balanceUsd: number | null;
   warnings: string[];
+}
+
+/** Смета для НЕ-владельца: только кредиты, USD в payload не существует. */
+export interface EstimateForUser {
+  kind: 'credits';
+  stages: string[];
+  /** Смета в кредитах (null = живые тарифы недоступны — запуск не дадим). */
+  credits: number | null;
+  /** Доступно юзеру (баланс минус открытые резервы). */
+  balanceCredits: number;
+  approximate: boolean;
+  warnings: string[];
+}
+
+export interface CreditBalanceInfo {
+  balance: number;
+  held: number;
+  available: number;
+}
+
+export interface CreditLedgerEntry {
+  id: string;
+  delta: number;
+  kind: 'purchase' | 'charge' | 'refund' | 'adjust';
+  note: string;
+  createdAt: string;
+}
+
+export interface CreditPackInfo {
+  id: string;
+  title: string;
+  credits: number;
+  priceLabel: string;
+  url: string;
 }
 
 export interface PricingInfo {

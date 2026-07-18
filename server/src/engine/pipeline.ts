@@ -10,6 +10,7 @@ import { findSimilarWorked } from './similar';
 import { generateStartFrame } from './startframe';
 import { nextStageOf, parseFlags, snapshotProject, type FlowFlags } from './orchestrator';
 import { startRender } from './render';
+import { releaseFlowHoldOnFailure } from '../billing/flow';
 import { randomUUID } from 'node:crypto';
 import type { Analysis } from '../../../shared/analysis';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
@@ -68,6 +69,7 @@ export function startStoryboard(projectId: string): void {
         .run(JSON.stringify(frames), projectId);
     },
     onSuccess: () => advanceFlow(projectId),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -91,6 +93,7 @@ export function startAnalysis(projectId: string): void {
         .run(JSON.stringify(analysis), JSON.stringify(analysis.tags), projectId);
     },
     onSuccess: () => advanceFlow(projectId),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -158,6 +161,7 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
       }
     },
     onSuccess: () => advanceFlow(projectId),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -189,6 +193,7 @@ export function startStartframe(projectId: string, version: number): void {
       });
     },
     onSuccess: () => advanceFlow(projectId),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -237,5 +242,6 @@ export function advanceFlow(projectId: string): void {
       `Авто-флоу остановлен на стадии «${stage}»: ${msg}`.slice(0, 500),
       projectId,
     );
+    releaseFlowHoldOnFailure(projectId, `флоу остановлен на «${stage}»`);
   }
 }

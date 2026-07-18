@@ -47,6 +47,13 @@ export const config = {
   cookiePath: env('COOKIE_PATH', '/swapforge'),
   /** Дев-вход без Telegram (localhost не привязать к BotFather). Запрещён в prod. */
   devAuthBypass: env('AUTH_DEV_BYPASS') === '1',
+  // ── v4: кредиты/биллинг ──────────────────────────────────────────────────
+  /** 1 кредит = 1 «цена-цент»: priceCredits(usd) = ceil(usd × markup × 100). */
+  creditMarkup: Number(env('CREDIT_MARKUP', '2')),
+  /** API-ключ Tribute: подпись вебхука (trbt-signature = HMAC-SHA256 тела). Вставляет Alex. */
+  tributeApiKey: env('TRIBUTE_API_KEY'),
+  /** Пакеты кредитов: [{id,title,credits,priceLabel,url,tributeProductId}] — см. billing/packs.ts. */
+  packsJson: env('SWAPFORGE_PACKS_JSON', '[]'),
 };
 
 /**

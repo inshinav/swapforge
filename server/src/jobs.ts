@@ -76,6 +76,8 @@ export function enqueueProjectJob(opts: {
   fn: () => Promise<void>;
   /** Хук авто-флоу: зовётся ПОСЛЕ записи doneStatus; его ошибки не роняют джобу. */
   onSuccess?: () => void;
+  /** Хук падения стадии (после записи error-статуса); ошибки хука не роняют очередь. */
+  onError?: (msg: string) => void;
 }): void {
   const db = getDb();
   db.prepare(`UPDATE projects SET status = ?, error = NULL WHERE id = ?`).run(
@@ -102,6 +104,13 @@ export function enqueueProjectJob(opts: {
           msg.slice(0, 500),
           opts.projectId,
         );
+        if (opts.onError) {
+          try {
+            opts.onError(msg);
+          } catch (hookErr) {
+            console.error(`[jobs] onError ${opts.label} (${opts.projectId}):`, hookErr);
+          }
+        }
         return;
       }
       if (opts.onSuccess) {

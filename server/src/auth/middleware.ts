@@ -19,6 +19,8 @@ export const PUBLIC_API_PATHS = new Set<string>([
   '/api/auth/dev-login',
   // logout чистит СВОЮ httpOnly-cookie — работает и с протухшей сессией
   '/api/auth/logout',
+  // вебхук Tribute: его auth — HMAC-подпись trbt-signature, сессии у Tribute нет
+  '/api/billing/tribute/webhook',
 ]);
 
 export function attachAuth(req: FastifyRequest, _reply: FastifyReply, done: () => void): void {

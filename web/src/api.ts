@@ -1,5 +1,9 @@
 import type {
   AuthUser,
+  CreditBalanceInfo,
+  CreditLedgerEntry,
+  CreditPackInfo,
+  EstimateForUser,
   EstimateInfo,
   HealthInfo,
   MeInfo,
@@ -192,7 +196,13 @@ export const api = {
   modelFileUrl: (modelId: string, file: string) =>
     u(`api/models/${modelId}/file/${encodeURIComponent(file)}`),
   estimate: (id: string) =>
-    fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo>(r)),
+    fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo | EstimateForUser>(r)),
+
+  // ── v4: кредиты ──────────────────────────────────────────────────────────
+  creditBalance: () => fetch(u('api/billing/balance')).then((r) => j<CreditBalanceInfo>(r)),
+  creditLedger: () =>
+    fetch(u('api/billing/ledger')).then((r) => j<{ entries: CreditLedgerEntry[] }>(r)),
+  creditPacks: () => fetch(u('api/billing/packs')).then((r) => j<CreditPackInfo[]>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',

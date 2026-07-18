@@ -44,13 +44,17 @@ async function warmPricing(): Promise<void> {
   await getBalanceCached(priceWs, true);
 }
 
+// Легаси-тесты эмулируют владельца (unmetered) — кредиты живут в credits.test.ts
+const OWNER_TEST_ID = 'owner-presets-tests';
+getDb().prepare(`INSERT INTO users (id, telegram_id, role) VALUES (?, 4242, 'owner')`).run(OWNER_TEST_ID);
+
 function project(id = randomUUID()): string {
   getDb()
     .prepare(
-      `INSERT INTO projects (id, title, status, video_file, video_bytes, meta_json, frames_json, analysis_json)
-       VALUES (?, 'p', 'complete', 'source.mp4', 10, ?, '[]', '{}')`,
+      `INSERT INTO projects (id, user_id, title, status, video_file, video_bytes, meta_json, frames_json, analysis_json)
+       VALUES (?, ?, 'p', 'complete', 'source.mp4', 10, ?, '[]', '{}')`,
     )
-    .run(id, JSON.stringify({ durationSec: 6, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 10 }));
+    .run(id, OWNER_TEST_ID, JSON.stringify({ durationSec: 6, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 10 }));
   fs.mkdirSync(projectDir(id), { recursive: true });
   fs.writeFileSync(path.join(projectDir(id), 'source.mp4'), 'v');
   return id;
