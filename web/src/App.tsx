@@ -30,6 +30,7 @@ export default function App() {
   const [pricing, setPricing] = useState<PricingInfo | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [credits, setCredits] = useState<CreditBalanceInfo | null>(null);
+  const [billingNeed, setBillingNeed] = useState<number | null>(null);
 
   const loadSession = useCallback(() => {
     api
@@ -58,6 +59,11 @@ export default function App() {
     setView(next);
     if (window.location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }, []);
+
+  const openBilling = useCallback((needed?: number) => {
+    setBillingNeed(needed && needed > 0 ? Math.ceil(needed) : null);
+    go('billing');
+  }, [go]);
 
   const isOwner = session !== null && session !== 'anon' && session.user.role === 'owner';
 
@@ -118,7 +124,7 @@ export default function App() {
             Библиотека
           </TabBtn>
           {!isOwner && (
-            <TabBtn active={view === 'billing'} onClick={() => go('billing')}>
+            <TabBtn active={view === 'billing'} onClick={() => openBilling()}>
               Баланс
             </TabBtn>
           )}
@@ -149,11 +155,16 @@ export default function App() {
             projectId={projectId}
             onProjectCreated={openProject}
             onOpenModels={() => go('models')}
+            onOpenBilling={openBilling}
           />
         ) : view === 'models' ? (
           <Models />
         ) : view === 'billing' ? (
-          <Billing />
+          <Billing
+            neededCredits={billingNeed}
+            onBackToSwap={() => go('new')}
+            onBalanceChange={setCredits}
+          />
         ) : view === 'guide' ? (
           <Guide />
         ) : (
@@ -191,17 +202,25 @@ export default function App() {
           <span>тарифы от {pricing.litellmFetchedAt.slice(0, 10)}</span>
         )}
         {!isOwner && credits && (
-          <span className={credits.available <= 0 ? 'text-warn' : ''}>
+          <button
+            type="button"
+            onClick={() => openBilling()}
+            className={`${credits.available <= 0 ? 'text-warn' : ''} hover:text-lime transition-colors`}
+          >
             баланс: {credits.available} кредитов
             {credits.held > 0 ? ` (+${credits.held} в резерве)` : ''}
-          </span>
+          </button>
         )}
         <a href="legal/terms" className="hover:text-ink">условия</a>
         <a href="legal/privacy" className="hover:text-ink">конфиденциальность</a>
         <span className="ml-auto">SwapForge · INSHIN LAB · 18+</span>
       </footer>
 
-      <MobileNav view={view} isOwner={isOwner} onChange={go} />
+      <MobileNav
+        view={view}
+        isOwner={isOwner}
+        onChange={(next) => (next === 'billing' ? openBilling() : go(next))}
+      />
     </div>
   );
 }

@@ -9,7 +9,7 @@ import type {
   ModelInfo,
   ProjectFull,
 } from '@shared/api-types';
-import { api } from '../api';
+import { ApiError, api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 type AnyEstimate = EstimateInfo | EstimateForUser;
@@ -52,6 +52,7 @@ export function SwapPanel({
   custom,
   onCustom,
   onOpenModels,
+  onOpenBilling,
 }: {
   proj: ProjectFull;
   reload: () => void;
@@ -60,6 +61,8 @@ export function SwapPanel({
   onCustom: () => void;
   /** Переход в конструктор «Мои модели» (пустой стейт кнопок). */
   onOpenModels: () => void;
+  /** Прямой переход из нехватки кредитов к подходящему пакету. */
+  onOpenBilling: (needed: number) => void;
 }) {
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
@@ -69,6 +72,7 @@ export function SwapPanel({
   const [confirmUnknown, setConfirmUnknown] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState<string | null>(null);
+  const [launchShortfall, setLaunchShortfall] = useState<number | null>(null);
   const [est, setEst] = useState<AnyEstimate | null>(null);
   const [estErr, setEstErr] = useState<string | null>(null);
   const [buttons, setButtons] = useState<VariantButton[] | null>(null); // null = грузятся
@@ -105,6 +109,7 @@ export function SwapPanel({
   const launch = async (variantId?: string) => {
     setLaunching(true);
     setLaunchErr(null);
+    setLaunchShortfall(null);
     try {
       // звук НЕ шлём: сервер берёт сохранённую настройку проекта — проп proj.flags
       // между поллингами может быть протухшим, а платный рендер должен уйти с актуальной
@@ -117,6 +122,9 @@ export function SwapPanel({
       reload();
     } catch (e) {
       setLaunchErr(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.status === 402 && est && isCreditEst(est) && est.credits !== null) {
+        setLaunchShortfall(Math.max(1, est.credits - est.balanceCredits));
+      }
     } finally {
       setLaunching(false);
     }
@@ -223,7 +231,12 @@ export function SwapPanel({
               )}
             </div>
 
-            <EstimateLine est={est} err={estErr} onRefresh={loadEstimate} />
+            <EstimateLine
+              est={est}
+              err={estErr}
+              onRefresh={loadEstimate}
+              onOpenBilling={onOpenBilling}
+            />
             {est && !isCreditEst(est) && est.wavespeed.usd === null && (
               <label className="flex items-center gap-2 text-xs text-warn cursor-pointer">
                 <input
@@ -328,7 +341,16 @@ export function SwapPanel({
                 )}
               </div>
             )}
-            {launchErr && <ErrorNote text={launchErr} />}
+            {launchErr && (
+              <div className="space-y-2">
+                <ErrorNote text={launchErr} />
+                {launchShortfall && (
+                  <Button kind="primary" onClick={() => onOpenBilling(launchShortfall)}>
+                    Пополнить на {launchShortfall} кредитов
+                  </Button>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -375,10 +397,12 @@ function EstimateLine({
   est,
   err,
   onRefresh,
+  onOpenBilling,
 }: {
   est: AnyEstimate | null;
   err: string | null;
   onRefresh: () => void;
+  onOpenBilling: (needed: number) => void;
 }) {
   if (err) return <ErrorNote text={`Смета недоступна: ${err}`} onRetry={onRefresh} />;
   if (!est)
@@ -390,6 +414,7 @@ function EstimateLine({
   // Не-владелец: смета и баланс в кредитах, USD в его мире не существует
   if (isCreditEst(est)) {
     const short = est.credits !== null && est.credits > est.balanceCredits;
+    const shortfall = est.credits !== null ? Math.max(0, est.credits - est.balanceCredits) : 0;
     return (
       <div className="rounded-xl border border-line bg-panel2 px-4 py-3 text-sm space-y-1.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -411,6 +436,11 @@ function EstimateLine({
               <li key={w}>• {w}</li>
             ))}
           </ul>
+        )}
+        {short && shortfall > 0 && (
+          <Button kind="primary" className="w-full sm:w-auto" onClick={() => onOpenBilling(shortfall)}>
+            Пополнить на {shortfall} кредитов
+          </Button>
         )}
       </div>
     );

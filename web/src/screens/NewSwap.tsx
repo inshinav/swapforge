@@ -142,10 +142,12 @@ export default function NewSwap({
   projectId,
   onProjectCreated,
   onOpenModels,
+  onOpenBilling,
 }: {
   projectId: string | null;
   onProjectCreated: (id: string) => void;
   onOpenModels: () => void;
+  onOpenBilling: (needed: number) => void;
 }) {
   const { proj, err, reload } = useProject(projectId);
 
@@ -174,7 +176,15 @@ export default function NewSwap({
       </div>
     );
 
-  return <ProjectView proj={proj} reload={reload} onProjectCreated={onProjectCreated} onOpenModels={onOpenModels} />;
+  return (
+    <ProjectView
+      proj={proj}
+      reload={reload}
+      onProjectCreated={onProjectCreated}
+      onOpenModels={onOpenModels}
+      onOpenBilling={onOpenBilling}
+    />
+  );
 }
 
 function ProjectView({
@@ -182,11 +192,13 @@ function ProjectView({
   reload,
   onProjectCreated,
   onOpenModels,
+  onOpenBilling,
 }: {
   proj: ProjectFull;
   reload: () => void;
   onProjectCreated: (id: string) => void;
   onOpenModels: () => void;
+  onOpenBilling: (needed: number) => void;
 }) {
   // Пресетный проект: рефы подложены кнопкой — секция референсов уезжает «под капот»,
   // главный сценарий остаётся бесшовным. «Свои референсы» раскрывает её обратно.
@@ -198,7 +210,14 @@ function ProjectView({
     <div className="space-y-5 sf-in">
       <VideoSection proj={proj} reload={reload} onNew={() => onProjectCreated('')} />
       {refsInMain && <RefsSection proj={proj} reload={reload} />}
-      <SwapPanel proj={proj} reload={reload} custom={refsInMain} onCustom={() => setCustom(true)} onOpenModels={onOpenModels} />
+      <SwapPanel
+        proj={proj}
+        reload={reload}
+        custom={refsInMain}
+        onCustom={() => setCustom(true)}
+        onOpenModels={onOpenModels}
+        onOpenBilling={onOpenBilling}
+      />
       <RenderPanel proj={proj} reload={reload} />
       <UnderTheHood proj={proj} reload={reload} showRefs={presetRefs && !custom} />
     </div>
