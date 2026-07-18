@@ -48,6 +48,8 @@ export async function requireApiAuth(req: FastifyRequest, reply: FastifyReply): 
   const url = (req.raw.url ?? req.url).split('?')[0]!;
   if (!url.startsWith('/api/')) return;
   if (PUBLIC_API_PATHS.has(url)) return;
+  // цены пакетов видны анониму (лендинг показывает их до входа); ничего приватного там нет
+  if (url === '/api/billing/packs' && req.method === 'GET') return;
   if (!req.user) {
     return reply.code(401).send({ error: 'Требуется вход через Telegram' });
   }

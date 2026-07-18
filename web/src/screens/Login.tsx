@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { HealthInfo, TgWidgetPayload } from '@shared/api-types';
-import { api } from '../api';
+import type { CreditPackInfo, HealthInfo, TgWidgetPayload } from '@shared/api-types';
+import { api, appBase } from '../api';
 import { Card, ErrorNote, Spinner } from '../ui';
 
 declare global {
@@ -15,12 +15,14 @@ declare global {
  */
 export default function Login({ onAuthed }: { onAuthed: () => void }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [packs, setPacks] = useState<CreditPackInfo[]>([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const widgetRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
+    api.creditPacks().then(setPacks).catch(() => setPacks([]));
   }, []);
 
   useEffect(() => {
@@ -73,6 +75,11 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
               Твоя AI-модель — в любом ролике. Загрузи референсы один раз, кидай видео и
               получай чистый свап: мир, свет и движение исходника нетронуты.
             </p>
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-3 text-[11px] text-dim">
+              <span>⚡ свап в один клик</span>
+              <span>🎯 identity держится</span>
+              <span>💳 цена видна до запуска</span>
+            </div>
           </div>
 
           {health === null && <Spinner />}
@@ -106,8 +113,25 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
             </div>
           )}
 
+          {packs.length > 0 && (
+            <div className="w-full">
+              <div className="text-xs text-mut mb-1.5">Пакеты кредитов</div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {packs.slice(0, 3).map((p) => (
+                  <div key={p.id} className="rounded-lg border border-line bg-panel2 px-2 py-1.5">
+                    <div className="text-sm font-bold text-lime">{p.credits}</div>
+                    <div className="text-[10px] text-dim">{p.priceLabel}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <p className="text-[11px] text-dim leading-relaxed">
-            Входя, ты принимаешь условия сервиса. 18+.
+            Входя, ты принимаешь{' '}
+            <a href={`${appBase}legal/terms`} className="underline hover:text-ink">условия</a>,{' '}
+            <a href={`${appBase}legal/privacy`} className="underline hover:text-ink">конфиденциальность</a> и{' '}
+            <a href={`${appBase}legal/acceptable-use`} className="underline hover:text-ink">правила контента</a>. 18+.
           </p>
         </div>
       </Card>

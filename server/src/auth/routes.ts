@@ -108,6 +108,11 @@ export function registerAuthRoutes(app: FastifyInstance): void {
   });
 
   app.post('/api/auth/logout', async (req, reply) => {
+    // Кросс-сайтовый разлогин — мелкое неудобство, но отбиваем как остальные мутации
+    const site = req.headers['sec-fetch-site'];
+    if (typeof site === 'string' && site !== 'same-origin' && site !== 'same-site' && site !== 'none') {
+      return reply.code(403).send({ error: 'Кросс-сайтовый запрос отклонён' });
+    }
     const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? '';
     destroySession(raw);
     reply.header('Set-Cookie', clearCookies());

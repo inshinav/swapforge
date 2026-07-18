@@ -23,6 +23,7 @@ const {
 } = await import('../src/engine/render');
 _setPollBaseMs(5);
 const { grantPurchase, openHoldForProject, placeHold, creditBalance } = await import('../src/billing/credits');
+const { forceReleaseProjectHold, settleProjectHold } = await import('../src/billing/flow');
 const { consumeDailyLimit, dayKey } = await import('../src/limits');
 const { enforceStorageCap, projectDir, refsDir, startDir } = await import('../src/storage');
 const { config } = await import('../src/config');
@@ -172,6 +173,52 @@ describe('FIFO-очередь', () => {
     expect(creditBalance(u).held).toBe(0);
     expect(cancelQueued(gq)).toBe(false); // идемпотентно
     getDb().prepare(`UPDATE generations SET status='failed' WHERE status != 'failed'`).run();
+  });
+
+  it('кредиты: hold от /swap привязывается к рендеру и селтится по факту (не-владелец)', async () => {
+    const u = mkUser(7110);
+    grantPurchase(u, 100000, `ref-${randomUUID()}`, 'тест');
+    const p = readyProject(u);
+    // как /swap: резерв на весь флоу (generation_id пока null)
+    const hold = placeHold(u, p, 500);
+    expect(hold.ok).toBe(true);
+    const ws = fakeWs();
+    const g = startRender(p, 1, { ws, pollBaseMs: 5 }); // привязывает hold к g
+    expect(openHoldForProject(p)?.generation_id).toBe(g);
+    await until(() => genStatus(g) === 'done', 6000);
+    // единый финал закрыл hold по факту — резерв снят, кредиты списаны один раз
+    expect(openHoldForProject(p)).toBeUndefined();
+    expect(creditBalance(u).held).toBe(0);
+    expect(creditBalance(u).balance).toBeLessThan(100000);
+  });
+
+  it('F2: recheck-путь старого gen НЕ освобождает hold, переклеенный на retry-gen', () => {
+    const u = mkUser(7111);
+    grantPurchase(u, 100000, `ref-${randomUUID()}`, 'тест');
+    const p = readyProject(u);
+    placeHold(u, p, 500);
+    const db = getDb();
+    // gen1 «завис» failed с живым prediction_id (таймаут поллинга) — hold держится
+    const gen1 = randomUUID();
+    db.prepare(
+      `INSERT INTO generations (id, project_id, version, status, ws_prediction_id, user_id) VALUES (?, ?, 1, 'failed', 'pred-1', ?)`,
+    ).run(gen1, p, u);
+    // retry создал gen2 и переклеил hold на него (эмулируем attach как в startRender)
+    const gen2 = randomUUID();
+    db.prepare(
+      `INSERT INTO generations (id, project_id, version, status, ws_prediction_id, user_id) VALUES (?, ?, 1, 'submitted', 'pred-2', ?)`,
+    ).run(gen2, p, u);
+    db.prepare(`UPDATE credit_holds SET generation_id = ? WHERE project_id = ? AND status = 'open'`).run(gen2, p);
+
+    // recheck старого gen1 обнаружил WS-terminal fail → markFailed(gen1, wsTerminal)
+    // раньше это освобождало hold, принадлежащий gen2 (F2). Теперь — нет.
+    forceReleaseProjectHold(p, gen1, 'WaveSpeed отклонил задачу');
+    expect(openHoldForProject(p)?.status).toBe('open'); // hold gen2 цел
+
+    // gen2 дорендерился → settle списывает (ролик НЕ бесплатный)
+    settleProjectHold(p, gen2, 2.0);
+    expect(openHoldForProject(p)).toBeUndefined();
+    expect(creditBalance(u).balance).toBeLessThan(100000);
   });
 
   it('promoteNext на пустой очереди/занятом слоте — no-op', () => {

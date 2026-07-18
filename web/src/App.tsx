@@ -173,7 +173,9 @@ export default function App() {
             {credits.held > 0 ? ` (+${credits.held} в резерве)` : ''}
           </span>
         )}
-        <span className="ml-auto">SwapForge · INSHIN LAB</span>
+        <a href="legal/terms" className="hover:text-ink">условия</a>
+        <a href="legal/privacy" className="hover:text-ink">конфиденциальность</a>
+        <span className="ml-auto">SwapForge · INSHIN LAB · 18+</span>
       </footer>
     </div>
   );

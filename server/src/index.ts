@@ -9,6 +9,7 @@ import { warmPricing } from './pricing';
 import { resumeGenerations } from './engine/render';
 import { enforceStorageCap, sweepOrphanRefFiles } from './storage';
 import { purgeExpiredSessions } from './auth/sessions';
+import { reconcileOrphanHolds } from './billing/flow';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   // Рендеры переживают рестарт: submitted/rendering/downloading снова поллятся,
   // прерванные аплоады помечаются failed (ретрай дёшев — URL переиспользуются)
   resumeGenerations();
+  reconcileOrphanHolds(); // осиротевшие open-холды (краш между done и settle) — закрыть
   const swept = sweepOrphanRefFiles();
   if (swept) console.log(`[sweep] удалено файлов-сирот от оборванных загрузок: ${swept}`);
   const { purged } = enforceStorageCap();

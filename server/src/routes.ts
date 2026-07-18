@@ -9,7 +9,7 @@ import { registerAuthRoutes } from './auth/routes';
 import { registerModelRoutes } from './routes-models';
 import { registerBillingRoutes } from './billing/routes';
 import { openHoldForProject, placeHold, priceCredits } from './billing/credits';
-import { releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
+import { forceReleaseProjectHold, releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
 import { requireOwner } from './auth/middleware';
 import { applyModelVariant } from './models';
 import { ffmpegAvailable, probe } from './ffmpeg';
@@ -39,6 +39,7 @@ import {
   startRender,
 } from './engine/render';
 import { LIMIT_MESSAGE, consumeDailyLimit } from './limits';
+import { renderLegalPage } from './legal';
 import { nextStageOf, parseFlags, snapshotProject } from './engine/orchestrator';
 import { PRESETS, applyPreset, getPreset, presetFilePath } from './presets';
 import { classifyRef } from './engine/classify';
@@ -129,6 +130,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerAuthRoutes(app);
   registerModelRoutes(app);
   registerBillingRoutes(app);
+
+  // Юридические страницы: серверный HTML вне SPA (явный роут выигрывает у fallback-а)
+  app.get('/legal/:slug', async (req, reply) => {
+    const { slug } = req.params as { slug: string };
+    const html = renderLegalPage(slug);
+    if (!html) return bad(reply, 404, 'Страница не найдена');
+    reply.type('text/html; charset=utf-8');
+    return reply.send(html);
+  });
 
   // Публичный health минимален (аноним видит только «жив + версия + имя auth-бота»);
   // операторские поля (модель/диск/ключи) — владельцу.
@@ -405,6 +415,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    // Решаем, что запустим, ДО кредитного резерва: failed-ветка ниже возвращает 409
+    // без запуска работы — резерв там ставить нельзя (иначе кредиты повиснут, F1).
+    const snap = snapshotProject({ ...p, flags_json: flagsJson });
+    const stage = nextStageOf(snap);
+    if (stage === 'done' && snap.latestGenStatus !== 'done') {
+      // failed: авто-пересабмит запрещён (деньги) — направляем к безопасным кнопкам
+      return bad(
+        reply,
+        409,
+        'Рендер этой версии уже падал — в карточке ролика жми «Проверить ещё раз» (бесплатно) или «Повторить рендер»',
+      );
+    }
+
     // Кредитный резерв не-владельца на ВЕСЬ флоу (перечитка баланса — внутри sync-транзакции)
     if (!isOwner) {
       const holdCredits = priceCredits(est.totalUsd ?? est.wavespeed.usd ?? 0);
@@ -424,24 +447,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       )
       .run(flagsJson, id);
 
-    // Повторный свап с теми же галочками: nextStageOf говорит 'done', но смета обещала
-    // рендер — явный клик означает «прогнать ещё раз», запускаем рендер напрямую
-    const snap = snapshotProject({ ...p, flags_json: flagsJson });
-    if (nextStageOf(snap) === 'done') {
-      if (snap.latestGenStatus === 'done') {
-        try {
-          startRender(id, snap.latestVersion);
-        } catch (e) {
-          if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
-          throw e;
-        }
-      } else {
-        // failed: авто-пересабмит запрещён (деньги) — направляем к безопасным кнопкам
-        return bad(
-          reply,
-          409,
-          'Рендер этой версии уже падал — в карточке ролика жми «Проверить ещё раз» (бесплатно) или «Повторить рендер»',
-        );
+    // Повторный свап при готовом рендере ('done') — прямой рендер; иначе весь флоу.
+    // Если запуск рендера отбит гейтом — возвращаем резерв (работа не пошла, F1).
+    if (stage === 'done') {
+      try {
+        startRender(id, snap.latestVersion);
+      } catch (e) {
+        // рендер так и не стартовал (гейт/гонка) — возвращаем весь резерв
+        forceReleaseProjectHold(id, undefined, 'запуск рендера отклонён');
+        if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
+        throw e;
       }
     } else {
       advanceFlow(id);

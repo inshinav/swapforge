@@ -128,11 +128,11 @@ function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean } =
   const gen = loadGen(genId);
   if (!gen) return;
   if (!gen.ws_prediction_id) {
-    releaseFlowHoldOnFailure(gen.project_id, 'рендер не стартовал у WaveSpeed');
+    releaseFlowHoldOnFailure(gen.project_id, genId, 'рендер не стартовал у WaveSpeed');
   } else if (opts.wsTerminal) {
     // WS сам сказал failed — задача мертва, recoverable-гвард не применим: форс-релиз
     // (prediction_id сохраняем: retry делает защитный пре-полл, диагностика цела)
-    forceReleaseProjectHold(gen.project_id, 'WaveSpeed отклонил задачу');
+    forceReleaseProjectHold(gen.project_id, genId, 'WaveSpeed отклонил задачу');
   }
   promoteNext(); // слот освободился — очередь едет дальше
 }
@@ -255,6 +255,14 @@ export function startRender(projectId: string, version: number, opts: StartRende
     p.user_id,
   );
 
+  // Привязываем открытый резерв проекта к ЭТОЙ генерации сразу при создании: с этого
+  // момента только её жизненный цикл может закрыть hold. Retry создаёт новый gen и
+  // переклеивает hold на него → событие старого gen не тронет чужой резерв (F2).
+  if (p.user_id && isMeteredUserId(p.user_id)) {
+    const hold = openHoldForProject(projectId);
+    if (hold) attachHoldGeneration(hold.id, genId);
+  }
+
   // Смета на момент запуска — снапшотом в строку (фиксирует ожидание против факта)
   void (async () => {
     try {
@@ -339,7 +347,7 @@ export function cancelQueued(genId: string): boolean {
     .run(genId);
   if (Number(res.changes) === 0) return false;
   const gen = loadGen(genId);
-  if (gen) forceReleaseProjectHold(gen.project_id, 'рендер отменён из очереди');
+  if (gen) forceReleaseProjectHold(gen.project_id, genId, 'рендер отменён из очереди');
   return true;
 }
 

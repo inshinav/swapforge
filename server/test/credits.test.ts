@@ -22,6 +22,7 @@ const { getDb } = await import('../src/db');
 const {
   adjustCredits,
   applyRefund,
+  attachHoldGeneration,
   creditBalance,
   grantPurchase,
   openHoldForProject,
@@ -30,7 +31,9 @@ const {
   releaseHold,
   settleHold,
 } = await import('../src/billing/credits');
-const { releaseFlowHoldOnFailure, settleProjectHold, toUserEstimate } = await import('../src/billing/flow');
+const { reconcileOrphanHolds, releaseFlowHoldOnFailure, settleProjectHold, toUserEstimate } = await import(
+  '../src/billing/flow'
+);
 const { parseTributeEvent, verifyTributeSignature } = await import('../src/billing/tribute');
 const { makeAuthedApp } = await import('./helpers');
 import type { EstimateInfo } from '../../shared/api-types';
@@ -116,6 +119,8 @@ describe('hold/settle/release', () => {
     grantPurchase(u, 1000, `ref-${randomUUID()}`, 'тест');
     const h = placeHold(u, p, 500);
     if (!h.ok) throw new Error('hold не встал');
+    // hold привязан к генерации, как это делает startRender (иначе settle его не тронет)
+    attachHoldGeneration(h.holdId, 'gen-1');
     // LLM-расход ПОСЛЕ постановки hold-а (created_at свежее)
     getDb()
       .prepare(
@@ -126,6 +131,22 @@ describe('hold/settle/release', () => {
     settleProjectHold(p, 'gen-1', 1.89);
     // (1.89 + 0.10) × 2 × 100 = 398
     expect(creditBalance(u).balance).toBe(1000 - 398);
+  });
+
+  it('settle НЕ трогает hold, привязанный к ДРУГОЙ генерации (F2)', () => {
+    const u = mkUser(820);
+    const p = mkProject(u);
+    grantPurchase(u, 1000, `ref-${randomUUID()}`, 'тест');
+    const h = placeHold(u, p, 500);
+    if (!h.ok) throw new Error();
+    attachHoldGeneration(h.holdId, 'gen-new'); // hold переклеен на новый рендер
+    // финал СТАРОГО gen-old не должен закрыть чужой резерв
+    settleProjectHold(p, 'gen-old', 1.89);
+    expect(openHoldForProject(p)?.status).toBe('open');
+    expect(creditBalance(u).held).toBe(500);
+    // а финал правильной генерации — закрывает
+    settleProjectHold(p, 'gen-new', 1.0);
+    expect(openHoldForProject(p)).toBeUndefined();
   });
 });
 
@@ -142,7 +163,8 @@ describe('release-политика при фейлах', () => {
          VALUES (?, ?, ?, 'video_analysis', 'm', 0.05, datetime('now', '+1 second'))`,
       )
       .run(randomUUID(), p, u);
-    releaseFlowHoldOnFailure(p, 'анализ упал');
+    // стадия до рендера упала: flow-hold (generation_id=null) → genId=null
+    releaseFlowHoldOnFailure(p, null, 'анализ упал');
     // списано ceil(0.05×2×100)=10, остальное вернулось
     expect(creditBalance(u)).toEqual({ balance: 990, held: 0, available: 990 });
   });
@@ -153,16 +175,41 @@ describe('release-политика при фейлах', () => {
     grantPurchase(u, 1000, `ref-${randomUUID()}`, 'тест');
     const h = placeHold(u, p, 400);
     if (!h.ok) throw new Error();
+    const genId = randomUUID();
     getDb()
       .prepare(
         `INSERT INTO generations (id, project_id, version, status, ws_prediction_id, user_id) VALUES (?, ?, 1, 'failed', 'pred-1', ?)`,
       )
-      .run(randomUUID(), p, u);
-    releaseFlowHoldOnFailure(p, 'таймаут');
+      .run(genId, p, u);
+    attachHoldGeneration(h.holdId, genId);
+    releaseFlowHoldOnFailure(p, genId, 'таймаут');
     expect(openHoldForProject(p)?.status).toBe('open'); // hold жив до исхода задачи
     // задача добралась → settle срабатывает
-    settleProjectHold(p, 'gen-z', 1.0);
+    settleProjectHold(p, genId, 1.0);
     expect(openHoldForProject(p)).toBeUndefined();
+  });
+});
+
+describe('сверка осиротевших холдов на старте (F3)', () => {
+  it('open-hold на done-генерации закрывается по факту', () => {
+    const u = mkUser(830);
+    const p = mkProject(u);
+    grantPurchase(u, 1000, `ref-${randomUUID()}`, 'тест');
+    const h = placeHold(u, p, 500);
+    if (!h.ok) throw new Error();
+    const genId = randomUUID();
+    getDb()
+      .prepare(
+        `INSERT INTO generations (id, project_id, version, status, cost_actual_usd, user_id) VALUES (?, ?, 1, 'done', 1.5, ?)`,
+      )
+      .run(genId, p, u);
+    attachHoldGeneration(h.holdId, genId);
+    // краш случился между 'done' и settle → hold остался open
+    const fixed = reconcileOrphanHolds();
+    expect(fixed).toBeGreaterThanOrEqual(1);
+    expect(openHoldForProject(p)).toBeUndefined();
+    // списано ceil(1.5×2×100)=300 (cap 500 не превышен)
+    expect(creditBalance(u).balance).toBe(1000 - 300);
   });
 });
 
@@ -356,6 +403,41 @@ describe('изоляция USD от не-владельца', () => {
     expect(body).not.toMatch(/wavespeedUsd":[0-9]/);
     expect(body).not.toMatch(/projectUsd":[1-9]/);
     expect((res.json() as { costs: { heldCredits: number } }).costs.heldCredits).toBe(420);
+    await tenant.app.close();
+  });
+});
+
+describe('F1: /swap не оставляет висящий hold', () => {
+  it('failed-версия → 409 БЕЗ постановки резерва', async () => {
+    process.env.WAVESPEED_API_KEY = 'test-key';
+    const tenant = await makeAuthedApp(9601, 'F1-юзер');
+    grantPurchase(tenant.userId, 100000, `ref-${randomUUID()}`, 'тест');
+    const p = mkProject(tenant.userId);
+    getDb()
+      .prepare(
+        `UPDATE projects SET video_file='source.mp4', frames_json='[]', analysis_json='{}' WHERE id = ?`,
+      )
+      .run(p);
+    getDb().prepare(`INSERT INTO refs (id, project_id, idx, role, file) VALUES (?, ?, 0, 'model', 'ref_a.jpg')`).run(randomUUID(), p);
+    // версия промтов есть, но её единственный рендер — failed → nextStageOf='done' + latestGenStatus='failed'
+    getDb().prepare(`INSERT INTO prompts (id, project_id, version, kind, text, flags_json) VALUES (?, ?, 1, 'video', 'VP', '{}')`).run(randomUUID(), p);
+    getDb().prepare(`INSERT INTO prompts (id, project_id, version, kind, text, flags_json) VALUES (?, ?, 1, 'image', 'IP', '{}')`).run(randomUUID(), p);
+    fs.mkdirSync(path.join(process.env.DATA_DIR!, 'projects', p, 'start'), { recursive: true });
+    fs.writeFileSync(path.join(process.env.DATA_DIR!, 'projects', p, 'start', 'start_v1_2026-07-19T00-00-00.png'), 'png');
+    getDb()
+      .prepare(`INSERT INTO generations (id, project_id, version, status, ws_prediction_id, user_id) VALUES (?, ?, 1, 'failed', 'pred-x', ?)`)
+      .run(randomUUID(), p, tenant.userId);
+
+    const before = creditBalance(tenant.userId);
+    const res = await tenant.app.inject({
+      method: 'POST',
+      url: `/api/projects/${p}/swap`,
+      payload: { flags: { removeText: false, enhanceFigure: false } },
+    });
+    expect(res.statusCode).toBe(409);
+    // ГЛАВНОЕ (суть F1): ранний возврат не оставил висящего резерва — held не вырос
+    expect(creditBalance(tenant.userId)).toEqual(before);
+    expect(openHoldForProject(p)).toBeUndefined();
     await tenant.app.close();
   });
 });

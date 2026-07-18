@@ -69,7 +69,7 @@ export function startStoryboard(projectId: string): void {
         .run(JSON.stringify(frames), projectId);
     },
     onSuccess: () => advanceFlow(projectId),
-    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -93,7 +93,7 @@ export function startAnalysis(projectId: string): void {
         .run(JSON.stringify(analysis), JSON.stringify(analysis.tags), projectId);
     },
     onSuccess: () => advanceFlow(projectId),
-    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -161,7 +161,7 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
       }
     },
     onSuccess: () => advanceFlow(projectId),
-    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -193,7 +193,7 @@ export function startStartframe(projectId: string, version: number): void {
       });
     },
     onSuccess: () => advanceFlow(projectId),
-    onError: (msg) => releaseFlowHoldOnFailure(projectId, `стадия упала: ${msg.slice(0, 120)}`),
+    onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
   });
 }
 
@@ -242,6 +242,6 @@ export function advanceFlow(projectId: string): void {
       `Авто-флоу остановлен на стадии «${stage}»: ${msg}`.slice(0, 500),
       projectId,
     );
-    releaseFlowHoldOnFailure(projectId, `флоу остановлен на «${stage}»`);
+    releaseFlowHoldOnFailure(projectId, null, `флоу остановлен на «${stage}»`);
   }
 }
