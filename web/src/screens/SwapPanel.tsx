@@ -27,11 +27,8 @@ function variantButtons(models: ModelInfo[]): VariantButton[] {
   const out: VariantButton[] = [];
   for (const m of models) {
     for (const v of m.variants) {
-      const sheet =
-        m.refs.find((r) => r.variantId === v.id && r.role === 'model') ??
-        m.refs.find((r) => r.variantId === v.id) ??
-        m.refs.find((r) => r.role === 'model') ??
-        null;
+      const sheet = m.refs.find((r) => r.variantId === v.id && r.role === 'model');
+      if (!sheet) continue;
       out.push({
         variantId: v.id,
         label: m.variants.length > 1 ? `${m.name} · ${v.title}` : m.name,
