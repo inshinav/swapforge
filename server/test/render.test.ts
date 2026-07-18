@@ -353,11 +353,15 @@ describe('рендер: гейты', () => {
     expect(uploadLog.length).toBe(0); // деньги проверены раньше трафика
   });
 
-  it('второй рендер при активном → 409; после завершения — можно', async () => {
+  it('второй рендер при активном → в FIFO-очередь; повтор на том же проекте → 409', async () => {
     const pid = readyProject();
     const pid2 = readyProject();
     const ws = fakeWs({ pollScript: [{ status: 'processing' }] });
     startRender(pid, 1, { ws, pollBaseMs: 5 });
+    // чужой слот занят → не отказ, а очередь (v4)
+    const queued = startRender(pid2, 1, { ws, pollBaseMs: 5 });
+    expect(genRow(queued)!.status).toBe('queued');
+    // а вот второй рендер ТОГО ЖЕ проекта — по-прежнему 409
     expect(() => startRender(pid2, 1, { ws })).toThrow(RenderGateError);
     try {
       startRender(pid2, 1, { ws });
@@ -365,6 +369,7 @@ describe('рендер: гейты', () => {
       expect((e as InstanceType<typeof RenderGateError>).httpStatus).toBe(409);
     }
     finishActive();
+    getDb().prepare(`UPDATE generations SET status='failed', error='cleanup' WHERE status = 'queued'`).run();
   });
 
   it('нет промтов/старт-кадра/исходника → говорящие 409', () => {
@@ -504,9 +509,8 @@ describe('роуты: rating-мост и ручной рендер', () => {
     await app.close();
   });
 
-  it('POST /projects/:id/generations запускает ручной рендер; активный гейт → 409', async () => {
+  it('POST /projects/:id/generations при чужом активном рендере → задача в очереди (v4)', async () => {
     const { app, own } = await makeAuthedApp();
-    // все прайс-кэши в памяти уже тёплые от предыдущих тестов не нужны — рендер их не требует
     const pid = readyProject();
     own(pid);
     getDb()
@@ -514,9 +518,15 @@ describe('роуты: rating-мост и ручной рендер', () => {
         `INSERT INTO generations (id, project_id, version, status, params_json) VALUES (?, ?, 1, 'rendering', '{}')`,
       )
       .run(randomUUID(), readyProject());
-    const blocked = await app.inject({ method: 'POST', url: `/api/projects/${pid}/generations`, payload: {} });
-    expect(blocked.statusCode).toBe(409);
+    const res = await app.inject({ method: 'POST', url: `/api/projects/${pid}/generations`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    const genId = (JSON.parse(res.body) as { id: string }).id;
+    expect(genRow(genId)!.status).toBe('queued');
+    // повторный запуск того же проекта, пока задача в очереди — 409
+    const again = await app.inject({ method: 'POST', url: `/api/projects/${pid}/generations`, payload: {} });
+    expect(again.statusCode).toBe(409);
     finishActive();
+    getDb().prepare(`UPDATE generations SET status='failed', error='cleanup' WHERE status = 'queued'`).run();
     await app.close();
   });
 

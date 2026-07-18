@@ -194,6 +194,15 @@ export function applySchema(d: DatabaseSync): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- v4: дневные анти-абьюз счётчики (kind: projects/classify/describe/manual_llm).
+    CREATE TABLE IF NOT EXISTS usage_counters (
+      user_id TEXT NOT NULL,
+      day TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, day, kind)
+    );
+
     CREATE TABLE IF NOT EXISTS credit_holds (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id),

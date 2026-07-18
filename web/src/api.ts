@@ -215,6 +215,8 @@ export const api = {
     post(u(`api/generations/${genId}/retry`)).then((r) => j<{ id: string }>(r)),
   genRecheck: (genId: string) =>
     post(u(`api/generations/${genId}/recheck`)).then((r) => j<{ status: string }>(r)),
+  genCancelQueue: (genId: string) =>
+    post(u(`api/generations/${genId}/cancel-queue`)).then((r) => j<{ ok: true }>(r)),
   genRate: (genId: string, body: { rating: 1 | -1; artifacts: string[]; notes: string }) =>
     post(u(`api/generations/${genId}/rating`), body).then((r) => j<{ ok: true }>(r)),
   pricing: () => fetch(u('api/pricing')).then((r) => j<PricingInfo>(r)),

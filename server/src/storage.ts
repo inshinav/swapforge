@@ -101,7 +101,7 @@ export function enforceStorageCap(): { purged: string[]; purgedRenders: string[]
          AND status NOT IN ('storyboarding', 'analyzing', 'generating', 'startframing')
          AND id NOT IN (
            SELECT project_id FROM generations
-            WHERE status IN ('uploading_assets','submitted','rendering','downloading')
+            WHERE status IN ('queued','uploading_assets','submitted','rendering','downloading')
          )
        ORDER BY created_at ASC`,
     )
@@ -170,6 +170,29 @@ export function sweepOrphanRefFiles(): number {
 export function deleteProjectFiles(id: string): void {
   fs.rmSync(projectDir(id), { recursive: true, force: true });
   usageCache = null;
+}
+
+// ── v4: персональный кап хранилища ──────────────────────────────────────────
+
+const userUsageCache = new Map<string, { at: number; bytes: number }>();
+
+/** Суммарный вес проектов + моделей пользователя (кэш 60с на юзера). */
+export function userUsageBytes(userId: string, force = false): number {
+  const hit = userUsageCache.get(userId);
+  if (!force && hit && Date.now() - hit.at < 60_000) return hit.bytes;
+  const db = getDb();
+  let bytes = 0;
+  const projects = db.prepare(`SELECT id FROM projects WHERE user_id = ?`).all(userId) as Array<{ id: string }>;
+  for (const p of projects) bytes += dirSize(projectDir(p.id));
+  const models = db.prepare(`SELECT id FROM models WHERE user_id = ?`).all(userId) as Array<{ id: string }>;
+  for (const m of models) bytes += dirSize(modelDir(m.id));
+  userUsageCache.set(userId, { at: Date.now(), bytes });
+  return bytes;
+}
+
+/** Сброс кэша юзера после загрузок/удалений (следующий замер — честный). */
+export function invalidateUserUsage(userId: string): void {
+  userUsageCache.delete(userId);
 }
 
 /** Безопасное имя файла внутри каталога проекта (без путей от пользователя). */

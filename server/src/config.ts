@@ -54,6 +54,17 @@ export const config = {
   tributeApiKey: env('TRIBUTE_API_KEY'),
   /** Пакеты кредитов: [{id,title,credits,priceLabel,url,tributeProductId}] — см. billing/packs.ts. */
   packsJson: env('SWAPFORGE_PACKS_JSON', '[]'),
+  // ── v4: лимиты/квоты (владелец exempt везде) ─────────────────────────────
+  /** Персональный кап хранилища не-владельца (проекты + модели). */
+  userStorageCapBytes: Number(env('USER_STORAGE_CAP_GB', '3')) * 1024 ** 3,
+  /** Очередь рендеров: максимум queued-задач на пользователя. */
+  userQueueCap: Number(env('USER_QUEUE_CAP', '2')),
+  /** Дневные анти-абьюз капы (UTC-сутки). */
+  limitProjectsPerDay: Number(env('LIMIT_PROJECTS_PER_DAY', '20')),
+  limitClassifyPerDay: Number(env('LIMIT_CLASSIFY_PER_DAY', '60')),
+  limitDescribePerDay: Number(env('LIMIT_DESCRIBE_PER_DAY', '30')),
+  /** Общий кап ручных LLM-роутов (analyze/generate/iterate/startframe «под капотом»). */
+  limitManualLlmPerDay: Number(env('LIMIT_MANUAL_LLM_PER_DAY', '40')),
 };
 
 /**

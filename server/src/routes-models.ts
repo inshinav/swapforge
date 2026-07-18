@@ -21,7 +21,8 @@ import {
 } from './models';
 import { describeRefSheet } from './engine/describe';
 import { getDb } from './db';
-import { modelRefsDir, safeModelRefPath } from './storage';
+import { invalidateUserUsage, modelRefsDir, safeModelRefPath, userUsageBytes } from './storage';
+import { LIMIT_MESSAGE, consumeDailyLimit } from './limits';
 import { probe } from './ffmpeg';
 import type { ModelInfo } from '../../shared/api-types';
 import type { RefRole } from '../../shared/taxonomy';
@@ -144,6 +145,9 @@ export function registerModelRoutes(app: FastifyInstance): void {
   app.post('/api/models/:id/refs', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getOwnedModel(req.user!.id, id)) return bad(reply, 404, 'Модель не найдена');
+    if (req.user!.role !== 'owner' && userUsageBytes(req.user!.id) >= config.userStorageCapBytes) {
+      return bad(reply, 413, 'Твоё хранилище заполнено — удали старые проекты или лишние листы');
+    }
     const part = await req.file({ limits: { fileSize: config.maxImageBytes } });
     if (!part) return bad(reply, 400, 'Нет файла реф-листа');
     const ext = IMAGE_MIME[part.mimetype];
@@ -182,6 +186,7 @@ export function registerModelRoutes(app: FastifyInstance): void {
       return bad(reply, 413, `Фото больше лимита ${Math.round(config.maxImageBytes / 1024 ** 2)} МБ`);
     }
     const ref = addModelRef({ modelId: id, variantId, file, role, note });
+    invalidateUserUsage(req.user!.id);
     const warnings = await sheetWarnings(dest);
     return { id: ref.id, file, warnings };
   });
@@ -212,6 +217,12 @@ export function registerModelRoutes(app: FastifyInstance): void {
     const { id, refId } = req.params as { id: string; refId: string };
     const model = getOwnedModel(req.user!.id, id);
     if (!model) return bad(reply, 404, 'Модель не найдена');
+    if (
+      req.user!.role !== 'owner' &&
+      !consumeDailyLimit(req.user!.id, 'describe', config.limitDescribePerDay).allowed
+    ) {
+      return bad(reply, 429, LIMIT_MESSAGE);
+    }
     const ref = getDb()
       .prepare(`SELECT file, role FROM model_refs WHERE id = ? AND model_id = ?`)
       .get(refId, id) as { file: string; role: RefRole } | undefined;

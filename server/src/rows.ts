@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { getDb } from './db';
 import { startDir } from './storage';
 import { parseFlags } from './engine/orchestrator';
-import { parseGenerateAudio } from './engine/render';
+import { parseGenerateAudio, queuePositionOf } from './engine/render';
 import { projectOpenaiUsd, projectOpenaiUsdSince } from './usage';
 import type {
   FeedbackRow,
@@ -146,6 +146,7 @@ function toGeneration(g: DbGeneration): GenerationRow {
     finishedAt: g.finished_at,
     uploadSec: secsBetween(g.created_at, g.submitted_at),
     renderSec: g.status === 'done' || g.status === 'failed' ? secsBetween(g.submitted_at, g.finished_at) : null,
+    queuePosition: g.status === 'queued' ? queuePositionOf(g.id) : null,
   };
 }
 

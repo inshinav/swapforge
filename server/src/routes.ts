@@ -19,21 +19,26 @@ import {
   deleteProjectFiles,
   enforceStorageCap,
   ensureProjectDirs,
+  invalidateUserUsage,
   projectDir,
   refsDir,
   safeMediaPath,
+  userUsageBytes,
 } from './storage';
 import { advanceFlow, startAnalysis, startGeneration, startStoryboard } from './engine/pipeline';
 import { generateStartFrame } from './engine/startframe';
 import {
   RenderGateError,
-  activeGeneration,
+  cancelQueued,
+  cancelQueuedForProject,
   parseGenerateAudio,
   projectHasActiveGeneration,
+  promoteNext,
   recheckGeneration,
   retryGeneration,
   startRender,
 } from './engine/render';
+import { LIMIT_MESSAGE, consumeDailyLimit } from './limits';
 import { nextStageOf, parseFlags, snapshotProject } from './engine/orchestrator';
 import { PRESETS, applyPreset, getPreset, presetFilePath } from './presets';
 import { classifyRef } from './engine/classify';
@@ -71,6 +76,18 @@ function bad(reply: FastifyReply, code: number, msg: string) {
 function crossSite(req: FastifyRequest): boolean {
   const s = req.headers['sec-fetch-site'];
   return typeof s === 'string' && s !== 'same-origin' && s !== 'same-site' && s !== 'none';
+}
+
+/** Кап ручных LLM-роутов «под капотом» (не-владелец): analyze/generate/iterate/startframe. */
+function manualLlmAllowed(req: FastifyRequest): boolean {
+  if (req.user!.role === 'owner') return true;
+  return consumeDailyLimit(req.user!.id, 'manual_llm', config.limitManualLlmPerDay).allowed;
+}
+
+function projectHasQueuedGeneration(projectId: string): boolean {
+  return !!getDb()
+    .prepare(`SELECT 1 FROM generations WHERE project_id = ? AND status = 'queued' LIMIT 1`)
+    .get(projectId);
 }
 
 /** Единственный вход к проекту: только строка ТЕКУЩЕГО пользователя. Чужой id = 404 (не оракул). */
@@ -176,6 +193,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/projects', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    // Анти-абьюз не-владельца: персональный кап хранилища + дневной кап проектов.
+    // Проверки ДО чтения файла — не принимаем сотни МБ ради отказа.
+    if (req.user!.role !== 'owner') {
+      if (userUsageBytes(req.user!.id) >= config.userStorageCapBytes) {
+        return bad(
+          reply,
+          413,
+          `Твоё хранилище заполнено (${Math.round(config.userStorageCapBytes / 1024 ** 3)} ГБ) — удали старые проекты в Библиотеке`,
+        );
+      }
+      const lim = consumeDailyLimit(req.user!.id, 'projects', config.limitProjectsPerDay);
+      if (!lim.allowed) return bad(reply, 429, `${LIMIT_MESSAGE} (проектов сегодня: ${lim.count})`);
+    }
     const part = await req.file();
     if (!part) return bad(reply, 400, 'Нет файла — приложи ролик (mp4/mov)');
     const ext = VIDEO_MIME[part.mimetype];
@@ -211,6 +241,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       startStoryboard(id);
       const { purged } = enforceStorageCap();
       if (purged.length) app.log.info({ purged }, 'ротация: удалены исходники старых проектов');
+      invalidateUserUsage(req.user!.id);
       return { id };
     } catch (e) {
       deleteProjectFiles(id);
@@ -257,10 +288,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (projectHasActiveGeneration(id)) {
       return bad(reply, 409, 'Идёт рендер этого проекта — дождись окончания');
     }
-    // Открытый кредитный резерв возвращается (LLM-часть списывается) ДО удаления строк
+    // queued-задачи проекта отменяются каскадом, резерв возвращается ДО удаления строк
+    cancelQueuedForProject(id);
     releaseHoldForDeletedProject(id);
     getDb().prepare(`DELETE FROM projects WHERE id = ?`).run(id);
     deleteProjectFiles(id);
+    invalidateUserUsage(req.user!.id);
     return { ok: true };
   });
 
@@ -294,9 +327,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
-    const active = activeGeneration();
-    if (active) {
-      return bad(reply, 409, active.project_id === id ? 'Рендер уже идёт' : 'Идёт рендер другого проекта — дождись');
+    // Занятый ЧУЖИМ рендером слот больше не отбивает: свап дойдёт до рендера и встанет
+    // в FIFO-очередь. Блокируем только повторный запуск ЭТОГО проекта.
+    if (projectHasActiveGeneration(id) || projectHasQueuedGeneration(id)) {
+      return bad(reply, 409, 'Рендер этого проекта уже идёт или в очереди — дождись');
     }
     if (!p.video_file || p.video_purged === 1) {
       return bad(reply, 409, 'Исходник очищен ротацией — залей ролик заново');
@@ -460,6 +494,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // Отмена своей задачи из FIFO-очереди: резерв возвращается, очередь едет дальше
+  app.post('/api/generations/:genId/cancel-queue', async (req, reply) => {
+    const { genId } = req.params as { genId: string };
+    if (!getOwnedGeneration(req, genId)) return bad(reply, 404, 'Генерация не найдена');
+    if (!cancelQueued(genId)) return bad(reply, 409, 'Задача уже не в очереди');
+    promoteNext();
+    return { ok: true };
+  });
+
   app.post('/api/generations/:genId/recheck', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { genId } = req.params as { genId: string };
@@ -516,6 +559,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
+    if (req.user!.role !== 'owner' && userUsageBytes(req.user!.id) >= config.userStorageCapBytes) {
+      return bad(reply, 413, 'Твоё хранилище заполнено — удали старые проекты в Библиотеке');
+    }
     const part = await req.file({ limits: { fileSize: config.maxImageBytes } });
     if (!part) return bad(reply, 400, 'Нет файла референса');
     const ext = IMAGE_MIME[part.mimetype];
@@ -545,12 +591,18 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
     const db = getDb();
 
+    invalidateUserUsage(req.user!.id);
+
     // роль: явная от пользователя → vision-классификатор → позиционная эвристика
     let role = roleField;
     let roleSource: 'manual' | 'auto' | 'heuristic' = 'manual';
     let autoNote = '';
     if (roleField === 'auto') {
-      const cls = await classifyRef(id, file);
+      // кап платного vision-классификатора; превышение = тихий фолбэк на эвристику
+      const classifyAllowed =
+        req.user!.role === 'owner' ||
+        consumeDailyLimit(req.user!.id, 'classify', config.limitClassifyPerDay).allowed;
+      const cls = classifyAllowed ? await classifyRef(id, file) : null;
       if (cls) {
         role = cls.role;
         roleSource = 'auto';
@@ -645,6 +697,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.frames_json) return bad(reply, 409, 'Сначала должна завершиться раскадровка');
     if (!llmKeyPresent()) return bad(reply, 503, 'LLM-ключ не настроен на сервере');
+    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     startAnalysis(id);
     return { ok: true };
   });
@@ -659,6 +712,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT COUNT(*) AS c FROM refs WHERE project_id = ?`)
       .get(id) as { c: number };
     if (refCount.c === 0) return bad(reply, 409, 'Добавь хотя бы один референс (модель)');
+    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     const body = (req.body ?? {}) as { lang?: string };
     startGeneration(id, {
       lang: body.lang === 'ru' ? 'ru' : 'en',
@@ -720,6 +774,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const prevVideo = prev.find((r) => r.kind === 'video')?.text;
     const prevImage = prev.find((r) => r.kind === 'image')?.text;
     if (!prevVideo || !prevImage) return bad(reply, 404, 'Версия промта не найдена');
+    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     const artifacts = (body.artifacts ?? []).filter((a): a is ArtifactType =>
       (ARTIFACT_TYPES as string[]).includes(a),
     );
@@ -771,6 +826,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
       .all(id) as unknown as RefInfo[];
     if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
+    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     try {
       const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json));
       return { file, version };

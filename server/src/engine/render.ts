@@ -134,6 +134,7 @@ function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean } =
     // (prediction_id сохраняем: retry делает защитный пре-полл, диагностика цела)
     forceReleaseProjectHold(gen.project_id, 'WaveSpeed отклонил задачу');
   }
+  promoteNext(); // слот освободился — очередь едет дальше
 }
 
 /** Человеческая формулировка причин WaveSpeed. */
@@ -165,15 +166,25 @@ export interface StartRenderOpts {
 }
 
 /**
- * Создаёт генерацию и запускает detached-цепочку (upload → submit → poll → download).
+ * Создаёт генерацию. Свободный глобальный слот → detached-цепочка сразу
+ * (upload → submit → poll → download); занятый → status='queued', FIFO-продвижение
+ * promoteNext() по освобождению слота. Конкурентность остаётся 1 глобально —
+ * иначе ломается факт по дельте баланса.
  * Бросает RenderGateError при нарушении гейтов — строка генерации при этом НЕ создаётся.
  */
 export function startRender(projectId: string, version: number, opts: StartRenderOpts = {}): string {
   const ws = opts.ws ?? wavespeed;
   const d = db();
 
-  if (activeGeneration()) {
-    throw new RenderGateError(409, 'Уже идёт другой рендер — дождись его окончания');
+  // Один проект — одна задача: активная ИЛИ очередная
+  const projectPending = d
+    .prepare(
+      `SELECT 1 FROM generations WHERE project_id = ?
+        AND status IN ('queued','uploading_assets','submitted','rendering','downloading') LIMIT 1`,
+    )
+    .get(projectId);
+  if (projectPending) {
+    throw new RenderGateError(409, 'Рендер этого проекта уже идёт или стоит в очереди — дождись');
   }
   const p = d.prepare(`SELECT * FROM projects WHERE id = ?`).get(projectId) as
     | {
@@ -203,6 +214,19 @@ export function startRender(projectId: string, version: number, opts: StartRende
     throw new RenderGateError(503, 'WAVESPEED_API_KEY не настроен на сервере');
   }
 
+  // Кап очереди не-владельца: не даём одному юзеру забить FIFO
+  if (p.user_id && isMeteredUserId(p.user_id)) {
+    const queued = d
+      .prepare(`SELECT COUNT(*) AS c FROM generations WHERE user_id = ? AND status = 'queued'`)
+      .get(p.user_id) as { c: number };
+    if (queued.c >= config.userQueueCap) {
+      throw new RenderGateError(
+        409,
+        `В очереди уже ${queued.c} твоих рендера — дождись их завершения или отмени лишний`,
+      );
+    }
+  }
+
   const flags = parseFlags(p.flags_json);
   const generateAudio = parseGenerateAudio(p.flags_json);
   const genId = randomUUID();
@@ -215,10 +239,21 @@ export function startRender(projectId: string, version: number, opts: StartRende
     enable_web_search: false,
     flags,
   };
+  // Проверка слота и INSERT — синхронный блок без await: event-loop-атомарно,
+  // двух uploading_assets не родится. 'queued' НЕ входит в ACTIVE_GEN_STATUSES.
+  const slotBusy = activeGeneration() !== null;
   d.prepare(
     `INSERT INTO generations (id, project_id, version, status, params_json, retry_of, user_id)
-     VALUES (?, ?, ?, 'uploading_assets', ?, ?, ?)`,
-  ).run(genId, projectId, version, JSON.stringify(params), opts.retryOf ?? null, p.user_id);
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    genId,
+    projectId,
+    version,
+    slotBusy ? 'queued' : 'uploading_assets',
+    JSON.stringify(params),
+    opts.retryOf ?? null,
+    p.user_id,
+  );
 
   // Смета на момент запуска — снапшотом в строку (фиксирует ожидание против факта)
   void (async () => {
@@ -233,10 +268,89 @@ export function startRender(projectId: string, version: number, opts: StartRende
     }
   })();
 
-  void runUploadAndSubmit(genId, ws, opts.pollBaseMs).catch((e) => {
-    markFailed(genId, e instanceof Error ? e.message : String(e));
-  });
+  if (!slotBusy) {
+    void runUploadAndSubmit(genId, ws, opts.pollBaseMs).catch((e) => {
+      markFailed(genId, e instanceof Error ? e.message : String(e));
+    });
+  }
   return genId;
+}
+
+// ── FIFO-очередь рендеров ───────────────────────────────────────────────────
+
+/** Позиция в очереди (1 = следующий); null, если генерация не queued. */
+export function queuePositionOf(genId: string): number | null {
+  const d = db();
+  const gen = d
+    .prepare(`SELECT created_at, rowid FROM generations WHERE id = ? AND status = 'queued'`)
+    .get(genId) as { created_at: string; rowid: number } | undefined;
+  if (!gen) return null;
+  const ahead = d
+    .prepare(
+      `SELECT COUNT(*) AS c FROM generations WHERE status = 'queued'
+        AND (created_at < ? OR (created_at = ? AND rowid < ?))`,
+    )
+    .get(gen.created_at, gen.created_at, gen.rowid) as { c: number };
+  return ahead.c + 1;
+}
+
+/**
+ * Продвижение очереди: если слот свободен — клейм старейшей queued-задачи в
+ * BEGIN IMMEDIATE (interleave двух промоутов невозможен) и запуск detached-цепочки.
+ * Зовётся из финалов рендера (done/failed), отмены и бута.
+ */
+export function promoteNext(ws: WaveSpeed = wavespeed, pollBaseMs?: number): void {
+  const d = db();
+  let claimed: string | null = null;
+  d.exec('BEGIN IMMEDIATE');
+  try {
+    if (!activeGeneration()) {
+      const next = d
+        .prepare(`SELECT id FROM generations WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1`)
+        .get() as { id: string } | undefined;
+      if (next) {
+        d.prepare(`UPDATE generations SET status = 'uploading_assets' WHERE id = ? AND status = 'queued'`).run(next.id);
+        claimed = next.id;
+      }
+    }
+    d.exec('COMMIT');
+  } catch (e) {
+    d.exec('ROLLBACK');
+    console.error('[queue] promoteNext упал:', e instanceof Error ? e.message : e);
+    return;
+  }
+  if (claimed) {
+    const id = claimed;
+    console.log(`[queue] продвигаю gen=${id}`);
+    void runUploadAndSubmit(id, ws, pollBaseMs).catch((e) => {
+      markFailed(id, e instanceof Error ? e.message : String(e));
+    });
+  }
+}
+
+/** Отмена своей queued-задачи: строка → failed «отменено», резерв возвращается. */
+export function cancelQueued(genId: string): boolean {
+  const d = db();
+  const res = d
+    .prepare(
+      `UPDATE generations SET status = 'failed', error = 'Отменено из очереди', finished_at = datetime('now')
+        WHERE id = ? AND status = 'queued'`,
+    )
+    .run(genId);
+  if (Number(res.changes) === 0) return false;
+  const gen = loadGen(genId);
+  if (gen) forceReleaseProjectHold(gen.project_id, 'рендер отменён из очереди');
+  return true;
+}
+
+/** Каскад при удалении проекта: его queued-задачи отменяются (hold освобождает delete-путь). */
+export function cancelQueuedForProject(projectId: string): void {
+  db()
+    .prepare(
+      `UPDATE generations SET status = 'failed', error = 'Проект удалён', finished_at = datetime('now')
+        WHERE project_id = ? AND status = 'queued'`,
+    )
+    .run(projectId);
 }
 
 /** Звук по умолчанию — нативная генерация (решение Alex); false = дорожка исходника. */
@@ -525,6 +639,7 @@ async function completeFromResult(gen: GenRow, r: WsPrediction, ws: WaveSpeed): 
     console.log(
       `[render] done gen=${gen.id} bytes=${bytes} cost=$${cost.usd ?? '?'} source=${cost.source ?? '-'}`,
     );
+    promoteNext(ws); // слот освободился — очередь едет дальше
   } catch (e) {
     // Не оставляем генерацию висеть в downloading (recheck на ней вернул бы ложный done):
     // финал сорвался → failed, задача у WaveSpeed жива — recheck доберёт
@@ -623,6 +738,8 @@ export function resumeGenerations(ws: WaveSpeed = wavespeed): { failed: number; 
   if (failed || rows.length) {
     console.log(`[render] resume: поллеров=${rows.length}, прерванных аплоадов=${failed}`);
   }
+  // queued-строки переживают рестарт нетронутыми; если слот свободен — продвигаем
+  promoteNext(ws);
   return { failed: Number(failed), resumed: rows.length };
 }
 

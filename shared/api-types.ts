@@ -14,6 +14,7 @@ export type ProjectStatus =
   | 'error';
 
 export type GenerationStatus =
+  | 'queued'
   | 'uploading_assets'
   | 'submitted'
   | 'rendering'
@@ -107,6 +108,8 @@ export interface GenerationRow {
   /** Фактические длительности, сек: загрузка ассетов (created→submitted) и рендер+скачивание. */
   uploadSec: number | null;
   renderSec: number | null;
+  /** Позиция в FIFO-очереди (1 = следующий); только для status='queued'. */
+  queuePosition?: number | null;
 }
 
 export interface PresetInfo {

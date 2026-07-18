@@ -43,7 +43,7 @@ function variantButtons(models: ModelInfo[]): VariantButton[] {
   return out;
 }
 
-export const GEN_ACTIVE = ['uploading_assets', 'submitted', 'rendering', 'downloading'];
+export const GEN_ACTIVE = ['queued', 'uploading_assets', 'submitted', 'rendering', 'downloading'];
 const LOCAL_BUSY = ['storyboarding', 'analyzing', 'generating', 'startframing'];
 
 export function SwapPanel({
@@ -454,7 +454,17 @@ function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
     { key: 'analyze', label: 'Анализ', ...mark(analysisDone, s === 'analyzing', 'vision смотрит кадры и строит карту рисков · ~30–90 с', t.analyze) },
     { key: 'generate', label: 'Промты', ...mark(promptsDone, s === 'generating', 'доктрина куёт пару промтов · ~15–50 с', t.generate) },
     { key: 'startframe', label: 'Стартовый кадр', ...mark(startframeDone, s === 'startframing', 'gpt-image-2 · high · ~1–2 мин', t.startframe) },
-    { key: 'upload', label: 'Загрузка в WaveSpeed', ...mark(!!genS && genS !== 'uploading_assets', genS === 'uploading_assets', 'ролик + кадр + рефы улетают на WaveSpeed', gen?.uploadSec) },
+    ...(genS === 'queued'
+      ? [
+          {
+            key: 'queue',
+            label: 'Очередь рендера',
+            state: 'active' as const,
+            hint: `в очереди: ${gen?.queuePosition ?? '?'}-й — рендер начнётся автоматически`,
+          },
+        ]
+      : []),
+    { key: 'upload', label: 'Загрузка в WaveSpeed', ...mark(!!genS && genS !== 'uploading_assets' && genS !== 'queued', genS === 'uploading_assets', 'ролик + кадр + рефы улетают на WaveSpeed', gen?.uploadSec) },
     { key: 'render', label: 'Рендер Seedance', ...mark(genS === 'downloading' || genS === 'done', genS === 'submitted' || genS === 'rendering', 'обычно 2–10 мин — можно уйти со страницы', gen?.renderSec) },
     { key: 'download', label: 'Скачивание', ...mark(genS === 'done', genS === 'downloading', 'забираю готовый ролик в библиотеку') },
   ];
@@ -463,8 +473,30 @@ function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
 function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow | null }) {
   const steps = deriveSteps(proj, gen);
   const run = proj.costs.activeRun;
+  const [cancelling, setCancelling] = useState(false);
+  const cancelQueue = async () => {
+    if (!gen) return;
+    setCancelling(true);
+    try {
+      await api.genCancelQueue(gen.id);
+    } catch {
+      /* поллинг подтянет актуальный статус */
+    } finally {
+      setCancelling(false);
+    }
+  };
   return (
     <div>
+      {gen?.status === 'queued' && (
+        <div className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-panel2 px-3 py-2 text-xs">
+          <span className="text-mut">
+            Сейчас рендерится другой ролик — твой стартует автоматически, страницу можно закрыть.
+          </span>
+          <Button kind="ghost" busy={cancelling} className="!py-1 !px-2 text-xs ml-auto" onClick={() => void cancelQueue()}>
+            Отменить очередь
+          </Button>
+        </div>
+      )}
       <ol className="space-y-1.5">
         {steps.map((st) => (
           <li key={st.key} className="flex items-start gap-3">
