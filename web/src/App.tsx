@@ -9,15 +9,15 @@ import Billing from './screens/Billing';
 import Guide from './screens/Guide';
 import { Spinner } from './ui';
 
-type View = 'new' | 'models' | 'library' | 'billing' | 'guide';
+type View = 'swap' | 'models' | 'library' | 'billing' | 'guide';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
-const VIEW_HASHES = new Set<View>(['new', 'models', 'library', 'billing', 'guide']);
+const VIEW_HASHES = new Set<View>(['swap', 'models', 'library', 'billing', 'guide']);
 
 function viewFromHash(): View {
   const raw = window.location.hash.replace(/^#/, '');
-  return VIEW_HASHES.has(raw as View) ? (raw as View) : 'new';
+  return VIEW_HASHES.has(raw as View) ? (raw as View) : 'swap';
 }
 
 export default function App() {
@@ -45,19 +45,19 @@ export default function App() {
   useEffect(loadSession, [loadSession]);
 
   useEffect(() => {
-    if (!window.location.hash) history.replaceState(null, '', '#new');
-    const syncView = () => setView(viewFromHash());
-    window.addEventListener('hashchange', syncView);
-    window.addEventListener('popstate', syncView);
-    return () => {
-      window.removeEventListener('hashchange', syncView);
-      window.removeEventListener('popstate', syncView);
+    const syncView = () => {
+      const next = viewFromHash();
+      setView(next);
+      if (window.location.hash !== `#${next}`) history.replaceState(null, '', `#${next}`);
     };
+    syncView();
+    window.addEventListener('hashchange', syncView);
+    return () => window.removeEventListener('hashchange', syncView);
   }, []);
 
   const go = useCallback((next: View) => {
-    setView(next);
-    if (window.location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
+    if (window.location.hash === `#${next}`) setView(next);
+    else window.location.hash = next;
   }, []);
 
   const openBilling = useCallback((needed?: number) => {
@@ -84,7 +84,7 @@ export default function App() {
     setProjectId(pid);
     if (pid) localStorage.setItem('sf-project', pid);
     else localStorage.removeItem('sf-project');
-    go('new');
+    go('swap');
   }, [go]);
 
   const logout = useCallback(() => {
@@ -114,7 +114,7 @@ export default function App() {
       <header className="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-bg/90 backdrop-blur z-20 min-w-0">
         <Logo />
         <nav className="hidden md:flex gap-1 ml-2">
-          <TabBtn active={view === 'new'} onClick={() => go('new')}>
+          <TabBtn active={view === 'swap'} onClick={() => go('swap')}>
             Свап
           </TabBtn>
           <TabBtn active={view === 'models'} onClick={() => go('models')}>
@@ -150,7 +150,7 @@ export default function App() {
       </header>
 
       <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 pb-24 md:pb-6">
-        {view === 'new' ? (
+        {view === 'swap' ? (
           <NewSwap
             projectId={projectId}
             onProjectCreated={openProject}
@@ -162,7 +162,7 @@ export default function App() {
         ) : view === 'billing' ? (
           <Billing
             neededCredits={billingNeed}
-            onBackToSwap={() => go('new')}
+            onBackToSwap={() => go('swap')}
             onBalanceChange={setCredits}
           />
         ) : view === 'guide' ? (
@@ -235,7 +235,7 @@ function MobileNav({
   onChange: (view: View) => void;
 }) {
   const items: Array<{ view: View; icon: string; label: string }> = [
-    { view: 'new', icon: '⚡', label: 'Свап' },
+    { view: 'swap', icon: '⚡', label: 'Свап' },
     { view: 'models', icon: '◇', label: 'Модели' },
     { view: 'library', icon: '▦', label: 'Работы' },
     ...(!isOwner ? [{ view: 'billing' as const, icon: '●', label: 'Баланс' }] : []),

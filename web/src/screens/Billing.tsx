@@ -27,6 +27,8 @@ const KIND_LABEL: Record<
 };
 
 const PENDING_PAYMENT_KEY = 'sf-pending-payment';
+const PENDING_POLL_MAX_MS = 10 * 60_000;
+const PENDING_POLL_DELAYS_MS = [3_000, 5_000, 8_000, 13_000, 21_000, 30_000] as const;
 
 interface PendingPayment {
   packTitle: string;
@@ -47,7 +49,7 @@ function readPendingPayment(): PendingPayment | null {
       (p.provider === 'cryptopay' || p.provider === 'lavatop') &&
       typeof p.balanceBefore === 'number' &&
       typeof p.startedAt === 'number' &&
-      Date.now() - p.startedAt < 24 * 60 * 60_000
+      Date.now() - p.startedAt < PENDING_POLL_MAX_MS
     ) {
       return p as PendingPayment;
     }
@@ -74,6 +76,7 @@ export default function Billing({
   const [refreshing, setRefreshing] = useState(false);
   const [pending, setPending] = useState<PendingPayment | null>(readPendingPayment);
   const [paymentDone, setPaymentDone] = useState<number | null>(null);
+  const [paymentTimedOut, setPaymentTimedOut] = useState(false);
 
   const reload = useCallback(async (): Promise<CreditBalanceInfo | null> => {
     setRefreshing(true);
@@ -101,33 +104,87 @@ export default function Billing({
     void reload();
   }, [reload]);
 
-  // Вебхук обычно приходит за секунды. Проверяем баланс автоматически, а также сразу
-  // после возврата фокуса с платёжной вкладки/Telegram.
+  const checkPendingBalance = useCallback(async (): Promise<boolean> => {
+    if (!pending) return false;
+    try {
+      const b = await api.creditBalance();
+      setBalance(b);
+      onBalanceChange(b);
+      if (b.balance <= pending.balanceBefore) return false;
+      setPaymentDone(b.balance - pending.balanceBefore);
+      setPending(null);
+      setPaymentTimedOut(false);
+      localStorage.removeItem(PENDING_PAYMENT_KEY);
+      void reload();
+      return true;
+    } catch {
+      // Ошибка фоновой проверки не перекрывает экран: следующий шаг бэкоффа повторит запрос.
+      return false;
+    }
+  }, [onBalanceChange, pending, reload]);
+
+  // Пока пользователь залогинен и Billing смонтирован, проверяем только лёгкий balance endpoint:
+  // сразу, по focus/visibility и затем с бэкоффом. Через десять минут фоновый опрос прекращается.
   useEffect(() => {
     if (!pending) return;
     let alive = true;
-    const check = async () => {
-      const b = await reload();
-      if (!alive || !b || b.balance <= pending.balanceBefore) return;
-      setPaymentDone(b.balance - pending.balanceBefore);
-      setPending(null);
+    let checking = false;
+    let attempt = 0;
+    let timer: number | null = null;
+
+    const expire = () => {
+      if (!alive) return;
       localStorage.removeItem(PENDING_PAYMENT_KEY);
+      setPending(null);
+      setPaymentTimedOut(true);
     };
+
+    const check = async () => {
+      if (!alive || checking) return false;
+      if (Date.now() - pending.startedAt >= PENDING_POLL_MAX_MS) {
+        expire();
+        return true;
+      }
+      checking = true;
+      try {
+        return await checkPendingBalance();
+      } finally {
+        checking = false;
+      }
+    };
+
+    const schedule = () => {
+      if (!alive) return;
+      const remaining = PENDING_POLL_MAX_MS - (Date.now() - pending.startedAt);
+      if (remaining <= 0) {
+        expire();
+        return;
+      }
+      const delay = PENDING_POLL_DELAYS_MS[Math.min(attempt, PENDING_POLL_DELAYS_MS.length - 1)]!;
+      attempt += 1;
+      timer = window.setTimeout(() => {
+        void check().then((done) => {
+          if (!done) schedule();
+        });
+      }, Math.min(delay, remaining));
+    };
+
     const onFocus = () => void check();
     const onVisible = () => {
       if (document.visibilityState === 'visible') void check();
     };
-    void check();
-    const timer = window.setInterval(() => void check(), 3_000);
+    void check().then((done) => {
+      if (!done) schedule();
+    });
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [pending, reload]);
+  }, [checkPendingBalance, pending]);
 
   const packs = packsInfo?.packs ?? [];
   const needsEmail = new Set(
@@ -158,6 +215,7 @@ export default function Billing({
     localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(next));
     setPending(next);
     setPaymentDone(null);
+    setPaymentTimedOut(false);
     setErr('');
   };
 
@@ -203,6 +261,20 @@ export default function Billing({
               <div className="flex-1 text-sm font-semibold text-ok">✓ Кредиты пришли: +{paymentDone}</div>
               <Button kind="primary" className="w-full sm:w-auto" onClick={onBackToSwap}>
                 Вернуться к свапу
+              </Button>
+            </div>
+          )}
+
+          {paymentTimedOut && (
+            <div className="rounded-xl border border-line bg-panel2 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex-1">
+                <div className="text-sm font-semibold">Автопроверка остановлена</div>
+                <div className="text-xs text-mut mt-0.5">
+                  За 10 минут баланс не изменился. Если оплата прошла, обнови его вручную.
+                </div>
+              </div>
+              <Button kind="ghost" className="w-full sm:w-auto" onClick={() => void reload()}>
+                Обновить баланс
               </Button>
             </div>
           )}
@@ -330,19 +402,18 @@ function PackCard({
     // Открываем вкладку синхронно по пользовательскому клику: после await мобильный
     // браузер уже считает window.open попапом. Если вкладка всё же заблокирована,
     // ниже уйдём на оплату в текущей.
-    const paymentTab = window.open('about:blank', '_blank');
-    if (paymentTab) paymentTab.opener = null;
+    const paymentTab = window.open('', '_blank');
     setBusy(provider);
     onError('');
     setEmailErr('');
     try {
       const { payUrl } = await api.checkout(pack.id, provider, email.trim() || undefined);
       onCheckoutStarted(pack, provider, balanceBefore);
-      if (paymentTab && !paymentTab.closed) paymentTab.location.replace(payUrl);
-      else window.location.assign(payUrl);
+      if (paymentTab === null) window.location.href = payUrl;
+      else paymentTab.location = payUrl;
       setEmailFor(null);
     } catch (e) {
-      if (paymentTab && !paymentTab.closed) paymentTab.close();
+      paymentTab?.close();
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
