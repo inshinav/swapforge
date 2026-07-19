@@ -38,6 +38,10 @@ function money(value: number): string {
   return `${value < 0 ? '-$' : '$'}${Math.abs(value).toFixed(2)}`;
 }
 
+function rubles(value: number): string {
+  return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)} ₽`;
+}
+
 function readPendingPayment(): PendingPayment | null {
   try {
     const raw = localStorage.getItem(PENDING_PAYMENT_KEY);
@@ -181,6 +185,10 @@ export default function Billing({
     if (amountUsd > methods.maxTopupUsd) return `Максимум ${money(methods.maxTopupUsd)}`;
     return '';
   }, [amount, amountUsd, methods]);
+  const lavaMethod = methods?.providers.find((provider) => provider.id === 'lavatop');
+  const lavaAmountRub = !amountError && lavaMethod?.rubPerUsd
+    ? Math.round(amountUsd * lavaMethod.rubPerUsd * 100) / 100
+    : null;
 
   const pay = async (provider: BillingProviderId) => {
     const needsEmail = methods?.providers.find((p) => p.id === provider)?.needsEmail ?? false;
@@ -276,6 +284,11 @@ export default function Billing({
             <div id="topup-limit" className={amountError ? 'text-xs text-danger' : 'text-xs text-dim'}>
               {amountError || `От ${money(methods?.minTopupUsd ?? 5)}`}
             </div>
+            {lavaAmountRub !== null && lavaMethod?.rubPerUsd && (
+              <div className="text-xs text-mut">
+                Картой / СБП: {rubles(lavaAmountRub)} · курс $1 = {rubles(lavaMethod.rubPerUsd)}
+              </div>
+            )}
 
             {emailFor && (
               <input
@@ -298,7 +311,11 @@ export default function Billing({
                   className="min-h-12 w-full"
                   onClick={() => void pay(provider.id)}
                 >
-                  {emailFor === provider.id ? 'Продолжить' : PROVIDER_LABEL[provider.id]}
+                  {emailFor === provider.id
+                    ? 'Продолжить'
+                    : provider.id === 'lavatop' && lavaAmountRub !== null
+                      ? `${PROVIDER_LABEL[provider.id]} · ${rubles(lavaAmountRub)}`
+                      : PROVIDER_LABEL[provider.id]}
                 </Button>
               ))}
             </div>

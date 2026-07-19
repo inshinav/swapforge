@@ -1,7 +1,7 @@
 // Lava.top — единственный файл, знающий его wire-формат.
 // Доки: https://gate.lava.top/docs (OpenAPI, сверено 19.07.2026).
-// - POST /api/v3/invoice: { email, offerId, currency, amount, clientUtm } → { paymentUrl };
-//   amount работает у оффера с динамической ценой; маппинг кладём в clientUtm — он
+// - POST /api/v3/invoice: { email, offerId, currency: 'RUB', amount, clientUtm } → { paymentUrl };
+//   amount = выбранный USD-баланс × фиксированный LAVA_RUB_PER_USD; маппинг кладём в clientUtm — он
 //   round-trip в вебхуке (email обязателен, но для маппинга не используется);
 // - вебхук: { eventType, contractId, buyer.email, amount, currency, status, clientUtm };
 // - auth: X-Api-Key заголовок (запросы И вебхук — ApiKeyWebhookAuth в ЛК).
@@ -35,7 +35,15 @@ export function parseLavaEvent(rawBody: Buffer): PaymentEvent {
   const utm = (body.clientUtm ?? {}) as Record<string, unknown>;
   // маппинг мы сами положили в UTM при создании инвойса
   const ref = decodeRef(typeof utm.utm_content === 'string' ? utm.utm_content : null);
-  if (contractId === undefined || contractId === null || !ref) {
+  const expectedMatch = typeof utm.utm_term === 'string' ? /^rub-(\d+)$/.exec(utm.utm_term) : null;
+  const expectedPaidAmountMinor = expectedMatch ? Number(expectedMatch[1]) : NaN;
+  if (
+    contractId === undefined ||
+    contractId === null ||
+    !ref ||
+    !Number.isSafeInteger(expectedPaidAmountMinor) ||
+    expectedPaidAmountMinor <= 0
+  ) {
     return { kind: 'invalid', reason: 'missing_contract_or_utm' };
   }
   return {
@@ -44,13 +52,14 @@ export function parseLavaEvent(rawBody: Buffer): PaymentEvent {
     userId: ref.userId,
     amountCents: ref.amountCents,
     packId: ref.packId,
-    paidAmountUsd:
+    paidAmount:
       typeof body.amount === 'number'
         ? body.amount
         : typeof body.amount === 'string'
           ? Number(body.amount)
           : null,
     paidCurrency: typeof body.currency === 'string' ? body.currency.toUpperCase() : null,
+    expectedPaidAmountMinor,
   };
 }
 
@@ -69,6 +78,8 @@ export class LavaTopProvider implements PaymentProvider {
     if (!this.ready) throw new Error('Lava.top не настроен на сервере');
     const email = (input.email ?? '').trim();
     if (!email) throw new Error('Для оплаты картой нужен email');
+    const amountCents = Math.round(input.amountUsd * 100);
+    const amountRub = Math.round(input.amountUsd * config.lavaRubPerUsd * 100) / 100;
 
     const res = await fetch(`${API_BASE}/api/v3/invoice`, {
       method: 'POST',
@@ -76,12 +87,12 @@ export class LavaTopProvider implements PaymentProvider {
       body: JSON.stringify({
         email,
         offerId: config.lavaDynamicOfferId,
-        currency: 'USD',
-        amount: input.amountUsd,
+        currency: 'RUB',
+        amount: amountRub,
         // round-trip маппинг: userId+сумма переживут поход на оплату
         clientUtm: {
-          utm_content: encodeRef(input.userId, Math.round(input.amountUsd * 100)),
-          utm_term: `usd-${Math.round(input.amountUsd * 100)}`,
+          utm_content: encodeRef(input.userId, amountCents),
+          utm_term: `rub-${Math.round(amountRub * 100)}`,
         },
       }),
       signal: AbortSignal.timeout(15000),

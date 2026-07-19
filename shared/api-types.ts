@@ -258,7 +258,7 @@ export type BillingProviderId = 'cryptopay' | 'lavatop';
 export interface BillingMethodsInfo {
   minTopupUsd: number;
   maxTopupUsd: number;
-  providers: Array<{ id: BillingProviderId; needsEmail: boolean }>;
+  providers: Array<{ id: BillingProviderId; needsEmail: boolean; rubPerUsd?: number }>;
 }
 
 export interface PricingInfo {

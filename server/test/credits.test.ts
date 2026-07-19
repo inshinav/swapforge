@@ -16,7 +16,8 @@ process.env.BILLING_PROVIDERS = 'cryptopay,lavatop';
 process.env.CRYPTO_PAY_TOKEN = 'cp-test-token';
 process.env.LAVA_API_KEY = 'lava-test-key';
 process.env.LAVA_WEBHOOK_SECRET = 'lava-hook-secret';
-process.env.LAVA_DYNAMIC_OFFER_ID = 'dynamic-usd-offer';
+process.env.LAVA_DYNAMIC_OFFER_ID = 'dynamic-rub-offer';
+process.env.LAVA_RUB_PER_USD = '100';
 process.env.SWAPFORGE_PACKS_JSON = JSON.stringify([
   { id: 'start', title: 'Старт', credits: 300, priceLabel: '≈3 USDT / 299 ₽', cryptoAsset: 'USDT', cryptoAmount: 3, lavaOfferId: 'offer-start', lavaCurrency: 'RUB' },
   { id: 'big', title: 'Большой', credits: 1200, priceLabel: '≈12 USDT / 999 ₽', cryptoAsset: 'USDT', cryptoAmount: 12, lavaOfferId: 'offer-big', lavaCurrency: 'RUB' },
@@ -293,10 +294,10 @@ describe('Lava.top адаптер', () => {
     product: { id: 'p1', title: 'Старт' },
     contractId,
     buyer: { email: 'x@y.z' },
-    amount: 12,
-    currency: 'USD',
+    amount: typeof amountCents === 'number' ? amountCents : 1200,
+    currency: 'RUB',
     status: 'completed',
-    clientUtm: { utm_content: encodeRef(userId, amountCents), utm_term: `usd-${amountCents}` },
+    clientUtm: { utm_content: encodeRef(userId, amountCents), utm_term: 'rub-120000' },
   });
 
   it('parseLavaEvent: purchase (utm round-trip) / ignored / invalid', () => {
@@ -307,8 +308,9 @@ describe('Lava.top адаптер', () => {
       userId: 'user-7',
       amountCents: 1200,
       packId: undefined,
-      paidAmountUsd: 12,
-      paidCurrency: 'USD',
+      paidAmount: 1200,
+      paidCurrency: 'RUB',
+      expectedPaidAmountMinor: 120000,
     });
     // не payment.success → ignored
     expect(parseLavaEvent(Buffer.from(JSON.stringify({ eventType: 'subscription.cancelled' }))).kind).toBe('ignored');
@@ -322,7 +324,7 @@ describe('Lava.top адаптер', () => {
     expect(parseLavaEvent(Buffer.from(JSON.stringify(noUtm))).kind).toBe('invalid');
   });
 
-  it('createCheckout передаёт сумму динамическому USD-офферу', async () => {
+  it('createCheckout передаёт сумму динамическому RUB-офферу по фиксированному курсу', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ paymentUrl: 'https://lava.test/pay' }), {
         status: 200,
@@ -332,7 +334,15 @@ describe('Lava.top адаптер', () => {
     try {
       await new LavaTopProvider().createCheckout({ userId: 'u-2', amountUsd: 9.99, email: 'x@y.z' });
       const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body)) as Record<string, unknown>;
-      expect(body).toMatchObject({ offerId: 'dynamic-usd-offer', currency: 'USD', amount: 9.99 });
+      expect(body).toMatchObject({
+        offerId: 'dynamic-rub-offer',
+        currency: 'RUB',
+        amount: 999,
+        clientUtm: {
+          utm_content: encodeRef('u-2', 999),
+          utm_term: 'rub-99900',
+        },
+      });
     } finally {
       fetchMock.mockRestore();
     }
@@ -390,7 +400,7 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
       maxTopupUsd: 1000,
       providers: expect.arrayContaining([
         { id: 'cryptopay', needsEmail: false },
-        { id: 'lavatop', needsEmail: true },
+        { id: 'lavatop', needsEmail: true, rubPerUsd: 100 },
       ]),
     });
     expect((methodsRes.json() as Record<string, unknown>).packs).toBeUndefined();
@@ -455,15 +465,15 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
     expect(creditBalance(me).balance).toBe(before);
   });
 
-  it('Lava-вебхук по X-Api-Key секрету начисляет; чужой секрет → 403', async () => {
+  it('Lava-вебхук принимает только полную RUB-оплату по курсу 100 и верный X-Api-Key', async () => {
     const buyer = await makeAuthedApp(9502, 'Картой');
     const body = {
       eventType: 'payment.success',
       contractId: 'ctr-777',
       status: 'completed',
-      amount: 12,
-      currency: 'USD',
-      clientUtm: { utm_content: encodeRef(buyer.userId, 1200), utm_term: 'usd-1200' },
+      amount: 1200,
+      currency: 'RUB',
+      clientUtm: { utm_content: encodeRef(buyer.userId, 1200), utm_term: 'rub-120000' },
     };
     const good = await buyer.app.inject({
       method: 'POST',
@@ -474,11 +484,29 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
     expect(good.statusCode).toBe(200);
     expect(creditBalance(buyer.userId).balance).toBe(1200);
 
+    const underpaid = await buyer.app.inject({
+      method: 'POST',
+      url: '/api/billing/webhook/lavatop',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'lava-hook-secret' },
+      payload: JSON.stringify({ ...body, contractId: 'ctr-778', amount: 1199.99 }),
+    });
+    expect((underpaid.json() as { unmatched?: boolean }).unmatched).toBe(true);
+    expect(creditBalance(buyer.userId).balance).toBe(1200);
+
+    const wrongCurrency = await buyer.app.inject({
+      method: 'POST',
+      url: '/api/billing/webhook/lavatop',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'lava-hook-secret' },
+      payload: JSON.stringify({ ...body, contractId: 'ctr-779', currency: 'USD', amount: 12 }),
+    });
+    expect((wrongCurrency.json() as { unmatched?: boolean }).unmatched).toBe(true);
+    expect(creditBalance(buyer.userId).balance).toBe(1200);
+
     const bad = await buyer.app.inject({
       method: 'POST',
       url: '/api/billing/webhook/lavatop',
       headers: { 'content-type': 'application/json', 'x-api-key': 'wrong' },
-      payload: JSON.stringify({ ...body, contractId: 'ctr-778' }),
+      payload: JSON.stringify({ ...body, contractId: 'ctr-780' }),
     });
     expect(bad.statusCode).toBe(403);
     await buyer.app.close();

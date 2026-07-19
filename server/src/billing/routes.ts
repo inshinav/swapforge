@@ -52,7 +52,11 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     return {
       minTopupUsd: config.minTopupUsd,
       maxTopupUsd: config.maxTopupUsd,
-      providers: readyProviders().map((p) => ({ id: p.id, needsEmail: p.needsEmail })),
+      providers: readyProviders().map((p) => ({
+        id: p.id,
+        needsEmail: p.needsEmail,
+        ...(p.id === 'lavatop' ? { rubPerUsd: config.lavaRubPerUsd } : {}),
+      })),
     };
   });
 
@@ -163,13 +167,25 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       }
 
       if (!legacyPack) {
-        const paidCents = typeof ev.paidAmountUsd === 'number' && Number.isFinite(ev.paidAmountUsd)
-          ? Math.round(ev.paidAmountUsd * 100)
-          : null;
-        const currencyOk = ev.paidCurrency === 'USD';
-        if (!currencyOk || paidCents === null || paidCents < expectedCents) {
+        const isLavaRub = providerId === 'lavatop';
+        const paidMinor = isLavaRub
+          ? typeof ev.paidAmount === 'number' && Number.isFinite(ev.paidAmount)
+            ? Math.round(ev.paidAmount * 100)
+            : null
+          : typeof ev.paidAmountUsd === 'number' && Number.isFinite(ev.paidAmountUsd)
+            ? Math.round(ev.paidAmountUsd * 100)
+            : null;
+        const expectedMinor = isLavaRub ? ev.expectedPaidAmountMinor ?? null : expectedCents;
+        const expectedCurrency = isLavaRub ? 'RUB' : 'USD';
+        const currencyOk = ev.paidCurrency === expectedCurrency;
+        if (expectedMinor === null || !currencyOk || paidMinor === null || paidMinor < expectedMinor) {
+          const expectedLabel = expectedMinor === null
+            ? `неизвестная сумма ${expectedCurrency}`
+            : isLavaRub
+              ? `${(expectedMinor / 100).toFixed(2)} RUB`
+              : `$${usd(expectedCents).toFixed(2)}`;
           console.error(
-            `[billing:${providerId}] USD-сумма не совпала для ${ev.paymentRef}: оплачено ${ev.paidAmountUsd} ${ev.paidCurrency}, ожидалось $${usd(expectedCents).toFixed(2)} — не начисляю`,
+            `[billing:${providerId}] сумма не совпала для ${ev.paymentRef}: оплачено ${isLavaRub ? ev.paidAmount : ev.paidAmountUsd} ${ev.paidCurrency}, ожидалось ${expectedLabel} — не начисляю`,
           );
           return { ok: true, unmatched: true };
         }

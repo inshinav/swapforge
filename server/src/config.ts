@@ -3,6 +3,10 @@ import path from 'node:path';
 const env = (k: string, def = ''): string => process.env[k]?.trim() || def;
 const minTopupUsd = Math.round(Math.max(5, Number(env('MIN_TOPUP_USD', '5')) || 5) * 100) / 100;
 const maxTopupUsd = Math.round(Math.max(minTopupUsd, Number(env('MAX_TOPUP_USD', '1000')) || 1000) * 100) / 100;
+const lavaRubPerUsdRaw = Number(env('LAVA_RUB_PER_USD', '100'));
+const lavaRubPerUsd = Number.isFinite(lavaRubPerUsdRaw) && lavaRubPerUsdRaw > 0
+  ? Math.round(lavaRubPerUsdRaw * 100) / 100
+  : 100;
 
 export const config = {
   port: Number(env('PORT', '4315')),
@@ -65,6 +69,8 @@ export const config = {
   lavaApiKey: env('LAVA_API_KEY'),
   lavaWebhookSecret: env('LAVA_WEBHOOK_SECRET'),
   lavaDynamicOfferId: env('LAVA_DYNAMIC_OFFER_ID'),
+  /** Фиксированный пользовательский курс для Lava: USD-баланс → сумма RUB-счёта. */
+  lavaRubPerUsd,
   /** Пользователь сам задаёт сумму пополнения в этих границах. */
   minTopupUsd,
   maxTopupUsd,

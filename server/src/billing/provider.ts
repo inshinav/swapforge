@@ -34,9 +34,11 @@ export type PaymentEvent =
       /** Номинал инвойса в USD для защиты от недоплаты/рассинхрона. */
       paidAmountUsd?: number | null;
       paidCurrency?: string | null;
-      /** Только для совместимости со старыми пакетными крипто-инвойсами. */
+      /** Фактически оплаченная сумма в paidCurrency (Lava RUB и старые крипто-инвойсы). */
       paidAmount?: number | null;
       paidAsset?: string | null;
+      /** Ожидаемая сумма в минимальных единицах paidCurrency, зафиксированная при checkout. */
+      expectedPaidAmountMinor?: number;
     }
   | { kind: 'ignored'; reason: string }
   | { kind: 'invalid'; reason: string };
