@@ -8,6 +8,7 @@ import { requireOwner } from '../auth/middleware';
 import { byUserOrIp, rateLimit } from '../rateLimit';
 import { config } from '../config';
 import { adjustCredits, creditBalance, grantPurchase, listLedger } from './credits';
+import { cryptoPayAvailableToRole } from './cryptopay';
 import { getPack } from './packs';
 import { getProvider, readyProviders } from './provider';
 
@@ -77,15 +78,17 @@ export function registerBillingRoutes(app: FastifyInstance): void {
   });
 
   // Оставляем URL /packs для совместимости клиента, но пакетов в продукте больше нет.
-  app.get('/api/billing/packs', async () => {
+  app.get('/api/billing/packs', async (req) => {
     return {
       minTopupUsd: config.minTopupUsd,
       maxTopupUsd: config.maxTopupUsd,
-      providers: readyProviders().map((p) => ({
-        id: p.id,
-        needsEmail: p.needsEmail,
-        ...(p.id === 'lavatop' ? { rubPerUsd: config.lavaRubPerUsd } : {}),
-      })),
+      providers: readyProviders()
+        .filter((p) => p.id !== 'cryptopay' || cryptoPayAvailableToRole(req.user?.role))
+        .map((p) => ({
+          id: p.id,
+          needsEmail: p.needsEmail,
+          ...(p.id === 'lavatop' ? { rubPerUsd: config.lavaRubPerUsd } : {}),
+        })),
     };
   });
 
@@ -97,6 +100,9 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     const body = (req.body ?? {}) as { amountUsd?: number; provider?: string; email?: string };
     const provider = getProvider(body.provider ?? '');
     if (!provider || !provider.ready) return bad(reply, 400, 'Способ оплаты недоступен');
+    if (provider.id === 'cryptopay' && !cryptoPayAvailableToRole(req.user?.role)) {
+      return bad(reply, 400, 'Способ оплаты недоступен');
+    }
     const amountCents = topupCents(body.amountUsd);
     if (amountCents === null) {
       return bad(reply, 400, `Укажи сумму от $${config.minTopupUsd} до $${config.maxTopupUsd}, не больше 2 знаков после точки`);
@@ -230,8 +236,8 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       if (ev.kind === 'ignored') return { ok: true, ignored: ev.reason };
 
       // userId мы сами положили в инвойс — проверяем, что он жив
-      const user = getDb().prepare(`SELECT id FROM users WHERE id = ?`).get(ev.userId) as
-        | { id: string }
+      const user = getDb().prepare(`SELECT id, role FROM users WHERE id = ?`).get(ev.userId) as
+        | { id: string; role: string }
         | undefined;
       const legacyPack = ev.packId ? getPack(ev.packId) : null;
       const expectedCents = ev.amountCents ?? legacyPack?.credits ?? null;
@@ -242,6 +248,12 @@ export function registerBillingRoutes(app: FastifyInstance): void {
           `[billing:${providerId}] платёж ${ev.paymentRef} без юзера/суммы (user=${ev.userId} amount=${ev.amountCents} pack=${ev.packId}) — разберись через /api/billing/adjust`,
         );
         return { ok: true, unmatched: true };
+      }
+      if (providerId === 'cryptopay' && !cryptoPayAvailableToRole(user.role)) {
+        console.error(
+          `[billing:cryptopay] testnet-платёж ${ev.paymentRef} для не-владельца ${user.id} отклонён`,
+        );
+        return { ok: true, testnetRestricted: true };
       }
 
       // Defense-in-depth: если провайдер сообщил сумму — сверяем с ценой пакета

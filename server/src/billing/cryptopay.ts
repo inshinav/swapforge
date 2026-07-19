@@ -1,6 +1,6 @@
 // Crypto Pay (@CryptoBot) — единственный файл, знающий его wire-формат.
 // Доки: https://help.send.tg/en/articles/10279948-crypto-pay-api (сверено 19.07.2026).
-// - createInvoice: asset+amount (currency_type=crypto), payload (до 4кб, round-trip);
+// - createInvoice: fiat USD + accepted_assets, payload (до 4кб, round-trip);
 // - вебхук invoice_paid: { update_type, payload: <Invoice> }, Invoice.payload = наш JSON;
 // - подпись: header crypto-pay-api-signature = HMAC-SHA256(raw-тело, SHA256(токен)).
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
@@ -19,6 +19,17 @@ const TESTNET = 'https://testnet-pay.crypt.bot/api';
 
 function apiBase(): string {
   return config.cryptoPayTestnet ? TESTNET : MAINNET;
+}
+
+/**
+ * Testnet нельзя выдавать обычным пользователям: иначе тестовыми монетами можно
+ * купить настоящий USD-баланс SwapForge. На публичном prod тестирует только owner.
+ */
+export function cryptoPayAvailableToRole(
+  role: string | null | undefined,
+  testnet = config.cryptoPayTestnet,
+): boolean {
+  return !testnet || role === 'owner';
 }
 
 export function verifyCryptoPaySignature(rawBody: Buffer, signature: string, token: string): boolean {

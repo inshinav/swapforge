@@ -40,7 +40,12 @@ const { reconcileOrphanHolds, releaseFlowHoldOnFailure, settleProjectHold, toUse
   '../src/billing/flow'
 );
 const { encodeRef } = await import('../src/billing/provider');
-const { CryptoPayProvider, parseCryptoPayEvent, verifyCryptoPaySignature } = await import('../src/billing/cryptopay');
+const {
+  CryptoPayProvider,
+  cryptoPayAvailableToRole,
+  parseCryptoPayEvent,
+  verifyCryptoPaySignature,
+} = await import('../src/billing/cryptopay');
 const { LavaTopProvider, parseLavaEvent } = await import('../src/billing/lavatop');
 const { makeAuthedApp } = await import('./helpers');
 import type { EstimateInfo } from '../../shared/api-types';
@@ -230,6 +235,13 @@ describe('Crypto Pay адаптер', () => {
   });
   const signed = (body: Buffer, token = TOKEN) =>
     createHmac('sha256', createHash('sha256').update(token).digest()).update(body).digest('hex');
+
+  it('testnet доступен только владельцу, mainnet — обычным пользователям тоже', () => {
+    expect(cryptoPayAvailableToRole('owner', true)).toBe(true);
+    expect(cryptoPayAvailableToRole('user', true)).toBe(false);
+    expect(cryptoPayAvailableToRole(null, true)).toBe(false);
+    expect(cryptoPayAvailableToRole('user', false)).toBe(true);
+  });
 
   it('подпись: HMAC(body, SHA256(token)); чужой токен/подмена тела — нет', () => {
     const body = Buffer.from(JSON.stringify(invoice('u1', 500)));
