@@ -7,6 +7,7 @@ import type {
   EstimateForUser,
   EstimateInfo,
   HealthInfo,
+  AdminOverview,
   MeInfo,
   ModelInfo,
   OwnerBillingUser,
@@ -215,6 +216,7 @@ export const api = {
     ),
   ownerManualTopup: (body: { userId: string; amountUsd: number; note: string; requestId: string }) =>
     post(u('api/billing/manual-topup'), body).then((r) => j<OwnerManualTopupResult>(r)),
+  adminOverview: () => fetch(u('api/admin/overview')).then((r) => j<AdminOverview>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',

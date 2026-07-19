@@ -275,6 +275,35 @@ export interface OwnerManualTopupResult {
   user: OwnerBillingUser;
 }
 
+export interface AdminUserOverview extends OwnerBillingUser {
+  photoUrl: string;
+  status: 'active' | 'blocked';
+  createdAt: string;
+  lastLoginAt: string | null;
+  lastActivityAt: string;
+  projects: number;
+  models: number;
+  renders: number;
+  doneRenders: number;
+  failedRenders: number;
+  activeRenders: number;
+  latestProjectTitle: string | null;
+  latestProjectStatus: string | null;
+  latestGenerationStatus: string | null;
+}
+
+export interface AdminOverview {
+  generatedAt: string;
+  summary: {
+    users: number;
+    totalBalanceUsd: number;
+    heldUsd: number;
+    activeRenders: number;
+    completedRenders: number;
+  };
+  users: AdminUserOverview[];
+}
+
 export interface PricingInfo {
   balanceUsd: number | null;
   litellmFetchedAt: string | null;

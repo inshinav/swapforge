@@ -190,13 +190,87 @@ describe('тенантность роутов', () => {
   });
 
   it('операторские роуты (USD): юзеру 403, владельцу — можно', async () => {
-    for (const url of ['/api/pricing', '/api/usage/summary']) {
+    for (const url of ['/api/pricing', '/api/usage/summary', '/api/admin/overview']) {
       const res = await app.inject({ method: 'GET', url, headers: { cookie: userA.cookie } });
       expect(res.statusCode, url).toBe(403);
     }
     // владельцу /api/usage/summary отвечает (200; /api/pricing зовёт живой WaveSpeed — не дёргаем в тестах)
     const usage = await app.inject({ method: 'GET', url: '/api/usage/summary', headers: { cookie: owner.cookie } });
     expect(usage.statusCode).toBe(200);
+  });
+
+  it('админ-обзор показывает владельцу баланс и реальную активность пользователя', async () => {
+    getDb()
+      .prepare(
+        `INSERT INTO projects (id, user_id, title, status, video_file, meta_json, created_at)
+         VALUES ('admin-project-b', ?, 'Тестовый ролик B', 'complete', 'source.mp4', '{}', '2099-02-01 12:00:00')`,
+      )
+      .run(userB.userId);
+    getDb()
+      .prepare(
+        `INSERT INTO generations (id, project_id, version, status, user_id, created_at, finished_at)
+         VALUES ('admin-gen-b-done', 'admin-project-b', 1, 'done', ?, '2099-02-01 12:01:00', '2099-02-01 12:02:00')`,
+      )
+      .run(userB.userId);
+    getDb()
+      .prepare(
+        `INSERT INTO generations (id, project_id, version, status, user_id, created_at, submitted_at)
+         VALUES ('admin-gen-b-active', 'admin-project-b', 2, 'rendering', ?, '2099-02-01 12:03:00', '2099-02-01 12:04:00')`,
+      )
+      .run(userB.userId);
+    getDb()
+      .prepare(`INSERT INTO models (id, user_id, name) VALUES ('admin-model-b', ?, 'Модель B')`)
+      .run(userB.userId);
+    getDb()
+      .prepare(
+        `INSERT INTO credit_ledger (id, user_id, delta_credits, kind, note)
+         VALUES ('admin-ledger-b', ?, 2500, 'purchase', 'тест админки')`,
+      )
+      .run(userB.userId);
+    getDb()
+      .prepare(
+        `INSERT INTO credit_holds (id, user_id, project_id, generation_id, credits, status)
+         VALUES ('admin-hold-b', ?, 'admin-project-b', 'admin-gen-b-active', 400, 'open')`,
+      )
+      .run(userB.userId);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/overview',
+      headers: { cookie: owner.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      summary: { users: number; totalBalanceUsd: number; heldUsd: number; activeRenders: number };
+      users: Array<{
+        id: string;
+        balance: { balanceUsd: number; heldUsd: number; availableUsd: number };
+        projects: number;
+        models: number;
+        renders: number;
+        doneRenders: number;
+        activeRenders: number;
+        latestProjectTitle: string | null;
+        latestGenerationStatus: string | null;
+        lastActivityAt: string;
+      }>;
+    };
+    const row = body.users.find((user) => user.id === userB.userId);
+    expect(row).toMatchObject({
+      balance: { balanceUsd: 25, heldUsd: 4, availableUsd: 21 },
+      projects: 1,
+      models: 1,
+      renders: 2,
+      doneRenders: 1,
+      activeRenders: 1,
+      latestProjectTitle: 'Тестовый ролик B',
+      latestGenerationStatus: 'rendering',
+      lastActivityAt: '2099-02-01 12:04:00',
+    });
+    expect(body.summary.users).toBeGreaterThanOrEqual(2);
+    expect(body.summary.totalBalanceUsd).toBeGreaterThanOrEqual(25);
+    expect(body.summary.heldUsd).toBeGreaterThanOrEqual(4);
+    expect(body.summary.activeRenders).toBeGreaterThanOrEqual(1);
   });
 
   it('/api/me отражает пользователя; logout убивает сессию', async () => {

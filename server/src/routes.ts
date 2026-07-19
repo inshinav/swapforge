@@ -8,6 +8,7 @@ import { getDb } from './db';
 import { registerAuthRoutes } from './auth/routes';
 import { registerModelRoutes } from './routes-models';
 import { registerBillingRoutes } from './billing/routes';
+import { registerAdminRoutes } from './admin/routes';
 import { openHoldForProject, placeHold, priceCredits } from './billing/credits';
 import { forceReleaseProjectHold, releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
 import { requireOwner } from './auth/middleware';
@@ -130,6 +131,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerAuthRoutes(app);
   registerModelRoutes(app);
   registerBillingRoutes(app);
+  registerAdminRoutes(app);
 
   // Юридические страницы: серверный HTML вне SPA (явный роут выигрывает у fallback-а)
   app.get('/legal/:slug', async (req, reply) => {

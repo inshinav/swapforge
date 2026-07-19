@@ -7,15 +7,15 @@ import Login from './screens/Login';
 import Models from './screens/Models';
 import Billing from './screens/Billing';
 import Guide from './screens/Guide';
-import OwnerCredits from './screens/OwnerCredits';
+import Admin from './screens/Admin';
 import { JourneyBar, JourneyHome, type JourneyStatus, type JourneyTarget } from './screens/Onboarding';
 import { Spinner } from './ui';
 
-type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide' | 'credits';
+type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide' | 'admin';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
-const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide', 'credits']);
+const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide', 'admin']);
 
 interface JourneyPrefs {
   balanceDeferred: boolean;
@@ -53,6 +53,7 @@ function buildJourneyStatus(data: JourneyData, prefs: JourneyPrefs): JourneyStat
 
 function viewFromHash(): View {
   const raw = window.location.hash.replace(/^#/, '');
+  if (raw === 'credits') return 'admin';
   return VIEW_HASHES.has(raw as View) ? (raw as View) : 'swap';
 }
 
@@ -170,7 +171,7 @@ export default function App() {
   }, [go]);
 
   const activeView: View =
-    (isOwner && view === 'billing') || (userId !== null && !isOwner && view === 'credits')
+    (isOwner && view === 'billing') || (userId !== null && !isOwner && view === 'admin')
       ? 'swap'
       : view;
   const journeyStatus = journeyData ? buildJourneyStatus(journeyData, journeyPrefs) : null;
@@ -179,7 +180,7 @@ export default function App() {
   useEffect(() => {
     if (
       (isOwner && (view === 'billing' || view === 'start')) ||
-      (userId !== null && !isOwner && view === 'credits')
+      (userId !== null && !isOwner && view === 'admin')
     ) {
       go('swap');
     }
@@ -282,8 +283,8 @@ export default function App() {
               Баланс
             </TabBtn>
           ) : (
-            <TabBtn active={activeView === 'credits'} onClick={() => go('credits')}>
-              Начислить
+            <TabBtn active={activeView === 'admin'} onClick={() => go('admin')}>
+              Админ
             </TabBtn>
           )}
         </nav>}
@@ -360,8 +361,8 @@ export default function App() {
               go('start');
             } : undefined}
           />
-        ) : activeView === 'credits' ? (
-          <OwnerCredits />
+        ) : activeView === 'admin' ? (
+          <Admin />
         ) : (
           <Library onOpen={openProjectAndRefresh} />
         )}
@@ -436,7 +437,7 @@ function MobileNav({
     { view: 'models', icon: '◇', label: 'Модели' },
     { view: 'library', icon: '▦', label: 'Работы' },
     ...(!isOwner ? [{ view: 'billing' as const, icon: '●', label: 'Баланс' }] : []),
-    ...(isOwner ? [{ view: 'credits' as const, icon: '$', label: 'Начислить' }] : []),
+    ...(isOwner ? [{ view: 'admin' as const, icon: '◎', label: 'Админ' }] : []),
   ];
   return (
     <nav
