@@ -32,9 +32,9 @@ export function RenderPanel({ proj, reload }: { proj: ProjectFull; reload: () =>
   return (
     <Card glow>
       <SectionTitle
-        step="4"
+        step="3"
         title="Готовый ролик"
-        hint="смотри, оценивай — 👍/👎 делает следующие свапы умнее"
+        hint="оценка помогает улучшать следующие ролики"
         right={
           <Button
             kind="ghost"

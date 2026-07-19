@@ -54,9 +54,7 @@ export const config = {
   /** Дев-вход без Telegram (localhost не привязать к BotFather). Запрещён в prod. */
   devAuthBypass: env('AUTH_DEV_BYPASS') === '1',
   // ── v4: кредиты/биллинг ──────────────────────────────────────────────────
-  /** Технический коэффициент себестоимости (буфер тарифов/ретраев). */
-  creditMarkup: Number(env('CREDIT_MARKUP', '2')),
-  /** Пользовательская маржа поверх рассчитанной себестоимости. 25 = +25%. */
+  /** Единственная пользовательская маржа поверх фактической себестоимости. 25 = +25%. */
   userMarginPct: Number(env('USER_MARGIN_PCT', '25')),
   /** Какие платёжные провайдеры активны: 'cryptopay,lavatop'. */
   billingProviders: env('BILLING_PROVIDERS', 'cryptopay'),

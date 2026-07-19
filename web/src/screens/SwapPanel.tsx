@@ -34,7 +34,7 @@ function variantButtons(models: ModelInfo[]): VariantButton[] {
       out.push({
         variantId: v.id,
         label: m.variants.length > 1 ? `${m.name} · ${v.title}` : m.name,
-        hint: v.hint || `${m.name}: свап этой кнопкой поедет сразу`,
+        hint: v.hint || `${m.name}: ролик запустится сразу`,
         thumb: sheet ? api.modelFileUrl(m.id, sheet.file) : null,
       });
     }
@@ -52,16 +52,19 @@ export function SwapPanel({
   onCustom,
   onOpenModels,
   onOpenBilling,
+  owner,
 }: {
   proj: ProjectFull;
   reload: () => void;
   /** Режим «свои референсы»: секция рефов открыта в основном потоке. */
   custom: boolean;
   onCustom: () => void;
-  /** Переход в конструктор «Мои модели» (пустой стейт кнопок). */
+  /** Переход в конструктор пресетов (пустой стейт кнопок). */
   onOpenModels: () => void;
   /** Прямой переход из нехватки денег к пополнению баланса. */
   onOpenBilling: (needed: number) => void;
+  /** Владелец видит технические стадии и себестоимость; пользователь — только простой путь и финальную цену. */
+  owner: boolean;
 }) {
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
@@ -143,11 +146,11 @@ export function SwapPanel({
     <Card glow>
       <SectionTitle
         step="2"
-        title="Модель и запуск"
+        title="Выбери пресет"
       />
       <div className="p-5 space-y-4">
         {running ? (
-          <ProgressStepper proj={proj} gen={activeGen} />
+          <ProgressStepper proj={proj} gen={activeGen} detailed={owner} />
         ) : (
           <>
             {proj.flow === 'auto' && proj.error && (
@@ -188,23 +191,6 @@ export function SwapPanel({
               </div>
             )}
 
-            <details className="rounded-xl border border-line bg-panel2">
-              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">Настройки</summary>
-              <div className="border-t border-line p-3 space-y-3">
-                <div className="grid sm:grid-cols-2 gap-2">
-                  <FlagBox checked={removeText} onChange={setRemoveText} title="Убрать текст" hint="капшены и стикеры" />
-                  <FlagBox checked={enhanceFigure} onChange={setEnhanceFigure} title="Усилить фигуру" hint="лицо не меняется" />
-                </div>
-                <textarea
-                  value={wish}
-                  onChange={(e) => setWish(e.target.value.slice(0, 500))}
-                  rows={2}
-                  placeholder="Пожелание к ролику (необязательно)"
-                  className="w-full rounded-lg bg-panel border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
-                />
-              </div>
-            </details>
-
             <EstimateLine
               est={est}
               err={estErr}
@@ -226,7 +212,10 @@ export function SwapPanel({
             {proj.refs.length === 0 && !custom ? (
               /* Чистый проект: кнопки моделей пользователя или свои референсы */
               <div className="space-y-2">
-                <div className="text-sm font-semibold">Кто в кадре?</div>
+                <div>
+                  <div className="text-sm font-semibold">Нажми на нужный пресет</div>
+                  <div className="text-xs text-mut mt-0.5">Весь ролик запустится автоматически.</div>
+                </div>
                 {buttons === null ? (
                   <div className="flex items-center gap-2 text-sm text-mut">
                     <Spinner size={14} /> загружаю твои модели…
@@ -240,7 +229,7 @@ export function SwapPanel({
                         disabled={launching || proj.videoPurged}
                         onClick={() => void launch(b.variantId)}
                         className="group text-left rounded-xl border border-line hover:border-lime/60 bg-panel2 overflow-hidden transition-colors disabled:opacity-50"
-                        title={`${b.hint} — запустит весь свап сразу`}
+                        title={`${b.hint} — запустит создание ролика сразу`}
                       >
                         {b.thumb ? (
                           <img
@@ -251,8 +240,9 @@ export function SwapPanel({
                         ) : (
                           <div className="w-full h-24 bg-panel flex items-center justify-center text-2xl">👤</div>
                         )}
-                        <div className="px-3 py-2">
-                          <div className="text-sm font-semibold">{b.label}</div>
+                        <div className="px-3 py-2 flex items-center gap-2">
+                          <div className="text-sm font-semibold truncate">{b.label}</div>
+                          <span className="ml-auto text-[11px] font-bold text-lime">Создать</span>
                         </div>
                       </button>
                     ))}
@@ -300,7 +290,7 @@ export function SwapPanel({
                         : undefined
                   }
                 >
-                  ⚡ Сделать свап
+                  ⚡ Создать ролик
                 </Button>
                 {!hasModelRef && (
                   <span className="text-xs text-warn">нужен реф с ролью «модель» (блок выше)</span>
@@ -310,6 +300,22 @@ export function SwapPanel({
                 )}
               </div>
             )}
+            <details className="rounded-xl border border-line bg-panel2">
+              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">Настройки <span className="text-xs text-dim font-normal">необязательно</span></summary>
+              <div className="border-t border-line p-3 space-y-3">
+                <div className="grid sm:grid-cols-2 gap-2">
+                  <FlagBox checked={removeText} onChange={setRemoveText} title="Убрать текст" hint="капшены и стикеры" />
+                  <FlagBox checked={enhanceFigure} onChange={setEnhanceFigure} title="Усилить фигуру" hint="лицо не меняется" />
+                </div>
+                <textarea
+                  value={wish}
+                  onChange={(e) => setWish(e.target.value.slice(0, 500))}
+                  rows={2}
+                  placeholder="Пожелание к ролику (необязательно)"
+                  className="w-full rounded-lg bg-panel border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
+                />
+              </div>
+            </details>
             {launchErr && (
               <div className="space-y-2">
                 <ErrorNote text={launchErr} />
@@ -387,7 +393,7 @@ function EstimateLine({
       <div className="rounded-xl border border-line bg-panel2 px-4 py-3 text-sm space-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-bold text-base">
-            {est.priceUsd !== null ? `≈ $${est.priceUsd.toFixed(2)}` : 'Цена недоступна'}
+            {est.priceUsd !== null ? `Итого ≈ $${est.priceUsd.toFixed(2)}` : 'Цена недоступна'}
           </span>
           <span className={short ? 'text-danger font-semibold' : 'text-mut'}>
             баланс ${est.balanceUsd.toFixed(2)}
@@ -505,8 +511,40 @@ function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
   ];
 }
 
-function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow | null }) {
-  const steps = deriveSteps(proj, gen);
+function deriveUserSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
+  const local = proj.status;
+  const genStatus = gen?.status ?? null;
+  const prepared = !!proj.analysis || proj.promptVersions > 0 || !!genStatus;
+  const lookReady = proj.startFrames.length > 0 || !!genStatus;
+  const renderDone = genStatus === 'done';
+  const renderActive = !!genStatus && genStatus !== 'done' && genStatus !== 'failed';
+  const mark = (done: boolean, active: boolean, hint?: string): Omit<Step, 'key' | 'label'> => ({
+    state: active ? 'active' : done ? 'done' : 'todo',
+    hint: active ? hint : undefined,
+  });
+  const renderHint = genStatus === 'queued'
+    ? `В очереди: ${gen?.queuePosition ?? '?'}-й. Запустится автоматически.`
+    : (gen?.segmentCount ?? 1) > 1
+      ? 'Создаём части и аккуратно соединяем их в один ролик.'
+      : 'Обычно занимает 2–10 минут.';
+  return [
+    {
+      key: 'prepare',
+      label: 'Разбираем исходник',
+      ...mark(prepared, local === 'storyboarding' || local === 'analyzing', 'Сохраняем движения, свет и композицию.'),
+    },
+    {
+      key: 'look',
+      label: 'Собираем новый образ',
+      ...mark(lookReady, local === 'generating' || local === 'startframing', 'Переносим выбранный пресет в первый кадр.'),
+    },
+    { key: 'render', label: 'Создаём видео', ...mark(renderDone, renderActive, renderHint) },
+    { key: 'done', label: 'Готово', ...mark(renderDone, false) },
+  ];
+}
+
+function ProgressStepper({ proj, gen, detailed }: { proj: ProjectFull; gen: GenerationRow | null; detailed: boolean }) {
+  const steps = detailed ? deriveSteps(proj, gen) : deriveUserSteps(proj, gen);
   const run = proj.costs.activeRun;
   const [cancelling, setCancelling] = useState(false);
   const cancelQueue = async () => {
@@ -559,8 +597,8 @@ function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow 
         ))}
       </ol>
       <div className="mt-4 pt-3 border-t border-line flex flex-wrap items-center gap-3 text-xs">
-        <Tag tone="lime">идёт свап</Tag>
-        {run && (
+        <Tag tone="lime">создаём ролик</Tag>
+        {detailed && run && (
           <span className="text-mut">
             потрачено: OpenAI ${run.openaiUsd.toFixed(3)}
             {run.wavespeedActualUsd !== null
@@ -570,12 +608,12 @@ function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow 
                 : ''}
           </span>
         )}
-        {!run && proj.costs.heldUsd != null && (
+        {detailed && !run && proj.costs.heldUsd != null && (
           <span className="text-mut">
             зарезервировано ${proj.costs.heldUsd.toFixed(2)}
           </span>
         )}
-        <span className="text-dim ml-auto">страницу можно закрыть — свап продолжится на сервере</span>
+        <span className="text-dim ml-auto">Можно закрыть страницу — работа продолжится.</span>
       </div>
     </div>
   );

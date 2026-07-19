@@ -260,7 +260,7 @@ export default function Billing({
           {paymentDone !== null && (
             <div className="rounded-xl border border-ok/35 bg-ok/5 px-4 py-3 flex items-center gap-3">
               <span className="text-sm font-semibold text-ok flex-1">Деньги пришли: +{money(paymentDone)}</span>
-              <Button kind="primary" onClick={onBackToSwap}>К свапу</Button>
+              <Button kind="primary" onClick={onBackToSwap}>К ролику</Button>
             </div>
           )}
 

@@ -51,7 +51,7 @@ export default function Models({ guided = false, onProgressChange }: { guided?: 
   return (
     <div className="space-y-4 sf-in">
       <Card glow>
-        <SectionTitle title={guided ? 'Модель и пресеты' : 'Мои модели'} />
+        <SectionTitle title={guided ? 'Модель и пресеты' : 'Пресеты'} />
         <div className="p-5 space-y-3">
           {guided && (
             <div className="rounded-xl border border-lime/35 bg-lime/5 px-4 py-3 text-sm">

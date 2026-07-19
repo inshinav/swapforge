@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DollarBalanceInfo, HealthInfo, MeInfo, PricingInfo, UsageSummary } from '@shared/api-types';
 import { ApiError, api } from './api';
 import NewSwap from './screens/NewSwap';
@@ -267,22 +267,18 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-bg/90 backdrop-blur z-20 min-w-0">
-        <Logo />
+        <Logo onClick={() => go('swap')} />
         {!journeyActive && <nav className="hidden md:flex gap-1 ml-2">
           <TabBtn active={activeView === 'swap'} onClick={() => go('swap')}>
             Создать
           </TabBtn>
           <TabBtn active={activeView === 'models'} onClick={() => go('models')}>
-            Мои модели
+            Пресеты
           </TabBtn>
           <TabBtn active={activeView === 'library'} onClick={() => go('library')}>
-            Библиотека
+            Работы
           </TabBtn>
-          {!isOwner ? (
-            <TabBtn active={activeView === 'billing'} onClick={() => openBilling()}>
-              Баланс
-            </TabBtn>
-          ) : (
+          {isOwner && (
             <TabBtn active={activeView === 'admin'} onClick={() => go('admin')}>
               Админ
             </TabBtn>
@@ -297,15 +293,34 @@ export default function App() {
             хранилище {health.diskUsedPct}%
           </span>
         )}
+        {!isOwner && (
+          <button
+            type="button"
+            onClick={() => openBilling()}
+            className={`shrink-0 min-h-11 md:min-h-9 rounded-xl border px-2.5 sm:px-3 text-sm font-bold transition-colors ${
+              activeView === 'billing'
+                ? 'border-lime/60 bg-lime/10 text-lime'
+                : balance && balance.availableUsd <= 0
+                  ? 'border-warn/40 text-warn hover:border-warn/70'
+                  : 'border-line2 bg-panel2 text-ink hover:border-lime/50'
+            }`}
+            aria-label={`Баланс ${balance ? `$${balance.availableUsd.toFixed(2)}` : 'загружается'}`}
+            title="Баланс и пополнение"
+          >
+            <span className="hidden sm:inline text-mut font-semibold mr-1.5">Баланс</span>
+            {balance ? `$${balance.availableUsd.toFixed(2)}` : '…'}
+          </button>
+        )}
         <UserChip
           name={u.firstName || (u.username ? `@${u.username}` : `id${u.telegramId}`)}
           photo={u.photoUrl}
           owner={u.role === 'owner'}
+          onGuide={() => go('guide')}
           onLogout={logout}
         />
       </header>
 
-      <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 pb-24 md:pb-6">
+      <main className={`flex-1 w-full min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 ${journeyActive ? 'pb-6' : 'pb-24 md:pb-6'}`}>
         {journeyActive && journeyStatus && activeView !== 'start' && (
           <JourneyBar
             status={journeyStatus}
@@ -341,6 +356,7 @@ export default function App() {
             onProjectCreated={openProjectAndRefresh}
             onOpenModels={() => go('models')}
             onOpenBilling={openBilling}
+            owner={isOwner}
             guided={journeyActive}
           />
         ) : activeView === 'models' ? (
@@ -370,9 +386,10 @@ export default function App() {
         )}
       </main>
 
-      <footer className="border-t border-line px-4 sm:px-6 pt-3 pb-24 md:pb-3 text-[11px] text-dim flex flex-wrap gap-x-4 gap-y-1">
-        <span className="hidden md:inline">SwapForge v{health?.version ?? '…'}</span>
-        {isOwner && health?.provider && (
+      {isOwner && (
+        <footer className="border-t border-line px-4 sm:px-6 pt-3 pb-24 md:pb-3 text-[11px] text-dim flex flex-wrap gap-x-4 gap-y-1">
+          <span className="hidden md:inline">SwapForge v{health?.version ?? '…'}</span>
+          {health?.provider && (
           <>
             <span>
               мозг: {health.provider}/{health.model}
@@ -384,35 +401,26 @@ export default function App() {
               </span>
             )}
           </>
-        )}
-        {isOwner && pricing?.balanceUsd !== null && pricing?.balanceUsd !== undefined && (
+          )}
+          {pricing?.balanceUsd !== null && pricing?.balanceUsd !== undefined && (
           <span className={pricing.balanceUsd < 2 ? 'text-warn' : ''}>
             баланс WaveSpeed: ${pricing.balanceUsd.toFixed(2)}
           </span>
-        )}
-        {isOwner && usage && usage.totalUsd > 0 && (
+          )}
+          {usage && usage.totalUsd > 0 && (
           <span>
             за месяц: ${usage.totalUsd.toFixed(2)}
             {usage.runs > 0 ? ` · ${usage.runs} рендеров` : ''}
           </span>
-        )}
-        {isOwner && pricing?.litellmFetchedAt && (
+          )}
+          {pricing?.litellmFetchedAt && (
           <span>тарифы от {pricing.litellmFetchedAt.slice(0, 10)}</span>
-        )}
-        {!isOwner && balance && (
-          <button
-            type="button"
-            onClick={() => openBilling()}
-            className={`${balance.availableUsd <= 0 ? 'text-warn' : ''} hover:text-lime transition-colors hidden md:inline-flex items-center min-h-11 md:min-h-0`}
-          >
-            баланс: ${balance.availableUsd.toFixed(2)}
-          </button>
-        )}
-        {!journeyActive && <button type="button" onClick={() => go('guide')} className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">как это работает</button>}
-        <a href="legal/terms" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">условия</a>
-        <a href="legal/privacy" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">конфиденциальность</a>
-        <span className="ml-auto hidden md:inline">SwapForge · INSHIN LAB · 18+</span>
-      </footer>
+          )}
+          <a href="legal/terms" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">условия</a>
+          <a href="legal/privacy" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">конфиденциальность</a>
+          <span className="ml-auto hidden md:inline">SwapForge · INSHIN LAB · 18+</span>
+        </footer>
+      )}
 
       {!journeyActive && (
         <MobileNav
@@ -436,9 +444,8 @@ function MobileNav({
 }) {
   const items: Array<{ view: View; icon: string; label: string }> = [
     { view: 'swap', icon: '⚡', label: 'Создать' },
-    { view: 'models', icon: '◇', label: 'Модели' },
+    { view: 'models', icon: '◇', label: 'Пресеты' },
     { view: 'library', icon: '▦', label: 'Работы' },
-    ...(!isOwner ? [{ view: 'billing' as const, icon: '●', label: 'Баланс' }] : []),
     ...(isOwner ? [{ view: 'admin' as const, icon: '◎', label: 'Админ' }] : []),
   ];
   return (
@@ -468,34 +475,69 @@ function UserChip({
   name,
   photo,
   owner,
+  onGuide,
   onLogout,
 }: {
   name: string;
   photo: string;
   owner: boolean;
+  onGuide: () => void;
   onLogout: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onOutside);
+    return () => document.removeEventListener('pointerdown', onOutside);
+  }, [open]);
   return (
-    <div className="flex items-center gap-2">
-      {photo ? (
-        <img src={photo} alt="" className="w-7 h-7 rounded-full border border-line2 object-cover" />
-      ) : (
-        <div className="w-7 h-7 rounded-full bg-panel2 border border-line2 flex items-center justify-center text-[11px] text-mut">
-          {name.slice(0, 1).toUpperCase()}
-        </div>
-      )}
-      <span className="text-sm text-mut hidden sm:inline max-w-[140px] truncate">
-        {name}
-        {owner && <span className="text-lime ml-1" title="владелец">★</span>}
-      </span>
+    <div ref={root} className="relative shrink-0">
       <button
         type="button"
-        onClick={onLogout}
-        className="min-h-11 sm:min-h-0 text-[11px] text-dim hover:text-ink border border-line rounded-lg px-3 sm:px-2 py-1 transition-colors"
-        title="Выйти из аккаунта"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-label="Меню профиля"
+        className="min-h-11 md:min-h-9 flex items-center gap-2 cursor-pointer rounded-xl border border-transparent hover:border-line px-1.5 sm:px-2 select-none"
       >
-        Выйти
+        {photo ? (
+          <img src={photo} alt="" className="w-7 h-7 rounded-full border border-line2 object-cover" />
+        ) : (
+          <span className="w-7 h-7 rounded-full bg-panel2 border border-line2 flex items-center justify-center text-[11px] text-mut">
+            {name.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+        <span className="text-sm text-mut hidden sm:inline max-w-[140px] truncate">
+          {name}
+          {owner && <span className="text-lime ml-1" title="владелец">★</span>}
+        </span>
+        <span className="hidden sm:inline text-dim text-[10px]" aria-hidden>▾</span>
       </button>
+      {open && <div className="absolute right-0 top-[calc(100%+0.4rem)] z-40 w-48 rounded-xl border border-line2 bg-panel shadow-xl p-1.5 sf-in">
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            onGuide();
+          }}
+          className="w-full min-h-11 rounded-lg px-3 text-left text-sm text-mut hover:bg-panel2 hover:text-ink"
+        >
+          Как это работает
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            onLogout();
+          }}
+          className="w-full min-h-11 rounded-lg px-3 text-left text-sm text-dim hover:bg-panel2 hover:text-ink"
+        >
+          Выйти
+        </button>
+      </div>}
     </div>
   );
 }
@@ -522,9 +564,9 @@ function TabBtn({
   );
 }
 
-function Logo() {
+function Logo({ onClick }: { onClick: () => void }) {
   return (
-    <div className="flex items-center gap-2 select-none">
+    <button type="button" onClick={onClick} className="flex items-center gap-2 select-none shrink-0" title="Создать ролик">
       <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden>
         <rect width="32" height="32" rx="7" fill="#131316" />
         <path d="M18.5 4 8 18h6l-1.5 10L23 14h-6l1.5-10z" fill="#C6F24E" />
@@ -532,9 +574,9 @@ function Logo() {
       <span className="font-extrabold tracking-tight">
         Swap<span className="text-lime">Forge</span>
       </span>
-      <span className="text-[10px] uppercase tracking-[0.18em] text-dim mt-0.5 hidden sm:inline">
+      <span className="text-[10px] uppercase tracking-[0.18em] text-dim mt-0.5 hidden lg:inline">
         Inshin Lab
       </span>
-    </div>
+    </button>
   );
 }

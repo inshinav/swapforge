@@ -43,27 +43,14 @@ function useProject(id: string | null) {
   return { proj, err, reload };
 }
 
-function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
-  const Step = ({ n, title, onClick }: { n: number; title: string; onClick?: () => void }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!onClick}
-      className={`min-w-0 flex items-center gap-2 text-left rounded-lg border px-3 py-2 transition-colors ${
-        onClick ? 'border-line hover:border-lime/40' : 'border-line'
-      }`}
-    >
-      <span className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold bg-panel2 border border-line2 text-mut">
-        {n}
-      </span>
-      <span className="text-xs sm:text-sm font-semibold truncate">{title}</span>
-    </button>
-  );
-
+function QuickPath() {
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <Step n={1} title="Видео" />
-      <Step n={2} title="Модель и запуск" onClick={onOpenModels} />
+    <div className="rounded-xl border border-line bg-panel2 px-3 py-2.5 flex items-center justify-center gap-2 sm:gap-3 text-xs sm:text-sm font-semibold" aria-label="Три шага создания ролика">
+      <span>1. Видео</span>
+      <span className="text-dim" aria-hidden>→</span>
+      <span>2. Пресет</span>
+      <span className="text-dim" aria-hidden>→</span>
+      <span className="text-lime">3. Создать</span>
     </div>
   );
 }
@@ -99,12 +86,14 @@ export default function NewSwap({
   onProjectCreated,
   onOpenModels,
   onOpenBilling,
+  owner,
   guided = false,
 }: {
   projectId: string | null;
   onProjectCreated: (id: string) => void;
   onOpenModels: () => void;
   onOpenBilling: (needed: number) => void;
+  owner: boolean;
   guided?: boolean;
 }) {
   const { proj, err, reload } = useProject(projectId);
@@ -112,7 +101,7 @@ export default function NewSwap({
   if (!projectId) {
     return (
       <div className="space-y-4">
-        {!guided && <WelcomeChecklist onOpenModels={onOpenModels} />}
+        {!guided && <QuickPath />}
         <UploadZone onCreated={onProjectCreated} guided={guided} />
       </div>
     );
@@ -121,7 +110,7 @@ export default function NewSwap({
     // проект удалили — забываем его и показываем загрузку
     return (
       <div className="space-y-4">
-        <ErrorNote text="Этот проект удалён — начни новый свап" />
+        <ErrorNote text="Этот проект удалён — начни новый ролик" />
         <UploadZone onCreated={onProjectCreated} guided={guided} />
       </div>
     );
@@ -141,6 +130,7 @@ export default function NewSwap({
       onProjectCreated={onProjectCreated}
       onOpenModels={onOpenModels}
       onOpenBilling={onOpenBilling}
+      owner={owner}
     />
   );
 }
@@ -151,12 +141,14 @@ function ProjectView({
   onProjectCreated,
   onOpenModels,
   onOpenBilling,
+  owner,
 }: {
   proj: ProjectFull;
   reload: () => void;
   onProjectCreated: (id: string) => void;
   onOpenModels: () => void;
   onOpenBilling: (needed: number) => void;
+  owner: boolean;
 }) {
   // Пресетный проект: рефы подложены кнопкой — секция референсов уезжает «под капот»,
   // главный сценарий остаётся бесшовным. «Свои референсы» раскрывает её обратно.
@@ -175,9 +167,10 @@ function ProjectView({
         onCustom={() => setCustom(true)}
         onOpenModels={onOpenModels}
         onOpenBilling={onOpenBilling}
+        owner={owner}
       />
       <RenderPanel proj={proj} reload={reload} />
-      <UnderTheHood proj={proj} reload={reload} showRefs={presetRefs && !custom} />
+      {owner && <UnderTheHood proj={proj} reload={reload} showRefs={presetRefs && !custom} />}
     </div>
   );
 }
@@ -387,7 +380,7 @@ function VideoSection({
         title={proj.title}
         right={
           <Button kind="ghost" onClick={onNew} className="!py-1 !px-2.5 text-xs">
-            + Новый свап
+            + Новый ролик
           </Button>
         }
       />
@@ -411,7 +404,7 @@ function VideoSection({
           {m && (
             <div className="flex flex-wrap gap-2 mb-4">
               <Tag tone={longWarn ? 'warn' : 'mut'}>
-                {m.durationSec.toFixed(1)} с{longWarn ? ' · будет собрано из частей до 15 с' : ''}
+                {m.durationSec.toFixed(1)} с{longWarn ? ' · длинный ролик соберём автоматически' : ''}
               </Tag>
               <Tag>{m.fps} fps</Tag>
               <Tag>{(m.sizeBytes / 1024 ** 2).toFixed(1)} МБ</Tag>

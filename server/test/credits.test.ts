@@ -11,7 +11,7 @@ process.env.AUTH_DEV_BYPASS = '1';
 process.env.OWNER_TELEGRAM_ID = '9500';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.WAVESPEED_API_KEY = 'test-key';
-process.env.CREDIT_MARKUP = '2';
+process.env.USER_MARGIN_PCT = '25';
 process.env.BILLING_PROVIDERS = 'cryptopay,lavatop';
 process.env.CRYPTO_PAY_TOKEN = 'cp-test-token';
 process.env.LAVA_API_KEY = 'lava-test-key';
@@ -60,11 +60,11 @@ function mkProject(userId: string): string {
 }
 
 describe('priceCredits', () => {
-  it('ceil(usd × markup × 100), минимум 1', () => {
-    expect(priceCredits(2.1)).toBe(525); // 2.1 × 2 × 1.25 × 100
+  it('добавляет ровно 25% к себестоимости, округляет вверх до цента, минимум 1', () => {
+    expect(priceCredits(2.1)).toBe(263); // ceil(2.1 × 1.25 × 100)
     expect(priceCredits(0.001)).toBe(1);
     expect(priceCredits(0)).toBe(1);
-    expect(priceCredits(1.234)).toBe(309); // ceil(308.5)
+    expect(priceCredits(1.234)).toBe(155); // ceil(154.25)
   });
 });
 
@@ -136,8 +136,8 @@ describe('hold/settle/release', () => {
       )
       .run(randomUUID(), p, u);
     settleProjectHold(p, 'gen-1', 1.89);
-    // (1.89 + 0.10) × 2 × 1.25 × 100 = 497.5 → 498
-    expect(creditBalance(u).balance).toBe(1000 - 498);
+    // (1.89 + 0.10) × 1.25 × 100 = 248.75 → 249
+    expect(creditBalance(u).balance).toBe(1000 - 249);
   });
 
   it('settle НЕ трогает hold, привязанный к ДРУГОЙ генерации (F2)', () => {
@@ -172,8 +172,8 @@ describe('release-политика при фейлах', () => {
       .run(randomUUID(), p, u);
     // стадия до рендера упала: flow-hold (generation_id=null) → genId=null
     releaseFlowHoldOnFailure(p, null, 'анализ упал');
-    // списано ceil(0.05×2×1.25×100)=13, остальное вернулось
-    expect(creditBalance(u)).toEqual({ balance: 987, held: 0, available: 987 });
+    // списано ceil(0.05×1.25×100)=7, остальное вернулось
+    expect(creditBalance(u)).toEqual({ balance: 993, held: 0, available: 993 });
   });
 
   it('failed-генерация С ws_prediction_id блокирует release (recheck может добрать)', () => {
@@ -215,8 +215,8 @@ describe('сверка осиротевших холдов на старте (F3
     const fixed = reconcileOrphanHolds();
     expect(fixed).toBeGreaterThanOrEqual(1);
     expect(openHoldForProject(p)).toBeUndefined();
-    // списано ceil(1.5×2×1.25×100)=375 (cap 500 не превышен)
-    expect(creditBalance(u).balance).toBe(1000 - 375);
+    // списано ceil(1.5×1.25×100)=188 (cap 500 не превышен)
+    expect(creditBalance(u).balance).toBe(1000 - 188);
   });
 });
 
@@ -628,9 +628,9 @@ describe('публичная USD-смета без себестоимости о
     };
     const user = toUserEstimate(est, u);
     expect(user.kind).toBe('balance');
-    expect(user.priceUsd).toBe(5.63); // ceil(2.25 × 2 × 1.25 × 100) / 100
+    expect(user.priceUsd).toBe(2.82); // ceil((промты/фото $0.15 + видео $2.10) × 1.25 × 100) / 100
     expect(user.balanceUsd).toBe(1);
-    expect(user.warnings.join()).toContain('Нужно $5.63');
+    expect(user.warnings.join()).toContain('Нужно $2.82');
     expect(JSON.stringify(user)).not.toContain('openai');
     expect(JSON.stringify(user)).not.toContain('wavespeed');
   });
