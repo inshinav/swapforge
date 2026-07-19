@@ -356,9 +356,11 @@ export default function App() {
           />
         ) : activeView === 'guide' ? (
           <Guide
+            onOpenModels={() => go('models')}
+            onOpenSwap={() => go('swap')}
             onDone={journeyActive ? () => {
               saveJourneyPrefs({ guideSeen: true });
-              go('start');
+              go('swap');
             } : undefined}
           />
         ) : activeView === 'admin' ? (

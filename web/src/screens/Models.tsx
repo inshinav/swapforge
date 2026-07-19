@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ModelInfo, ModelRefInfo, ModelVariantInfo } from '@shared/api-types';
 import { REF_ROLES, type RefRole } from '@shared/taxonomy';
 import { api } from '../api';
+import ReferenceExamples from '../ReferenceExamples';
 
 const ROLE_OPTIONS = Object.entries(REF_ROLES) as Array<[RefRole, { ru: string; en: string }]>;
 const MODEL_ONLY_HINT = 'Модель в одном образе со всех ракурсов';
@@ -326,6 +327,19 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
               )}
               <span className="block mt-1 text-dim">Один референс-лист со всеми ракурсами или 3–5 отдельных фото. Везде должен быть один образ.</span>
             </div>
+
+            <details className="rounded-lg border border-line bg-panel">
+              <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-sm font-semibold text-lime">
+                Показать хороший пример
+              </summary>
+              <div className="border-t border-line p-3">
+                <ReferenceExamples
+                  key={`${selectedVariant.id}:${presetKind}`}
+                  compact
+                  initial={presetKind === 'model_object' ? 'object' : 'look'}
+                />
+              </div>
+            </details>
 
             <div className={`grid gap-2 ${presetKind === 'model_object' ? 'sm:grid-cols-3' : 'sm:grid-cols-1'}`}>
               <UploadButton
