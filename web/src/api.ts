@@ -9,6 +9,8 @@ import type {
   HealthInfo,
   MeInfo,
   ModelInfo,
+  OwnerBillingUser,
+  OwnerManualTopupResult,
   PresetInfo,
   PricingInfo,
   ProjectFull,
@@ -207,6 +209,12 @@ export const api = {
   billingMethods: () => fetch(u('api/billing/packs')).then((r) => j<BillingMethodsInfo>(r)),
   checkout: (amountUsd: number, provider: BillingProviderId, email?: string) =>
     post(u('api/billing/checkout'), { amountUsd, provider, email }).then((r) => j<{ payUrl: string }>(r)),
+  ownerBillingUser: (username: string) =>
+    fetch(u(`api/billing/manual-user?username=${encodeURIComponent(username)}`)).then((r) =>
+      j<{ user: OwnerBillingUser }>(r),
+    ),
+  ownerManualTopup: (body: { userId: string; amountUsd: number; note: string; requestId: string }) =>
+    post(u('api/billing/manual-topup'), body).then((r) => j<OwnerManualTopupResult>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',

@@ -363,6 +363,106 @@ describe('леджер: идемпотентность grant/refund', () => {
   });
 });
 
+describe('ручное пополнение владельцем по Telegram username', () => {
+  it('находит пользователя, начисляет USD ровно один раз и закрыт для обычного аккаунта', async () => {
+    const owner = await makeAuthedApp(9500, 'Владелец');
+    const buyer = await makeAuthedApp(9701, 'Покупатель');
+    try {
+      getDb()
+        .prepare(`UPDATE users SET tg_username = ?, tg_first_name = ? WHERE id = ?`)
+        .run('Buyer_Name', 'Покупатель', buyer.userId);
+
+      const deniedLookup = await buyer.app.inject({
+        method: 'GET',
+        url: '/api/billing/manual-user?username=Buyer_Name',
+      });
+      expect(deniedLookup.statusCode).toBe(403);
+
+      const lookup = await owner.app.inject({
+        method: 'GET',
+        url: '/api/billing/manual-user?username=%40buyer_name',
+      });
+      expect(lookup.statusCode).toBe(200);
+      expect(lookup.json()).toMatchObject({
+        user: {
+          id: buyer.userId,
+          telegramId: 9701,
+          username: 'Buyer_Name',
+          firstName: 'Покупатель',
+          balance: { balanceUsd: 0, heldUsd: 0, availableUsd: 0 },
+        },
+      });
+
+      const payload = {
+        userId: buyer.userId,
+        amountUsd: 12.34,
+        note: 'перевод в личку',
+        requestId: 'manual-topup-9701-0001',
+      };
+      const topup = await owner.app.inject({
+        method: 'POST',
+        url: '/api/billing/manual-topup',
+        payload,
+      });
+      expect(topup.statusCode).toBe(200);
+      expect(topup.json()).toMatchObject({
+        ok: true,
+        replayed: false,
+        user: { id: buyer.userId, balance: { balanceUsd: 12.34, availableUsd: 12.34 } },
+      });
+      expect(creditBalance(buyer.userId).balance).toBe(1234);
+
+      const replay = await owner.app.inject({
+        method: 'POST',
+        url: '/api/billing/manual-topup',
+        payload,
+      });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toMatchObject({ replayed: true });
+      expect(creditBalance(buyer.userId).balance).toBe(1234);
+
+      const deniedTopup = await buyer.app.inject({
+        method: 'POST',
+        url: '/api/billing/manual-topup',
+        payload,
+      });
+      expect(deniedTopup.statusCode).toBe(403);
+      expect(creditBalance(buyer.userId).balance).toBe(1234);
+    } finally {
+      await buyer.app.close();
+      await owner.app.close();
+    }
+  });
+
+  it('отклоняет неизвестный ник и сумму с дробной частью меньше цента', async () => {
+    const owner = await makeAuthedApp(9500, 'Владелец');
+    const buyer = await makeAuthedApp(9702, 'Покупатель 2');
+    try {
+      const missing = await owner.app.inject({
+        method: 'GET',
+        url: '/api/billing/manual-user?username=no_such_user',
+      });
+      expect(missing.statusCode).toBe(404);
+
+      const invalidAmount = await owner.app.inject({
+        method: 'POST',
+        url: '/api/billing/manual-topup',
+        payload: {
+          userId: buyer.userId,
+          amountUsd: 1.001,
+          note: '',
+          requestId: 'manual-topup-9702-0001',
+        },
+      });
+      expect(invalidAmount.statusCode).toBe(400);
+      expect(creditBalance(buyer.userId).balance).toBe(0);
+    } finally {
+      await buyer.app.close();
+      await owner.app.close();
+    }
+  });
+});
+
 describe('вебхук-роут /api/billing/webhook/:provider (реальное приложение)', () => {
   let app: Awaited<ReturnType<typeof makeAuthedApp>>;
   const TOKEN = 'cp-test-token';

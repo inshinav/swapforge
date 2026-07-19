@@ -192,12 +192,24 @@ export function applyRefund(userId: string, credits: number, paymentRef: string,
 }
 
 /** Ручная корректировка владельцем (разбор неопознанных платежей и споров). */
-export function adjustCredits(userId: string, delta: number, note: string): void {
-  getDb()
-    .prepare(
-      `INSERT INTO credit_ledger (id, user_id, delta_credits, kind, note) VALUES (?, ?, ?, 'adjust', ?)`,
-    )
-    .run(randomUUID(), userId, Math.round(delta), note.slice(0, 300));
+export function adjustCredits(
+  userId: string,
+  delta: number,
+  note: string,
+  paymentRef?: string,
+): GrantResult {
+  try {
+    getDb()
+      .prepare(
+        `INSERT INTO credit_ledger (id, user_id, delta_credits, kind, payment_ref, note)
+         VALUES (?, ?, ?, 'adjust', ?, ?)`,
+      )
+      .run(randomUUID(), userId, Math.round(delta), paymentRef ?? null, note.slice(0, 300));
+    return 'granted';
+  } catch (e) {
+    if (paymentRef && e instanceof Error && /UNIQUE/i.test(e.message)) return 'replay';
+    throw e;
+  }
 }
 
 export interface LedgerEntry {

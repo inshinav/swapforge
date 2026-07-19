@@ -261,6 +261,20 @@ export interface BillingMethodsInfo {
   providers: Array<{ id: BillingProviderId; needsEmail: boolean; rubPerUsd?: number }>;
 }
 
+export interface OwnerBillingUser {
+  id: string;
+  telegramId: number;
+  username: string;
+  firstName: string;
+  balance: DollarBalanceInfo;
+}
+
+export interface OwnerManualTopupResult {
+  ok: true;
+  replayed: boolean;
+  user: OwnerBillingUser;
+}
+
 export interface PricingInfo {
   balanceUsd: number | null;
   litellmFetchedAt: string | null;

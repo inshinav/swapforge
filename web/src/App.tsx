@@ -7,14 +7,15 @@ import Login from './screens/Login';
 import Models from './screens/Models';
 import Billing from './screens/Billing';
 import Guide from './screens/Guide';
+import OwnerCredits from './screens/OwnerCredits';
 import { JourneyBar, JourneyHome, type JourneyStatus, type JourneyTarget } from './screens/Onboarding';
 import { Spinner } from './ui';
 
-type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide';
+type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide' | 'credits';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
-const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide']);
+const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide', 'credits']);
 
 interface JourneyPrefs {
   balanceDeferred: boolean;
@@ -168,12 +169,12 @@ export default function App() {
     go('billing');
   }, [go]);
 
-  const activeView: View = isOwner && view === 'billing' ? 'swap' : view;
+  const activeView: View = (isOwner && view === 'billing') || (!isOwner && view === 'credits') ? 'swap' : view;
   const journeyStatus = journeyData ? buildJourneyStatus(journeyData, journeyPrefs) : null;
   const journeyActive = !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && !isOwner;
 
   useEffect(() => {
-    if (isOwner && (view === 'billing' || view === 'start')) go('swap');
+    if ((isOwner && (view === 'billing' || view === 'start')) || (!isOwner && view === 'credits')) go('swap');
   }, [go, isOwner, view]);
 
   useEffect(() => {
@@ -268,9 +269,13 @@ export default function App() {
           <TabBtn active={activeView === 'library'} onClick={() => go('library')}>
             Библиотека
           </TabBtn>
-          {!isOwner && (
+          {!isOwner ? (
             <TabBtn active={activeView === 'billing'} onClick={() => openBilling()}>
               Баланс
+            </TabBtn>
+          ) : (
+            <TabBtn active={activeView === 'credits'} onClick={() => go('credits')}>
+              Начислить
             </TabBtn>
           )}
         </nav>}
@@ -347,6 +352,8 @@ export default function App() {
               go('start');
             } : undefined}
           />
+        ) : activeView === 'credits' ? (
+          <OwnerCredits />
         ) : (
           <Library onOpen={openProjectAndRefresh} />
         )}
@@ -421,6 +428,7 @@ function MobileNav({
     { view: 'models', icon: '◇', label: 'Модели' },
     { view: 'library', icon: '▦', label: 'Работы' },
     ...(!isOwner ? [{ view: 'billing' as const, icon: '●', label: 'Баланс' }] : []),
+    ...(isOwner ? [{ view: 'credits' as const, icon: '$', label: 'Начислить' }] : []),
   ];
   return (
     <nav

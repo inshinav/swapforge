@@ -16,7 +16,19 @@ function bad(reply: FastifyReply, code: number, msg: string) {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const TG_USERNAME_RE = /^[A-Za-z0-9_]{5,32}$/;
+const MANUAL_REQUEST_RE = /^[A-Za-z0-9_-]{16,80}$/;
+const MAX_MANUAL_TOPUP_CENTS = 1_000_000;
 const usd = (cents: number): number => Math.round(cents) / 100;
+
+interface ManualBillingUserRow {
+  id: string;
+  telegram_id: number;
+  tg_username: string;
+  tg_first_name: string;
+  role: string;
+  status: string;
+}
 
 function publicBalance(userId: string) {
   const b = creditBalance(userId);
@@ -30,6 +42,23 @@ function topupCents(raw: unknown): number | null {
   const min = Math.round(config.minTopupUsd * 100);
   const max = Math.round(config.maxTopupUsd * 100);
   return cents >= min && cents <= max ? cents : null;
+}
+
+function manualTopupCents(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  const cents = Math.round(raw * 100);
+  if (Math.abs(raw * 100 - cents) > 1e-7) return null;
+  return cents > 0 && cents <= MAX_MANUAL_TOPUP_CENTS ? cents : null;
+}
+
+function manualUser(user: ManualBillingUserRow) {
+  return {
+    id: user.id,
+    telegramId: user.telegram_id,
+    username: user.tg_username,
+    firstName: user.tg_first_name,
+    balance: publicBalance(user.id),
+  };
 }
 
 export function registerBillingRoutes(app: FastifyInstance): void {
@@ -112,6 +141,68 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     }
     adjustCredits(userId, body.delta, body.note ?? 'ручная корректировка владельцем');
     return { ok: true, balance: creditBalance(userId) };
+  });
+
+  // Простое ручное пополнение после перевода владельцу напрямую: сначала ищем точный
+  // Telegram username, затем начисляем по стабильному userId. requestId защищает от
+  // двойного клика/повтора запроса, а запись остаётся в общем append-only ledger.
+  app.get('/api/billing/manual-user', { preHandler: requireOwner }, async (req, reply) => {
+    const raw = String((req.query as { username?: unknown }).username ?? '').trim();
+    const username = raw.replace(/^@/, '');
+    if (!TG_USERNAME_RE.test(username)) {
+      return bad(reply, 400, 'Введи Telegram-ник без ссылки, например @username');
+    }
+    const rows = getDb()
+      .prepare(
+        `SELECT id, telegram_id, tg_username, tg_first_name, role, status
+           FROM users WHERE lower(tg_username) = lower(?)`,
+      )
+      .all(username) as unknown as ManualBillingUserRow[];
+    if (rows.length === 0) {
+      return bad(reply, 404, 'Пользователь не найден — сначала он должен войти в SwapForge через Telegram');
+    }
+    if (rows.length > 1) {
+      return bad(reply, 409, 'Ник найден у нескольких аккаунтов — попроси пользователя заново войти через Telegram');
+    }
+    const user = rows[0]!;
+    if (user.role === 'owner') return bad(reply, 400, 'Владельцу баланс не требуется');
+    if (user.status !== 'active') return bad(reply, 409, 'Аккаунт пользователя заблокирован');
+    return { user: manualUser(user) };
+  });
+
+  app.post('/api/billing/manual-topup', { preHandler: requireOwner }, async (req, reply) => {
+    const body = (req.body ?? {}) as {
+      userId?: unknown;
+      amountUsd?: unknown;
+      note?: unknown;
+      requestId?: unknown;
+    };
+    const userId = typeof body.userId === 'string' ? body.userId : '';
+    const requestId = typeof body.requestId === 'string' ? body.requestId : '';
+    const amountCents = manualTopupCents(body.amountUsd);
+    if (!userId || amountCents === null) {
+      return bad(reply, 400, 'Укажи сумму от $0.01 до $10 000, не больше 2 знаков после точки');
+    }
+    if (!MANUAL_REQUEST_RE.test(requestId)) return bad(reply, 400, 'Некорректный requestId');
+
+    const user = getDb()
+      .prepare(
+        `SELECT id, telegram_id, tg_username, tg_first_name, role, status FROM users WHERE id = ?`,
+      )
+      .get(userId) as ManualBillingUserRow | undefined;
+    if (!user) return bad(reply, 404, 'Пользователь не найден');
+    if (user.role === 'owner') return bad(reply, 400, 'Владельцу баланс не требуется');
+    if (user.status !== 'active') return bad(reply, 409, 'Аккаунт пользователя заблокирован');
+
+    const ownerLabel = req.user!.username ? `@${req.user!.username}` : `Telegram ID ${req.user!.telegramId}`;
+    const note = typeof body.note === 'string' ? body.note.trim().slice(0, 180) : '';
+    const ledgerNote = `Ручное пополнение владельцем ${ownerLabel}${note ? `: ${note}` : ''}`;
+    const result = adjustCredits(user.id, amountCents, ledgerNote, `manual:${user.id}:${requestId}`);
+    return {
+      ok: true,
+      replayed: result === 'replay',
+      user: manualUser(user),
+    };
   });
 
   // Вебхуки провайдеров — свой scope с raw-buffer парсером (подпись по сырому телу)
