@@ -331,7 +331,7 @@ function UploadZone({ onCreated, guided = false }: { onCreated: (id: string) => 
         {pct === null ? (
           <>
             <div className="text-lg font-bold">Загрузить видео</div>
-            <div className="text-sm text-mut mt-2">MP4 / MOV · до 300 МБ · любая длина</div>
+            <div className="text-sm text-mut mt-2">MP4 / MOV · до 300 МБ · максимум 60 сек · рекомендуем до 15 сек</div>
           </>
         ) : (
           <>

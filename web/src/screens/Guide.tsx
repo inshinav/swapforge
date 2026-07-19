@@ -48,14 +48,14 @@ export default function Guide({
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="rounded-xl border border-ok/25 bg-ok/5 p-3">
               <div className="text-sm font-semibold text-ok">✓ Подходит</div>
-              <p className="mt-1 text-xs text-mut">4–15 секунд, вертикально 9:16, один герой, хороший свет и плавное движение.</p>
+              <p className="mt-1 text-xs text-mut">Максимум 60 секунд, рекомендуем до 15. Вертикально 9:16, один герой и хороший свет.</p>
             </div>
             <div className="rounded-xl border border-warn/25 bg-warn/5 p-3">
               <div className="text-sm font-semibold text-warn">× Лучше не брать</div>
               <p className="mt-1 text-xs text-mut">Темнота, частые склейки, закрытое лицо и несколько главных героев.</p>
             </div>
           </div>
-          <p className="text-xs text-dim">Видео длиннее 15 секунд сервис сам разделит на части и бесшовно соберёт обратно.</p>
+          <p className="text-xs text-dim">Максимум — 60 секунд. Видео длиннее 15 секунд сервис сам разделит на части и бесшовно соберёт обратно.</p>
           <div className="flex flex-col gap-2 sm:flex-row">
             {onDone ? (
               <Button kind="primary" className="w-full sm:w-auto" onClick={onDone}>

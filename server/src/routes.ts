@@ -255,7 +255,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       });
       if (meta.durationSec > 60) {
         deleteProjectFiles(id);
-        return bad(reply, 422, `Ролик ${Math.round(meta.durationSec)}с — слишком длинный. Seedance работает с 4–15 с, обрежь до ≤60 с`);
+        return bad(reply, 422, `Ролик ${Math.round(meta.durationSec)} с — слишком длинный. Максимальная длительность — 60 секунд. Обрежь ролик и загрузи снова`);
       }
       const title = fieldValue(part.fields, 'title') || part.filename || 'Без названия';
       getDb()

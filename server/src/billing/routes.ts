@@ -5,7 +5,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { getDb } from '../db';
 import { requireOwner } from '../auth/middleware';
-import { rateLimit } from '../rateLimit';
+import { byUserOrIp, rateLimit } from '../rateLimit';
 import { config } from '../config';
 import { adjustCredits, creditBalance, grantPurchase, listLedger } from './credits';
 import { getPack } from './packs';
@@ -91,7 +91,8 @@ export function registerBillingRoutes(app: FastifyInstance): void {
 
   // Server-initiated: создать инвойс у провайдера и вернуть ссылку на оплату.
   // Рейт-лимит: каждый вызов делает исходящий createInvoice к провайдеру.
-  const checkoutLimiter = rateLimit(20, 5 * 60_000);
+  // У авторизованного checkout лимит персональный: общий NAT/IP не связывает клиентов.
+  const checkoutLimiter = rateLimit(20, 5 * 60_000, byUserOrIp);
   app.post('/api/billing/checkout', { preHandler: checkoutLimiter }, async (req, reply) => {
     const body = (req.body ?? {}) as { amountUsd?: number; provider?: string; email?: string };
     const provider = getProvider(body.provider ?? '');

@@ -7,6 +7,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 export type RateKeyFn = (req: FastifyRequest) => string;
 
 export const byIp: RateKeyFn = (req) => `ip:${req.ip || 'unknown'}`;
+export const byUserOrIp: RateKeyFn = (req) => (req.user ? `user:${req.user.id}` : byIp(req));
 
 export function rateLimit(maxHits: number, windowMs: number, key: RateKeyFn = byIp) {
   const hits = new Map<string, number[]>();
