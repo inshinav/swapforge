@@ -13,7 +13,6 @@ const { getDb } = await import('../src/db');
 const { startRender } = await import('../src/engine/render');
 const { config } = await import('../src/config');
 const { projectDir, refsDir, rendersDir, startDir } = await import('../src/storage');
-import type { StartFrameOpts } from '../src/engine/startframe';
 import type { WaveSpeed, WsPrediction } from '../src/wavespeed';
 
 const owner = 'owner-long-render';
@@ -45,9 +44,13 @@ describe('длинный render pipeline', () => {
     getDb().prepare(`INSERT INTO prompts (id, project_id, version, kind, text) VALUES (?, ?, 1, 'video', 'VIDEO BASE')`).run(randomUUID(), project);
 
     const submits: Record<string, unknown>[] = [];
+    const uploadedFiles: string[] = [];
     let downloads = 0;
     const ws = {
-      uploadBinary: async (file: string) => `https://cdn/${path.basename(file)}`,
+      uploadBinary: async (file: string) => {
+        uploadedFiles.push(path.basename(file));
+        return `https://cdn/${path.basename(file)}`;
+      },
       submitVideoEdit: async (payload: Record<string, unknown>) => {
         submits.push(payload);
         return `prediction-${submits.length}`;
@@ -73,6 +76,7 @@ describe('длинный render pipeline', () => {
     } as WaveSpeed;
 
     const extractedFrom: string[] = [];
+    let stitchedAnchors: Array<string | null> = [];
     const gen = startRender(project, 1, {
       ws,
       pollBaseMs: 1,
@@ -85,12 +89,8 @@ describe('длинный render pipeline', () => {
           extractedFrom.push(source);
           fs.writeFileSync(output, 'jpg');
         },
-        startFrame: async (_project, _version, _prompt, _refs, _meta, opts: StartFrameOpts = {}) => {
-          const file = opts.outputFile!;
-          fs.writeFileSync(path.join(startDir(project), file), 'png');
-          return file;
-        },
-        stitch: async (_segments, output) => {
+        stitch: async (_segments, output, _overlap, _source, anchors = []) => {
+          stitchedAnchors = anchors;
           fs.mkdirSync(path.dirname(output), { recursive: true });
           fs.writeFileSync(output, 'final-video');
           return fs.statSync(output).size;
@@ -108,6 +108,13 @@ describe('длинный render pipeline', () => {
     expect(row.segment_done).toBe(2);
     expect(row.cost_actual_usd).toBe(2);
     expect(extractedFrom[0]).toMatch(/segment_01_render\.mp4$/);
+    expect(uploadedFiles).toContain('segment_02_anchor.png');
+    expect((submits[1]!.reference_images as string[])[0]).toContain('segment_02_anchor.png');
+    expect(String(submits[1]!.prompt)).toMatch(/Start exactly on reference image 1/);
+    expect(String(submits[1]!.prompt)).toMatch(/no reset, morphing, duplicates or design drift/);
+    expect(stitchedAnchors[0]).toBeNull();
+    expect(stitchedAnchors[1]).toMatch(/segment_02_anchor\.png$/);
+    expect(fs.readdirSync(startDir(project))).toEqual(['start_v1_2026-07-19T00-00-00.png']);
     expect(fs.existsSync(path.join(rendersDir(project), String(row.file)))).toBe(true);
   });
 });

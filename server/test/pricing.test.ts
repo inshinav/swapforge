@@ -10,6 +10,7 @@ const {
   evalSeedanceFormula,
   billedSecondsOf,
   estimateRender,
+  estimateVideoRender,
   ensureLitellmFresh,
   priceForCached,
   forecastTokens,
@@ -18,6 +19,7 @@ const {
   _resetPricingMemory,
   SEED_TOKENS,
 } = await import('../src/pricing');
+const { planVideoSegments } = await import('../src/engine/segments');
 const { recordUsage, monthSummary, projectOpenaiUsd } = await import('../src/usage');
 const { getDb } = await import('../src/db');
 const { config } = await import('../src/config');
@@ -322,22 +324,34 @@ describe('buildEstimate: сквозная смета', () => {
     expect(est.wavespeed.usd).toBeCloseTo(4.5, 5);
     expect(est.warnings.some((w) => w.includes('пополни'))).toBe(true);
   });
-  it('30с считает несколько Seedance-задач и дополнительные GPT Image кадры', async () => {
+  it('30с считает все Seedance-части по тому же плану и не перерисовывает стыки', async () => {
     await ensureLitellmFresh(litellmFetch);
     const meta = JSON.stringify({ durationSec: 30, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 1 });
+    const analysis = {
+      storyboard: [
+        { index: 0, startSec: 0, endSec: 12.8, camera: 'steady', action: 'model and motorcycle visible', framing: 'full body' },
+        { index: 1, startSec: 12.8, endSec: 30, camera: 'tracking', action: 'hero rides motorcycle', framing: 'medium shot' },
+      ],
+    };
+    const frames = [{ file: 'frame.jpg', t: 12.2, kind: 'grid' as const }];
+    const ws = fakeWs({ getBalance: async () => 100 });
     const est = await buildEstimate(
       {
         id: 'est-long',
-        frames_json: null,
-        analysis_json: null,
+        frames_json: JSON.stringify(frames),
+        analysis_json: JSON.stringify(analysis),
         flags_json: null,
         meta_json: meta,
         video_purged: 0,
       },
-      fakeWs({ getBalance: async () => 100 }),
+      ws,
     );
+    const plan = planVideoSegments(30, analysis as never, frames);
+    const exactRender = await estimateVideoRender(30, ws, plan);
+    expect(est.wavespeed.usd).toBeCloseTo(exactRender.usd!, 6);
     expect(est.wavespeed.usd).toBeGreaterThan(4.5);
-    expect(est.openai.perTask.filter((t) => t.task.startsWith('start_frame_segment_')).length).toBe(2);
+    expect(est.openai.perTask.filter((t) => t.task.startsWith('start_frame_segment_'))).toHaveLength(0);
+    expect(est.openai.perTask.filter((t) => t.task === 'start_frame')).toHaveLength(1);
     expect(est.warnings).toContain('длинный исходник будет бесшовно собран из 3 частей');
   });
   it('кэш баланса 60с: два вызова — один сетевой', async () => {

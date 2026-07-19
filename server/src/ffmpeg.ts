@@ -252,14 +252,18 @@ async function mediaShape(file: string): Promise<{ duration: number; hasAudio: b
 }
 
 /**
- * Склеивает готовые части через короткий xfade. Если у всех частей есть звук —
- * синхронный acrossfade; иначе берёт непрерывную дорожку исходника как безопасный fallback.
+ * Склеивает части по точному continuity-кадру. Визуальный dissolve намеренно не
+ * используется: он создаёт двойные лица и контуры. У предыдущей части отрезается
+ * overlap-хвост, а первый кадр следующей принудительно заменяется извлечённым из неё
+ * anchor. Звук соединяется коротким acrossfade; при отсутствии звука берётся исходник.
  */
 export async function stitchVideoSegments(
   segmentFiles: string[],
   outputFile: string,
   overlapSec: number,
   sourceAudioFile?: string,
+  continuityFrames: Array<string | null> = [],
+  continuityCutSeconds: Array<number | null> = [],
 ): Promise<number> {
   if (segmentFiles.length === 0) throw new Error('Нет сегментов для склейки');
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
@@ -271,38 +275,66 @@ export async function stitchVideoSegments(
   const shapes = await Promise.all(segmentFiles.map(mediaShape));
   const allHaveAudio = shapes.every((s) => s.hasAudio);
   const inputs = segmentFiles.flatMap((f) => ['-i', f]);
-  if (!allHaveAudio && sourceAudioFile) inputs.push('-i', sourceAudioFile);
+  const sourceAudioInput = !allHaveAudio && sourceAudioFile ? segmentFiles.length : null;
+  if (sourceAudioInput !== null) inputs.push('-i', sourceAudioFile!);
+
+  const anchorInputs = new Map<number, number>();
+  let nextInput = segmentFiles.length + (sourceAudioInput === null ? 0 : 1);
+  for (let i = 1; i < segmentFiles.length; i++) {
+    const anchor = continuityFrames[i];
+    if (!anchor) continue;
+    inputs.push('-loop', '1', '-framerate', '30', '-i', anchor);
+    anchorInputs.set(i, nextInput++);
+  }
+
+  const seams = segmentFiles.slice(1).map((_, index) =>
+    Math.max(0.15, Math.min(overlapSec, shapes[index]!.duration / 3, shapes[index + 1]!.duration / 3)),
+  );
 
   const filters: string[] = [];
+  const frameDuration = 1 / 30;
   for (let i = 0; i < segmentFiles.length; i++) {
     filters.push(
-      `[${i}:v]fps=30,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[v${i}]`,
+      `[${i}:v]fps=30,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[vn${i}]`,
     );
+    const anchorInput = anchorInputs.get(i);
+    if (anchorInput !== undefined) {
+      filters.push(
+        `[${anchorInput}:v]fps=30,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,settb=AVTB,trim=duration=${frameDuration.toFixed(6)},setpts=PTS-STARTPTS[anchor${i}]`,
+        `[vn${i}]trim=start=${frameDuration.toFixed(6)},setpts=PTS-STARTPTS[tail${i}]`,
+        `[anchor${i}][tail${i}]concat=n=2:v=1:a=0[v${i}]`,
+      );
+    } else {
+      filters.push(`[vn${i}]null[v${i}]`);
+    }
     if (allHaveAudio) filters.push(`[${i}:a]aresample=async=1:first_pts=0[a${i}]`);
   }
 
-  let videoLabel = 'v0';
+  const videoInputs: string[] = [];
+  for (let i = 0; i < segmentFiles.length; i++) {
+    const keepDuration = i < segmentFiles.length - 1
+      ? Math.max(0.1, continuityCutSeconds[i + 1] ?? shapes[i]!.duration - seams[i]!)
+      : shapes[i]!.duration;
+    filters.push(`[v${i}]trim=duration=${keepDuration.toFixed(6)},setpts=PTS-STARTPTS[vc${i}]`);
+    videoInputs.push(`[vc${i}]`);
+  }
+  filters.push(`${videoInputs.join('')}concat=n=${segmentFiles.length}:v=1:a=0[vout]`);
+
   let audioLabel = 'a0';
-  let mergedDuration = shapes[0]!.duration;
+  const mergedDuration = shapes.reduce((sum, shape) => sum + shape.duration, 0) - seams.reduce((sum, seam) => sum + seam, 0);
   for (let i = 1; i < segmentFiles.length; i++) {
-    const seam = Math.max(0.15, Math.min(overlapSec, mergedDuration / 3, shapes[i]!.duration / 3));
-    const offset = Math.max(0, mergedDuration - seam);
-    const nextVideo = `vx${i}`;
-    filters.push(`[${videoLabel}][v${i}]xfade=transition=fade:duration=${seam.toFixed(3)}:offset=${offset.toFixed(3)}[${nextVideo}]`);
-    videoLabel = nextVideo;
     if (allHaveAudio) {
       const nextAudio = `ax${i}`;
-      filters.push(`[${audioLabel}][a${i}]acrossfade=d=${seam.toFixed(3)}:c1=tri:c2=tri[${nextAudio}]`);
+      filters.push(`[${audioLabel}][a${i}]acrossfade=d=${seams[i - 1]!.toFixed(3)}:c1=tri:c2=tri[${nextAudio}]`);
       audioLabel = nextAudio;
     }
-    mergedDuration += shapes[i]!.duration - seam;
   }
 
   const args = [
-    '-y', ...inputs, '-filter_complex', filters.join(';'), '-map', `[${videoLabel}]`,
+    '-y', ...inputs, '-filter_complex', filters.join(';'), '-map', '[vout]',
   ];
   if (allHaveAudio) args.push('-map', `[${audioLabel}]`);
-  else if (sourceAudioFile) args.push('-map', `${segmentFiles.length}:a:0?`, '-t', mergedDuration.toFixed(3));
+  else if (sourceAudioInput !== null) args.push('-map', `${sourceAudioInput}:a:0?`, '-t', mergedDuration.toFixed(3));
   args.push(
     '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outputFile,

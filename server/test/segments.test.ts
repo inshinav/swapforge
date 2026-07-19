@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Analysis } from '../../shared/analysis';
+import type { FrameInfo } from '../../shared/api-types';
 import { planVideoSegments, SEAM_OVERLAP_SECONDS, segmentDurations } from '../src/engine/segments';
 
 const analysis = {
@@ -17,7 +18,7 @@ describe('план длинного видео', () => {
     ]);
   });
 
-  it('все части в окне 4–15с и соседние перекрываются для xfade', () => {
+  it('все части в окне 4–15с, а anchor берётся после устойчивой смены сцены', () => {
     const plan = planVideoSegments(40, analysis, []);
     expect(plan.length).toBeGreaterThan(2);
     for (const segment of plan) {
@@ -29,6 +30,24 @@ describe('план длинного видео', () => {
       expect(plan[i - 1]!.endSec - plan[i]!.startSec).toBeCloseTo(SEAM_OVERLAP_SECONDS, 5);
     }
     expect(plan[1]!.anchorReason).toMatch(/герой|объект/);
+    expect(plan[1]!.startSec).toBeCloseTo(13.15, 2);
+  });
+
+  it('не ставит стык на смазанный переход и выбирает читаемый кадр с моделью', () => {
+    const risky = {
+      storyboard: [
+        { index: 0, startSec: 0, endSec: 12.8, camera: 'steady', action: 'model and motorcycle clearly visible', framing: 'full body' },
+        { index: 1, startSec: 12.8, endSec: 25, camera: 'whip pan', action: 'motion blur transition, face occluded', framing: 'cropped face' },
+      ],
+    } as Analysis;
+    const frames = [
+      { file: 'safe.jpg', t: 12.2, kind: 'grid' },
+      { file: 'transition.jpg', t: 12.8, kind: 'scene' },
+    ] as FrameInfo[];
+    const plan = planVideoSegments(25, risky, frames);
+    expect(plan[1]!.startSec).toBe(12.2);
+    expect(plan[1]!.anchorReason).toMatch(/модель|объект|герой/i);
+    expect(plan[1]!.anchorReason).not.toMatch(/рискован/);
   });
 
   it('16 секунд не клампит: создаёт две валидные части', () => {

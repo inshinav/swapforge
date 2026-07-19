@@ -7,8 +7,9 @@ import { getDb } from './db';
 import { config, modelChainFor } from './config';
 import { wavespeed, type WaveSpeed, type WsModelEntry } from './wavespeed';
 import { remainingStages, snapshotProject, type ProjectRowLike, type StageName } from './engine/orchestrator';
-import { segmentDurations } from './engine/segments';
-import type { EstimateInfo, EstimateTaskRow, VideoMeta } from '../../shared/api-types';
+import { planVideoSegments, type VideoSegmentPlan } from './engine/segments';
+import type { EstimateInfo, EstimateTaskRow, FrameInfo, VideoMeta } from '../../shared/api-types';
+import type { Analysis } from '../../shared/analysis';
 
 export type UsageTask = 'video_analysis' | 'prompt_pair' | 'start_frame' | 'classify_ref' | 'describe_ref';
 
@@ -274,8 +275,9 @@ export async function estimateRender(durationSec: number, ws: WaveSpeed = wavesp
 export async function estimateVideoRender(
   durationSec: number,
   ws: WaveSpeed = wavespeed,
+  plan: VideoSegmentPlan[] = planVideoSegments(durationSec),
 ): Promise<WsEstimatePart> {
-  const durations = segmentDurations(durationSec);
+  const durations = plan.map((segment) => Math.round((segment.endSec - segment.startSec) * 100) / 100);
   const parts: WsEstimatePart[] = [];
   // Первый вызов прогревает live/LKG тариф; последовательность не создаёт N одинаковых
   // запросов в каталог при холодном старте длинного ролика.
@@ -358,20 +360,11 @@ export async function buildEstimate(project: EstimateProjectRow, ws: WaveSpeed =
     perTask.push({ task, model, tokensIn: f.tokensIn, tokensOut: f.tokensOut, usd, basis: f.basis });
   }
   const meta = project.meta_json ? (JSON.parse(project.meta_json) as VideoMeta) : null;
-  // Для каждого продолжения нужен свой GPT Image start-frame. Базовый кадр уже
-  // учтён стадией startframe; эти строки — только дополнительные границы сегментов.
-  if (meta && stages.includes('render')) {
-    const extraStartFrames = Math.max(0, segmentDurations(meta.durationSec).length - 1);
-    for (let i = 0; i < extraStartFrames; i++) {
-      const task: UsageTask = 'start_frame';
-      const f = forecastTokens(task);
-      const model = taskModel(task);
-      const price = priceForCached(model);
-      const usd = price ? (f.tokensIn * price.inPerM + f.tokensOut * price.outPerM) / 1e6 : null;
-      if (!price) warnings.push(`нет тарифа для ${model} — цену кадра склейки покажу после прогона`);
-      perTask.push({ task: `start_frame_segment_${i + 2}`, model, tokensIn: f.tokensIn, tokensOut: f.tokensOut, usd, basis: f.basis });
-    }
-  }
+  const analysis = project.analysis_json ? (JSON.parse(project.analysis_json) as Analysis) : null;
+  const frames = project.frames_json ? (JSON.parse(project.frames_json) as FrameInfo[]) : [];
+  // Это тот же план, который использует рендер. Продолжения получают точный кадр
+  // предыдущей готовой части, поэтому повторная платная перерисовка GPT Image не нужна.
+  const segmentPlan = meta ? planVideoSegments(meta.durationSec, analysis, frames) : [];
   const known = perTask.filter((r) => r.usd !== null);
   const openaiUsd =
     perTask.length === 0 ? 0 : known.length > 0 ? known.reduce((s, r) => s + (r.usd ?? 0), 0) : null;
@@ -386,8 +379,8 @@ export async function buildEstimate(project: EstimateProjectRow, ws: WaveSpeed =
       unavailableReason: 'нет метаданных видео',
     };
   } else {
-    wsPart = await estimateVideoRender(meta.durationSec, ws);
-    const count = segmentDurations(meta.durationSec).length;
+    wsPart = await estimateVideoRender(meta.durationSec, ws, segmentPlan);
+    const count = segmentPlan.length;
     if (count > 1) warnings.push(`длинный исходник будет бесшовно собран из ${count} частей`);
   }
   if (wsPart.unavailableReason) warnings.push(`оценка WaveSpeed недоступна: ${wsPart.unavailableReason}`);
