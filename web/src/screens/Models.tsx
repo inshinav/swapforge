@@ -294,7 +294,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
               <div className="min-w-0 flex-1">
                 <div className="text-xs text-dim">Состав пресета «{selectedVariant.title}»</div>
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Tag tone={modelRefCount >= 3 ? 'ok' : 'mut'}>Фото модели · {modelRefCount}</Tag>
+                  <Tag tone={modelRefCount >= 1 ? 'ok' : 'mut'}>Фото модели · {modelRefCount}</Tag>
                   {presetKind === 'model_object' && (
                     <Tag tone={objectRefCount >= 1 ? 'ok' : 'mut'}>Объект / транспорт · {objectRefCount}</Tag>
                   )}
@@ -318,13 +318,13 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
             </div>
 
             <div className="text-xs text-mut">
-              {modelRefCount >= 3 ? '✓ Модель заполнена' : `${modelRefCount}/3 · добавь лицо, полный рост и профиль или 3/4`}
+              {modelRefCount >= 1 ? '✓ Модель добавлена' : 'Добавь модель: лицо, полный рост и профиль или 3/4'}
               {presetKind === 'model_object' && (
                 <span className="block mt-1">
                   {objectRefCount >= 1 ? '✓ Объект добавлен' : '0/1 · добавь мотоцикл, товар или другой важный объект'}
                 </span>
               )}
-              <span className="block mt-1 text-dim">Фото модели должны быть в одном образе. Лучше загрузить 3–5 чётких ракурсов.</span>
+              <span className="block mt-1 text-dim">Один референс-лист со всеми ракурсами или 3–5 отдельных фото. Везде должен быть один образ.</span>
             </div>
 
             <div className={`grid gap-2 ${presetKind === 'model_object' ? 'sm:grid-cols-3' : 'sm:grid-cols-1'}`}>
