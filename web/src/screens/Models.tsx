@@ -326,6 +326,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
                 </span>
               )}
               <span className="block mt-1 text-dim">Один референс-лист со всеми ракурсами или 3–5 отдельных фото. Везде должен быть один образ.</span>
+              <span className="block mt-1 text-lime">Добавляй фото по одному или несколько сразу — новые файлы дополняют пресет.</span>
             </div>
 
             <details className="rounded-lg border border-line bg-panel">
@@ -345,7 +346,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
               <UploadButton
                 disabled={uploading}
                 title="Добавить фото модели"
-                sub="Можно выбрать несколько"
+                sub="По одному или несколько"
                 onClick={() => openUpload('model')}
               />
               {presetKind === 'model_object' && (

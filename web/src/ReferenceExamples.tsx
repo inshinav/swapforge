@@ -75,8 +75,8 @@ const examples: Array<{
       'Спереди, сзади и ¾ — устойчивый объём',
       'Кокпит и вид сверху — важные детали',
     ],
-    saveAs: 'Роль «Транспорт» · раздел «Общее»',
-    rule: 'Так байк доступен во всех пресетах, но применяется только когда мотоцикл есть в исходном видео.',
+    saveAs: 'Тот же пресет «Красный мотолук» · роль «Транспорт»',
+    rule: 'Если байк нужен только с этим образом — добавь его в тот же пресет. В «Общее» добавляй только объект для всех образов.',
   },
 ];
 
@@ -156,11 +156,12 @@ export default function ReferenceExamples({
       </article>
 
       <div className="rounded-xl border border-lime/25 bg-lime/5 p-3">
-        <div className="text-xs font-semibold text-lime">Как разложить эти три примера</div>
+        <div className="text-xs font-semibold text-lime">Один пресет может содержать несколько фото</div>
+        <p className="mt-1 text-xs text-mut">Каждая новая загрузка дополняет выбранный пресет — старые фотографии не заменяются.</p>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <ExampleSlot n="1" title="Повседневный" sub="отдельный пресет модели" />
-          <ExampleSlot n="2" title="Красный мотолук" sub="отдельный пресет модели" />
-          <ExampleSlot n="3" title="Красный мотоцикл" sub="Общее · роль «Транспорт»" />
+          <ExampleSlot n="1" title="Повседневный" sub="пресет №1 · фото модели" />
+          <ExampleSlot n="2" title="Красный мотолук" sub="пресет №2 · фото модели" />
+          <ExampleSlot n="+" title="Красный мотоцикл" sub="тот же пресет №2 · Транспорт" />
         </div>
       </div>
     </div>
