@@ -42,7 +42,7 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
     <div className="sf-in">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
         <h1 className="font-bold text-lg">Библиотека</h1>
-        <span className="text-xs text-dim">{items.length} проектов</span>
+        <span className="text-xs text-dim">{items.length} · последние 20</span>
         <label className="w-full sm:w-auto sm:ml-auto flex items-center gap-2 text-xs text-mut cursor-pointer">
           <input
             type="checkbox"
@@ -50,7 +50,7 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
             onChange={(e) => setOnlyWorked(e.target.checked)}
             className="accent-[#C6F24E]"
           />
-          только сработавшие
+          только удачные
         </label>
       </div>
 

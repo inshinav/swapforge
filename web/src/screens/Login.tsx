@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HealthInfo, TgWidgetPayload } from '@shared/api-types';
 import { api, appBase } from '../api';
-import { Card, ErrorNote, Spinner } from '../ui';
+import { Card, ErrorNote, Spinner, Tag } from '../ui';
 
 declare global {
   interface Window {
@@ -73,6 +73,7 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
     <div className="min-h-screen flex items-center justify-center px-4 py-8">
       <Card glow className="w-full max-w-md">
         <div className="p-6 sm:p-10 text-center flex flex-col items-center gap-5">
+          <Tag tone="lime">шаг 1 из 6</Tag>
           <div className="text-4xl">⚡</div>
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight">

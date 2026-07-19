@@ -9,7 +9,7 @@ import { api } from '../api';
 const ROLE_OPTIONS = Object.entries(REF_ROLES) as Array<[RefRole, { ru: string; en: string }]>;
 import { Button, Card, Empty, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
-export default function Models() {
+export default function Models({ guided = false, onProgressChange }: { guided?: boolean; onProgressChange?: () => void }) {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [err, setErr] = useState('');
   const [newName, setNewName] = useState('');
@@ -18,9 +18,12 @@ export default function Models() {
   const reload = useCallback(() => {
     api
       .models()
-      .then(setModels)
+      .then((next) => {
+        setModels(next);
+        onProgressChange?.();
+      })
       .catch((e: Error) => setErr(e.message));
-  }, []);
+  }, [onProgressChange]);
 
   useEffect(reload, [reload]);
 
@@ -31,7 +34,7 @@ export default function Models() {
     setErr('');
     try {
       const { id } = await api.createModel(name);
-      await api.addModelVariant(id, 'базовый', '');
+      await api.addModelVariant(id, 'Базовый', '');
       setNewName('');
       reload();
     } catch (e) {
@@ -44,8 +47,14 @@ export default function Models() {
   return (
     <div className="space-y-4 sf-in">
       <Card glow>
-        <SectionTitle title="Мои модели" />
+        <SectionTitle title={guided ? 'Модель и пресеты' : 'Мои модели'} />
         <div className="p-5 space-y-3">
+          {guided && (
+            <div className="rounded-xl border border-lime/35 bg-lime/5 px-4 py-3 text-sm">
+              <div className="font-semibold">Сначала создай модель, затем добавь референсы</div>
+              <div className="text-xs text-mut mt-1">Лицо крупно · полный рост · профиль или 3/4. Для другого образа или задачи добавь отдельный пресет.</div>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <input
               value={newName}
@@ -139,7 +148,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
             value={model.name}
             onSave={(name) => void act(() => api.renameModel(model.id, name))}
           />
-          <Tag tone="mut">{model.variants.length} кнопк{plural(model.variants.length)}</Tag>
+          <Tag tone="mut">{model.variants.length} пресет{pluralPreset(model.variants.length)}</Tag>
           <div className="flex-1" />
           {confirmDel ? (
             <span className="flex items-center gap-2 text-xs">
@@ -158,7 +167,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
           )}
         </div>
 
-        {/* Варианты (кнопки свапа) + общие рефы */}
+        {/* Пресеты (варианты модели / кнопки свапа) + общие рефы */}
         <div className="flex flex-wrap items-center gap-1.5">
           {model.variants.map((v) => (
             <VariantChip
@@ -193,7 +202,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
               onKeyDown={(e) => {
                 if (e.key === 'Enter') addVariant();
               }}
-              placeholder="+ вариант (коса…)"
+              placeholder="+ пресет (реклама…)"
               className="min-h-11 flex-1 sm:w-36 rounded-lg bg-panel2 border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
             />
             <Button
@@ -209,8 +218,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
 
         {sel === 'shared' && (
           <p className="text-xs text-dim">
-            Общие рефы едут с каждой кнопкой модели: мотоцикл/машина/объект. Подставятся в свап,
-            только если такая техника есть в исходнике.
+            Общие объекты используются со всеми пресетами, если они есть в исходном видео.
           </p>
         )}
 
@@ -248,12 +256,12 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
   );
 }
 
-function plural(n: number): string {
+function pluralPreset(n: number): string {
   const m10 = n % 10;
   const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'а';
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'и';
-  return '';
+  if (m10 === 1 && m100 !== 11) return '';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'а';
+  return 'ов';
 }
 
 function InlineName({ value, onSave }: { value: string; onSave: (v: string) => void }) {

@@ -262,7 +262,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/projects', async (req) => {
     const rows = getDb()
-      .prepare(`SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC`)
+      .prepare(`SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`)
       .all(req.user!.id) as unknown as DbProject[];
     return rows.map(toSummary);
   });

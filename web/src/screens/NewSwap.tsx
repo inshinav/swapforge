@@ -99,19 +99,21 @@ export default function NewSwap({
   onProjectCreated,
   onOpenModels,
   onOpenBilling,
+  guided = false,
 }: {
   projectId: string | null;
   onProjectCreated: (id: string) => void;
   onOpenModels: () => void;
   onOpenBilling: (needed: number) => void;
+  guided?: boolean;
 }) {
   const { proj, err, reload } = useProject(projectId);
 
   if (!projectId) {
     return (
       <div className="space-y-4">
-        <WelcomeChecklist onOpenModels={onOpenModels} />
-        <UploadZone onCreated={onProjectCreated} />
+        {!guided && <WelcomeChecklist onOpenModels={onOpenModels} />}
+        <UploadZone onCreated={onProjectCreated} guided={guided} />
       </div>
     );
   }
@@ -120,7 +122,7 @@ export default function NewSwap({
     return (
       <div className="space-y-4">
         <ErrorNote text="Этот проект удалён — начни новый свап" />
-        <UploadZone onCreated={onProjectCreated} />
+        <UploadZone onCreated={onProjectCreated} guided={guided} />
       </div>
     );
   }
@@ -277,7 +279,7 @@ const UPLOAD_LINES = [
   'ищу, где у ролика душа…',
 ];
 
-function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
+function UploadZone({ onCreated, guided = false }: { onCreated: (id: string) => void; guided?: boolean }) {
   const [drag, setDrag] = useState(false);
   const [pct, setPct] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -306,6 +308,13 @@ function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
 
   return (
     <div className="sf-in">
+      {guided && (
+        <div className="grid grid-cols-3 gap-2 mb-3 text-center text-[11px] text-mut">
+          <div className="rounded-lg border border-line bg-panel2 px-2 py-2">1 герой</div>
+          <div className="rounded-lg border border-line bg-panel2 px-2 py-2">хороший свет</div>
+          <div className="rounded-lg border border-line bg-panel2 px-2 py-2">меньше склеек</div>
+        </div>
+      )}
       <div
         className={`rounded-2xl border-2 border-dashed px-4 py-14 text-center transition-colors cursor-pointer select-none ${
           drag ? 'border-lime bg-lime/5' : 'border-line2 hover:border-lime/40'

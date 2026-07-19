@@ -162,6 +162,23 @@ describe('тенантность роутов', () => {
     expect(forB.map((p) => p.id)).not.toContain(projectA);
   });
 
+  it('библиотека отдаёт только 20 последних роликов', async () => {
+    const insert = getDb().prepare(
+      `INSERT INTO projects (id, user_id, title, status, video_file, meta_json, created_at)
+       VALUES (?, ?, ?, 'complete', 'source.mp4', '{"durationSec":6,"width":720,"height":1280,"fps":30,"aspect":"9:16","sizeBytes":1000}', ?)`,
+    );
+    for (let i = 1; i <= 24; i += 1) {
+      insert.run(`library-${i}`, userA.userId, `ролик ${i}`, `2099-01-${String(i).padStart(2, '0')} 12:00:00`);
+    }
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects', headers: { cookie: userA.cookie } });
+    expect(res.statusCode).toBe(200);
+    const projects = res.json() as Array<{ id: string }>;
+    expect(projects).toHaveLength(20);
+    expect(projects[0]?.id).toBe('library-24');
+    expect(projects.at(-1)?.id).toBe('library-5');
+  });
+
   it('мутация с сессией, но БЕЗ CSRF-заголовка — 403', async () => {
     const res = await app.inject({
       method: 'PATCH',

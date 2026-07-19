@@ -7,13 +7,48 @@ import Login from './screens/Login';
 import Models from './screens/Models';
 import Billing from './screens/Billing';
 import Guide from './screens/Guide';
+import { JourneyBar, JourneyHome, type JourneyStatus, type JourneyTarget } from './screens/Onboarding';
 import { Spinner } from './ui';
 
-type View = 'swap' | 'models' | 'library' | 'billing' | 'guide';
+type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
-const VIEW_HASHES = new Set<View>(['swap', 'models', 'library', 'billing', 'guide']);
+const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide']);
+
+interface JourneyPrefs {
+  balanceDeferred: boolean;
+  guideSeen: boolean;
+  skipped: boolean;
+}
+
+interface JourneyData {
+  hasBalance: boolean;
+  hasProject: boolean;
+  hasReadyModel: boolean;
+  hasResult: boolean;
+}
+
+const EMPTY_PREFS: JourneyPrefs = { balanceDeferred: false, guideSeen: false, skipped: false };
+
+function journeyStorageKey(userId: string): string {
+  return `sf-onboarding:${userId}`;
+}
+
+function buildJourneyStatus(data: JourneyData, prefs: JourneyPrefs): JourneyStatus {
+  const current = !data.hasBalance && !prefs.balanceDeferred
+    ? 'balance'
+    : !prefs.guideSeen
+      ? 'guide'
+      : !data.hasProject
+        ? 'video'
+        : !data.hasReadyModel
+          ? 'model'
+          : !data.hasResult
+            ? 'result'
+            : 'done';
+  return { ...data, ...prefs, current };
+}
 
 function viewFromHash(): View {
   const raw = window.location.hash.replace(/^#/, '');
@@ -31,6 +66,12 @@ export default function App() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [balance, setBalance] = useState<DollarBalanceInfo | null>(null);
   const [billingNeed, setBillingNeed] = useState<number | null>(null);
+  const [journeyData, setJourneyData] = useState<JourneyData | null>(null);
+  const [journeyPrefs, setJourneyPrefs] = useState<JourneyPrefs>(EMPTY_PREFS);
+  const [journeyRouted, setJourneyRouted] = useState(false);
+
+  const isOwner = session !== null && session !== 'anon' && session.user.role === 'owner';
+  const userId = session !== null && session !== 'anon' ? session.user.id : null;
 
   const loadSession = useCallback(() => {
     api
@@ -60,17 +101,86 @@ export default function App() {
     else window.location.hash = next;
   }, []);
 
+  const loadJourney = useCallback(async () => {
+    if (!userId || isOwner) return;
+    try {
+      const [models, projects, nextBalance] = await Promise.all([
+        api.models(),
+        api.projects(),
+        api.billingBalance(),
+      ]);
+      const hasReadyModel = models.some((model) =>
+        model.variants.some((variant) =>
+          model.refs.some((ref) => ref.role === 'model' && (ref.variantId === variant.id || ref.variantId === null)),
+        ),
+      );
+      setBalance(nextBalance);
+      setJourneyData({
+        hasBalance: nextBalance.availableUsd > 0,
+        hasProject: projects.length > 0,
+        hasReadyModel,
+        hasResult: projects.some((project) => project.latestRender !== null),
+      });
+    } catch {
+      // Основные экраны покажут свою ошибку; помощник не должен блокировать кабинет.
+    }
+  }, [isOwner, userId]);
+
+  useEffect(() => {
+    if (!userId || isOwner) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(journeyStorageKey(userId)) ?? '{}') as Partial<JourneyPrefs>;
+      setJourneyPrefs({
+        balanceDeferred: saved.balanceDeferred === true,
+        guideSeen: saved.guideSeen === true,
+        skipped: saved.skipped === true,
+      });
+    } catch {
+      setJourneyPrefs(EMPTY_PREFS);
+    }
+    setJourneyData(null);
+    setJourneyRouted(false);
+    void loadJourney();
+  }, [isOwner, loadJourney, userId]);
+
+  useEffect(() => {
+    if (!userId || isOwner || journeyPrefs.skipped || journeyData?.hasResult) return;
+    const timer = window.setInterval(() => void loadJourney(), 8_000);
+    const onFocus = () => void loadJourney();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [isOwner, journeyData?.hasResult, journeyPrefs.skipped, loadJourney, userId]);
+
+  const saveJourneyPrefs = useCallback((patch: Partial<JourneyPrefs>) => {
+    if (!userId) return;
+    setJourneyPrefs((current) => {
+      const next = { ...current, ...patch };
+      localStorage.setItem(journeyStorageKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
   const openBilling = useCallback((needed?: number) => {
     setBillingNeed(needed && needed > 0 ? Math.ceil(needed * 100) / 100 : null);
     go('billing');
   }, [go]);
 
-  const isOwner = session !== null && session !== 'anon' && session.user.role === 'owner';
   const activeView: View = isOwner && view === 'billing' ? 'swap' : view;
+  const journeyStatus = journeyData ? buildJourneyStatus(journeyData, journeyPrefs) : null;
+  const journeyActive = !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && !isOwner;
 
   useEffect(() => {
-    if (isOwner && view === 'billing') go('swap');
+    if (isOwner && (view === 'billing' || view === 'start')) go('swap');
   }, [go, isOwner, view]);
+
+  useEffect(() => {
+    if (!journeyActive || journeyRouted) return;
+    setJourneyRouted(true);
+    if (view === 'swap' && !projectId) go('start');
+  }, [go, journeyActive, journeyRouted, projectId, view]);
 
   useEffect(() => {
     if (session === null || session === 'anon') return;
@@ -79,10 +189,8 @@ export default function App() {
     if (isOwner) {
       api.pricing().then(setPricing).catch(() => setPricing(null));
       api.usageSummary().then(setUsage).catch(() => setUsage(null));
-    } else {
-      api.billingBalance().then(setBalance).catch(() => setBalance(null));
-    }
-  }, [view, session, isOwner]);
+    } else void loadJourney();
+  }, [view, session, isOwner, loadJourney]);
 
   const openProject = useCallback((id: string) => {
     const pid = id || null;
@@ -92,10 +200,42 @@ export default function App() {
     go('swap');
   }, [go]);
 
+  const openProjectAndRefresh = useCallback((id: string) => {
+    openProject(id);
+    window.setTimeout(() => void loadJourney(), 0);
+  }, [loadJourney, openProject]);
+
+  const journeyGo = useCallback((target: JourneyTarget) => {
+    if (target === 'swap') go('swap');
+    else go(target);
+  }, [go]);
+
+  const continueJourney = useCallback(() => {
+    if (!journeyStatus) return;
+    if (journeyStatus.current === 'balance') {
+      if (activeView === 'billing') {
+        saveJourneyPrefs({ balanceDeferred: true });
+        go('start');
+      } else go('billing');
+      return;
+    }
+    if (journeyStatus.current === 'guide') {
+      if (activeView === 'guide') {
+        saveJourneyPrefs({ guideSeen: true });
+        go('start');
+      } else go('guide');
+      return;
+    }
+    if (journeyStatus.current === 'video') return openProjectAndRefresh('');
+    if (journeyStatus.current === 'model') return go('models');
+    go('swap');
+  }, [activeView, go, journeyStatus, openProjectAndRefresh, saveJourneyPrefs]);
+
   const logout = useCallback(() => {
     void api.logout().finally(() => {
       localStorage.removeItem('sf-project');
       setProjectId(null);
+      setJourneyData(null);
       setSession('anon');
     });
   }, []);
@@ -118,9 +258,9 @@ export default function App() {
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-bg/90 backdrop-blur z-20 min-w-0">
         <Logo />
-        <nav className="hidden md:flex gap-1 ml-2">
+        {!journeyActive && <nav className="hidden md:flex gap-1 ml-2">
           <TabBtn active={activeView === 'swap'} onClick={() => go('swap')}>
-            Свап
+            Создать
           </TabBtn>
           <TabBtn active={activeView === 'models'} onClick={() => go('models')}>
             Мои модели
@@ -133,7 +273,7 @@ export default function App() {
               Баланс
             </TabBtn>
           )}
-        </nav>
+        </nav>}
         <div className="flex-1" />
         {isOwner && health && health.keyPresent === false && (
           <span className="text-[11px] text-danger hidden sm:inline">LLM-ключ не настроен</span>
@@ -152,25 +292,63 @@ export default function App() {
       </header>
 
       <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 pb-24 md:pb-6">
-        {activeView === 'swap' ? (
+        {journeyActive && journeyStatus && activeView !== 'start' && (
+          <JourneyBar
+            status={journeyStatus}
+            onOpenPlan={() => go('start')}
+            onContinue={continueJourney}
+            showContinue={
+              journeyStatus.current === 'balance' ||
+              (journeyStatus.current === 'guide' && activeView !== 'guide') ||
+              (journeyStatus.current === 'video' && activeView !== 'swap') ||
+              (journeyStatus.current === 'model' && activeView !== 'models') ||
+              (journeyStatus.current === 'result' && activeView !== 'swap')
+            }
+          />
+        )}
+        {activeView === 'start' ? (
+          journeyStatus ? (
+            <JourneyHome
+              status={journeyStatus}
+              onGo={journeyGo}
+              onNewVideo={() => openProjectAndRefresh('')}
+              onBalanceLater={() => saveJourneyPrefs({ balanceDeferred: true })}
+              onSkip={() => {
+                saveJourneyPrefs({ skipped: true });
+                go('swap');
+              }}
+            />
+          ) : (
+            <div className="flex justify-center py-24"><Spinner /></div>
+          )
+        ) : activeView === 'swap' ? (
           <NewSwap
             projectId={projectId}
-            onProjectCreated={openProject}
+            onProjectCreated={openProjectAndRefresh}
             onOpenModels={() => go('models')}
             onOpenBilling={openBilling}
+            guided={journeyActive}
           />
         ) : activeView === 'models' ? (
-          <Models />
+          <Models guided={journeyStatus?.current === 'model'} onProgressChange={loadJourney} />
         ) : activeView === 'billing' ? (
           <Billing
             neededUsd={billingNeed}
-            onBackToSwap={() => go('swap')}
-            onBalanceChange={setBalance}
+            onBackToSwap={() => go(journeyActive ? 'start' : 'swap')}
+            onBalanceChange={(next) => {
+              setBalance(next);
+              void loadJourney();
+            }}
           />
         ) : activeView === 'guide' ? (
-          <Guide />
+          <Guide
+            onDone={journeyActive ? () => {
+              saveJourneyPrefs({ guideSeen: true });
+              go('start');
+            } : undefined}
+          />
         ) : (
-          <Library onOpen={openProject} />
+          <Library onOpen={openProjectAndRefresh} />
         )}
       </main>
 
@@ -212,17 +390,19 @@ export default function App() {
             баланс: ${balance.availableUsd.toFixed(2)}
           </button>
         )}
-        <button type="button" onClick={() => go('guide')} className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">как это работает</button>
+        {!journeyActive && <button type="button" onClick={() => go('guide')} className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">как это работает</button>}
         <a href="legal/terms" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">условия</a>
         <a href="legal/privacy" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">конфиденциальность</a>
         <span className="ml-auto hidden md:inline">SwapForge · INSHIN LAB · 18+</span>
       </footer>
 
-      <MobileNav
-        view={activeView}
-        isOwner={isOwner}
-        onChange={(next) => (next === 'billing' ? openBilling() : go(next))}
-      />
+      {!journeyActive && (
+        <MobileNav
+          view={activeView}
+          isOwner={isOwner}
+          onChange={(next) => (next === 'billing' ? openBilling() : go(next))}
+        />
+      )}
     </div>
   );
 }
@@ -237,7 +417,7 @@ function MobileNav({
   onChange: (view: View) => void;
 }) {
   const items: Array<{ view: View; icon: string; label: string }> = [
-    { view: 'swap', icon: '⚡', label: 'Свап' },
+    { view: 'swap', icon: '⚡', label: 'Создать' },
     { view: 'models', icon: '◇', label: 'Модели' },
     { view: 'library', icon: '▦', label: 'Работы' },
     ...(!isOwner ? [{ view: 'billing' as const, icon: '●', label: 'Баланс' }] : []),
