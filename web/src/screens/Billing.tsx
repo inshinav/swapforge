@@ -250,7 +250,7 @@ export default function Billing({
                   Оплата открыта через {PROVIDER_LABEL[pending.provider]}. Баланс проверяется автоматически — обычно это занимает меньше минуты.
                 </div>
               </div>
-              <button type="button" onClick={() => void reload()} className="text-xs text-dim hover:text-lime shrink-0">
+              <button type="button" onClick={() => void checkPendingBalance()} className="min-h-11 px-2 text-xs text-dim hover:text-lime shrink-0">
                 проверить
               </button>
             </div>
@@ -436,7 +436,7 @@ function PackCard({
         <div className="mb-3 rounded-lg border border-line bg-panel px-3 py-2.5">
           <div className="flex items-center gap-2 mb-1.5">
             <label htmlFor={emailId} className="text-xs font-semibold">Email для чека</label>
-            <button type="button" className="text-[11px] text-dim hover:text-ink ml-auto" onClick={() => setEmailFor(null)}>
+            <button type="button" className="min-h-11 px-2 -my-2 text-[11px] text-dim hover:text-ink ml-auto" onClick={() => setEmailFor(null)}>
               отмена
             </button>
           </div>
@@ -448,7 +448,7 @@ function PackCard({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="name@example.com"
-            className="w-full min-h-10 rounded-lg bg-panel2 border border-line px-2.5 py-2 text-sm outline-none focus:border-lime/50"
+            className="w-full min-h-11 rounded-lg bg-panel2 border border-line px-2.5 py-2 text-sm outline-none focus:border-lime/50"
           />
           <p className="text-[11px] text-dim mt-1.5">Lava.top отправит сюда кассовый чек. Для входа email не используется.</p>
           {emailErr && <p className="text-[11px] text-danger mt-1">{emailErr}</p>}

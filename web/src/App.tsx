@@ -66,6 +66,11 @@ export default function App() {
   }, [go]);
 
   const isOwner = session !== null && session !== 'anon' && session.user.role === 'owner';
+  const activeView: View = isOwner && view === 'billing' ? 'swap' : view;
+
+  useEffect(() => {
+    if (isOwner && view === 'billing') go('swap');
+  }, [go, isOwner, view]);
 
   useEffect(() => {
     if (session === null || session === 'anon') return;
@@ -114,21 +119,21 @@ export default function App() {
       <header className="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-bg/90 backdrop-blur z-20 min-w-0">
         <Logo />
         <nav className="hidden md:flex gap-1 ml-2">
-          <TabBtn active={view === 'swap'} onClick={() => go('swap')}>
+          <TabBtn active={activeView === 'swap'} onClick={() => go('swap')}>
             Свап
           </TabBtn>
-          <TabBtn active={view === 'models'} onClick={() => go('models')}>
+          <TabBtn active={activeView === 'models'} onClick={() => go('models')}>
             Мои модели
           </TabBtn>
-          <TabBtn active={view === 'library'} onClick={() => go('library')}>
+          <TabBtn active={activeView === 'library'} onClick={() => go('library')}>
             Библиотека
           </TabBtn>
           {!isOwner && (
-            <TabBtn active={view === 'billing'} onClick={() => openBilling()}>
+            <TabBtn active={activeView === 'billing'} onClick={() => openBilling()}>
               Баланс
             </TabBtn>
           )}
-          <TabBtn active={view === 'guide'} onClick={() => go('guide')}>
+          <TabBtn active={activeView === 'guide'} onClick={() => go('guide')}>
             Гайд
           </TabBtn>
         </nav>
@@ -150,22 +155,22 @@ export default function App() {
       </header>
 
       <main className="flex-1 w-full min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 pb-24 md:pb-6">
-        {view === 'swap' ? (
+        {activeView === 'swap' ? (
           <NewSwap
             projectId={projectId}
             onProjectCreated={openProject}
             onOpenModels={() => go('models')}
             onOpenBilling={openBilling}
           />
-        ) : view === 'models' ? (
+        ) : activeView === 'models' ? (
           <Models />
-        ) : view === 'billing' ? (
+        ) : activeView === 'billing' ? (
           <Billing
             neededCredits={billingNeed}
             onBackToSwap={() => go('swap')}
             onBalanceChange={setCredits}
           />
-        ) : view === 'guide' ? (
+        ) : activeView === 'guide' ? (
           <Guide />
         ) : (
           <Library onOpen={openProject} />
@@ -205,19 +210,19 @@ export default function App() {
           <button
             type="button"
             onClick={() => openBilling()}
-            className={`${credits.available <= 0 ? 'text-warn' : ''} hover:text-lime transition-colors`}
+            className={`${credits.available <= 0 ? 'text-warn' : ''} hover:text-lime transition-colors inline-flex items-center min-h-11 md:min-h-0`}
           >
             баланс: {credits.available} кредитов
             {credits.held > 0 ? ` (+${credits.held} в резерве)` : ''}
           </button>
         )}
-        <a href="legal/terms" className="hover:text-ink">условия</a>
-        <a href="legal/privacy" className="hover:text-ink">конфиденциальность</a>
+        <a href="legal/terms" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">условия</a>
+        <a href="legal/privacy" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">конфиденциальность</a>
         <span className="ml-auto">SwapForge · INSHIN LAB · 18+</span>
       </footer>
 
       <MobileNav
-        view={view}
+        view={activeView}
         isOwner={isOwner}
         onChange={(next) => (next === 'billing' ? openBilling() : go(next))}
       />
@@ -291,7 +296,7 @@ function UserChip({
       <button
         type="button"
         onClick={onLogout}
-        className="text-[11px] text-dim hover:text-ink border border-line rounded-lg px-2 py-1 transition-colors"
+        className="min-h-11 sm:min-h-0 text-[11px] text-dim hover:text-ink border border-line rounded-lg px-3 sm:px-2 py-1 transition-colors"
         title="Выйти из аккаунта"
       >
         Выйти

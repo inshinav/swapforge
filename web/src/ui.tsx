@@ -88,7 +88,7 @@ export function Button({
   title?: string;
 }) {
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+    'inline-flex min-h-11 sm:min-h-0 items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
   const kinds = {
     primary: 'bg-lime text-black hover:bg-lime-dim',
     ghost: 'border border-line2 text-ink hover:border-lime/50 hover:text-lime bg-panel2',

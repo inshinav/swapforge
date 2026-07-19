@@ -59,7 +59,11 @@ function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
         setHasModels(
           models.some((model) =>
             model.variants.some((variant) =>
-              model.refs.some((ref) => ref.variantId === variant.id && ref.role === 'model'),
+              model.refs.some(
+                (ref) =>
+                  ref.role === 'model' &&
+                  (ref.variantId === variant.id || ref.variantId === null),
+              ),
             ),
           ),
         ),
@@ -113,7 +117,7 @@ function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
               <Step done={false} n={3} title="Жми кнопку модели" sub="весь конвейер поедет сам" />
             </div>
           </div>
-          <button type="button" onClick={dismiss} className="text-dim hover:text-ink text-sm" title="Скрыть">
+          <button type="button" onClick={dismiss} className="min-w-11 min-h-11 -mr-2 -mt-2 text-dim hover:text-ink text-sm" title="Скрыть">
             ×
           </button>
         </div>

@@ -55,7 +55,7 @@ export default function Models() {
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void create()}
               placeholder="Имя модели — например MotoLola"
-              className="flex-1 min-w-[220px] rounded-lg bg-panel2 border border-line px-3 py-2 text-sm outline-none focus:border-lime/50"
+              className="flex-1 min-w-[220px] min-h-11 rounded-lg bg-panel2 border border-line px-3 py-2 text-sm outline-none focus:border-lime/50"
             />
             <Button kind="primary" busy={creating} disabled={!newName.trim()} onClick={() => void create()}>
               + Создать модель
@@ -88,7 +88,7 @@ function SheetTips() {
   const [open, setOpen] = useState(false);
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)} className="text-xs text-dim hover:text-lime">
+      <button type="button" onClick={() => setOpen(!open)} className="min-h-11 text-xs text-dim hover:text-lime">
         {open ? '▾' : '▸'} какие листы дают лучший результат?
       </button>
       {open && (
@@ -187,7 +187,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
               </Button>
             </span>
           ) : (
-            <button type="button" onClick={() => setConfirmDel(true)} className="text-xs text-dim hover:text-danger">
+            <button type="button" onClick={() => setConfirmDel(true)} className="min-h-11 px-2 text-xs text-dim hover:text-danger">
               удалить
             </button>
           )}
@@ -212,7 +212,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
           <button
             type="button"
             onClick={() => setSel('shared')}
-            className={`px-2.5 py-1 rounded-lg text-xs border transition-colors ${
+            className={`min-h-11 px-2.5 py-1 rounded-lg text-xs border transition-colors ${
               sel === 'shared'
                 ? 'border-lime/60 bg-lime/10 text-ink'
                 : 'border-line text-mut hover:text-ink'
@@ -229,12 +229,12 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
                 if (e.key === 'Enter') addVariant();
               }}
               placeholder="+ вариант (коса…)"
-              className="min-h-10 flex-1 sm:w-36 rounded-lg bg-panel2 border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
+              className="min-h-11 flex-1 sm:w-36 rounded-lg bg-panel2 border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
             />
             <Button
               kind="ghost"
               disabled={!newVariant.trim()}
-              className="min-h-10 !px-3 text-xs"
+              className="min-h-11 !px-3 text-xs"
               onClick={addVariant}
             >
               Добавить
@@ -299,7 +299,7 @@ function InlineName({ value, onSave }: { value: string; onSave: (v: string) => v
     return (
       <button
         type="button"
-        className="text-lg font-bold hover:text-lime transition-colors"
+        className="min-h-11 text-lg font-bold hover:text-lime transition-colors"
         onClick={() => setEditing(true)}
         title="Переименовать"
       >
@@ -323,7 +323,7 @@ function InlineName({ value, onSave }: { value: string; onSave: (v: string) => v
           setEditing(false);
         }
       }}
-      className="rounded-lg bg-panel2 border border-lime/50 px-2 py-1 text-lg font-bold outline-none"
+      className="min-h-11 rounded-lg bg-panel2 border border-lime/50 px-2 py-1 text-lg font-bold outline-none"
     />
   );
 }
@@ -365,9 +365,9 @@ function VariantChip({
               setEditing(false);
             }
           }}
-          className="w-28 min-h-8 rounded-md bg-panel border border-line px-2 py-1 text-xs outline-none"
+          className="w-28 min-h-11 rounded-md bg-panel border border-line px-2 py-1 text-xs outline-none"
         />
-        <button type="button" onClick={save} className="min-w-8 min-h-8 rounded-md text-ok hover:bg-ok/10" aria-label="Сохранить название">
+        <button type="button" onClick={save} className="min-w-11 min-h-11 rounded-md text-ok hover:bg-ok/10" aria-label="Сохранить название">
           ✓
         </button>
         <button
@@ -376,7 +376,7 @@ function VariantChip({
             setV(title);
             setEditing(false);
           }}
-          className="min-w-8 min-h-8 rounded-md text-dim hover:text-ink"
+          className="min-w-11 min-h-11 rounded-md text-dim hover:text-ink"
           aria-label="Отменить переименование"
         >
           ×
@@ -390,13 +390,13 @@ function VariantChip({
         active ? 'border-lime/60 bg-lime/10 text-ink' : 'border-line text-mut hover:text-ink'
       }`}
     >
-      <button type="button" onClick={onSelect} className="min-h-10 px-2.5 py-1 text-left">
+      <button type="button" onClick={onSelect} className="min-h-11 px-2.5 py-1 text-left">
         ⚡ {title}
       </button>
       <button
         type="button"
         onClick={() => setEditing(true)}
-        className="min-w-8 min-h-10 text-dim hover:text-lime opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+        className="min-w-11 min-h-11 text-dim hover:text-lime opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
         aria-label={`Переименовать вариант «${title}»`}
       >
         ✎
@@ -410,11 +410,11 @@ function VariantChip({
                 setConfirming(false);
                 onDelete();
               }}
-              className="min-h-8 px-1.5 text-[10px] text-danger"
+              className="min-h-11 px-2 text-[10px] text-danger"
             >
               удалить?
             </button>
-            <button type="button" onClick={() => setConfirming(false)} className="min-w-7 min-h-8 text-dim" aria-label="Отменить удаление">
+            <button type="button" onClick={() => setConfirming(false)} className="min-w-11 min-h-11 text-dim" aria-label="Отменить удаление">
               нет
             </button>
           </span>
@@ -422,7 +422,7 @@ function VariantChip({
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="min-w-8 min-h-10 text-dim hover:text-danger opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+            className="min-w-11 min-h-11 text-dim hover:text-danger opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
             aria-label={`Удалить вариант «${title}»`}
             title="Удалить вариант (и его листы)"
           >
@@ -494,7 +494,7 @@ function RefTile({
                 .then(onChanged)
                 .catch((er: Error) => onErr(er.message));
             }}
-            className="rounded-md bg-panel border border-line text-xs px-1.5 py-1 outline-none"
+            className="min-h-11 rounded-md bg-panel border border-line text-xs px-1.5 py-1 outline-none"
           >
             {ROLE_OPTIONS.map(([role, labels]) => (
               <option key={role} value={role}>
@@ -513,16 +513,16 @@ function RefTile({
                     .then(onChanged)
                     .catch((er: Error) => onErr(er.message));
                 }}
-                className="text-danger"
+                className="min-h-11 px-2 text-danger"
               >
                 удалить?
               </button>
-              <button type="button" onClick={() => setConfirmDel(false)} className="text-dim hover:text-ink">
+              <button type="button" onClick={() => setConfirmDel(false)} className="min-h-11 px-2 text-dim hover:text-ink">
                 нет
               </button>
             </span>
           ) : (
-            <button type="button" onClick={() => setConfirmDel(true)} className="text-xs text-dim hover:text-danger">
+            <button type="button" onClick={() => setConfirmDel(true)} className="min-h-11 px-2 text-xs text-dim hover:text-danger">
               удалить
             </button>
           )}
