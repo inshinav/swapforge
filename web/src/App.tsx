@@ -169,13 +169,21 @@ export default function App() {
     go('billing');
   }, [go]);
 
-  const activeView: View = (isOwner && view === 'billing') || (!isOwner && view === 'credits') ? 'swap' : view;
+  const activeView: View =
+    (isOwner && view === 'billing') || (userId !== null && !isOwner && view === 'credits')
+      ? 'swap'
+      : view;
   const journeyStatus = journeyData ? buildJourneyStatus(journeyData, journeyPrefs) : null;
   const journeyActive = !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && !isOwner;
 
   useEffect(() => {
-    if ((isOwner && (view === 'billing' || view === 'start')) || (!isOwner && view === 'credits')) go('swap');
-  }, [go, isOwner, view]);
+    if (
+      (isOwner && (view === 'billing' || view === 'start')) ||
+      (userId !== null && !isOwner && view === 'credits')
+    ) {
+      go('swap');
+    }
+  }, [go, isOwner, userId, view]);
 
   useEffect(() => {
     if (!journeyActive || journeyRouted) return;
