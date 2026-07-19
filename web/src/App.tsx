@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { CreditBalanceInfo, HealthInfo, MeInfo, PricingInfo, UsageSummary } from '@shared/api-types';
+import type { DollarBalanceInfo, HealthInfo, MeInfo, PricingInfo, UsageSummary } from '@shared/api-types';
 import { ApiError, api } from './api';
 import NewSwap from './screens/NewSwap';
 import Library from './screens/Library';
@@ -29,7 +29,7 @@ export default function App() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [pricing, setPricing] = useState<PricingInfo | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
-  const [credits, setCredits] = useState<CreditBalanceInfo | null>(null);
+  const [balance, setBalance] = useState<DollarBalanceInfo | null>(null);
   const [billingNeed, setBillingNeed] = useState<number | null>(null);
 
   const loadSession = useCallback(() => {
@@ -61,7 +61,7 @@ export default function App() {
   }, []);
 
   const openBilling = useCallback((needed?: number) => {
-    setBillingNeed(needed && needed > 0 ? Math.ceil(needed) : null);
+    setBillingNeed(needed && needed > 0 ? Math.ceil(needed * 100) / 100 : null);
     go('billing');
   }, [go]);
 
@@ -80,7 +80,7 @@ export default function App() {
       api.pricing().then(setPricing).catch(() => setPricing(null));
       api.usageSummary().then(setUsage).catch(() => setUsage(null));
     } else {
-      api.creditBalance().then(setCredits).catch(() => setCredits(null));
+      api.billingBalance().then(setBalance).catch(() => setBalance(null));
     }
   }, [view, session, isOwner]);
 
@@ -133,15 +133,12 @@ export default function App() {
               Баланс
             </TabBtn>
           )}
-          <TabBtn active={activeView === 'guide'} onClick={() => go('guide')}>
-            Гайд
-          </TabBtn>
         </nav>
         <div className="flex-1" />
-        {health && health.keyPresent === false && (
+        {isOwner && health && health.keyPresent === false && (
           <span className="text-[11px] text-danger hidden sm:inline">LLM-ключ не настроен</span>
         )}
-        {health && health.diskUsedPct !== undefined && health.diskUsedPct >= 80 && (
+        {isOwner && health && health.diskUsedPct !== undefined && health.diskUsedPct >= 80 && (
           <span className="text-[11px] text-warn hidden sm:inline">
             хранилище {health.diskUsedPct}%
           </span>
@@ -166,9 +163,9 @@ export default function App() {
           <Models />
         ) : activeView === 'billing' ? (
           <Billing
-            neededCredits={billingNeed}
+            neededUsd={billingNeed}
             onBackToSwap={() => go('swap')}
-            onBalanceChange={setCredits}
+            onBalanceChange={setBalance}
           />
         ) : activeView === 'guide' ? (
           <Guide />
@@ -178,7 +175,7 @@ export default function App() {
       </main>
 
       <footer className="border-t border-line px-4 sm:px-6 pt-3 pb-24 md:pb-3 text-[11px] text-dim flex flex-wrap gap-x-4 gap-y-1">
-        <span>SwapForge v{health?.version ?? '…'}</span>
+        <span className="hidden md:inline">SwapForge v{health?.version ?? '…'}</span>
         {isOwner && health?.provider && (
           <>
             <span>
@@ -206,19 +203,19 @@ export default function App() {
         {isOwner && pricing?.litellmFetchedAt && (
           <span>тарифы от {pricing.litellmFetchedAt.slice(0, 10)}</span>
         )}
-        {!isOwner && credits && (
+        {!isOwner && balance && (
           <button
             type="button"
             onClick={() => openBilling()}
-            className={`${credits.available <= 0 ? 'text-warn' : ''} hover:text-lime transition-colors inline-flex items-center min-h-11 md:min-h-0`}
+            className={`${balance.availableUsd <= 0 ? 'text-warn' : ''} hover:text-lime transition-colors hidden md:inline-flex items-center min-h-11 md:min-h-0`}
           >
-            баланс: {credits.available} кредитов
-            {credits.held > 0 ? ` (+${credits.held} в резерве)` : ''}
+            баланс: ${balance.availableUsd.toFixed(2)}
           </button>
         )}
+        <button type="button" onClick={() => go('guide')} className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">как это работает</button>
         <a href="legal/terms" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">условия</a>
         <a href="legal/privacy" className="hover:text-ink inline-flex items-center min-h-11 md:min-h-0">конфиденциальность</a>
-        <span className="ml-auto">SwapForge · INSHIN LAB · 18+</span>
+        <span className="ml-auto hidden md:inline">SwapForge · INSHIN LAB · 18+</span>
       </footer>
 
       <MobileNav
@@ -244,7 +241,6 @@ function MobileNav({
     { view: 'models', icon: '◇', label: 'Модели' },
     { view: 'library', icon: '▦', label: 'Работы' },
     ...(!isOwner ? [{ view: 'billing' as const, icon: '●', label: 'Баланс' }] : []),
-    { view: 'guide', icon: '?', label: 'Гайд' },
   ];
   return (
     <nav

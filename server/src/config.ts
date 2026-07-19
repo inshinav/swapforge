@@ -1,6 +1,8 @@
 import path from 'node:path';
 
 const env = (k: string, def = ''): string => process.env[k]?.trim() || def;
+const minTopupUsd = Math.round(Math.max(5, Number(env('MIN_TOPUP_USD', '5')) || 5) * 100) / 100;
+const maxTopupUsd = Math.round(Math.max(minTopupUsd, Number(env('MAX_TOPUP_USD', '1000')) || 1000) * 100) / 100;
 
 export const config = {
   port: Number(env('PORT', '4315')),
@@ -57,9 +59,15 @@ export const config = {
   /** Crypto Pay (@CryptoBot): токен приложения + флаг тестовой сети. */
   cryptoPayToken: env('CRYPTO_PAY_TOKEN'),
   cryptoPayTestnet: env('CRYPTO_PAY_TESTNET') === '1',
-  /** Lava.top: ключ API (X-Api-Key) + секрет заголовка вебхука. */
+  /** Криптовалюты, которыми можно оплатить счёт Crypto Pay, номинированный в USD. */
+  cryptoPayAcceptedAssets: env('CRYPTO_PAY_ACCEPTED_ASSETS', 'USDT,TON,BTC,ETH,USDC'),
+  /** Lava.top: ключ API (X-Api-Key), секрет вебхука и ID оффера с динамической ценой. */
   lavaApiKey: env('LAVA_API_KEY'),
   lavaWebhookSecret: env('LAVA_WEBHOOK_SECRET'),
+  lavaDynamicOfferId: env('LAVA_DYNAMIC_OFFER_ID'),
+  /** Пользователь сам задаёт сумму пополнения в этих границах. */
+  minTopupUsd,
+  maxTopupUsd,
   /** Публичная база сервиса для redirect-кнопок провайдеров. */
   publicBaseUrl: env('PUBLIC_BASE_URL', 'https://inshinlab.com/swapforge/'),
   /** Пакеты кредитов: [{id,title,credits,priceLabel,cryptoAsset,cryptoAmount,lavaOfferId,lavaCurrency}]. */

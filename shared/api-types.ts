@@ -156,14 +156,14 @@ export interface ModelInfo {
 export interface ProjectCosts {
   /** Всего по проекту: LLM (usage_events) + фактические списания рендеров. Не-владельцу всегда 0. */
   projectUsd: number;
-  /** Бегущий счётчик активного one-click прогона (null для не-владельца — у него кредиты). */
+  /** Бегущий счётчик активного one-click прогона (операторская себестоимость; скрыта от пользователя). */
   activeRun: {
     openaiUsd: number;
     wavespeedEstUsd: number | null;
     wavespeedActualUsd: number | null;
   } | null;
-  /** Для не-владельца: открытый кредитный резерв проекта (null = нет). */
-  heldCredits?: number | null;
+  /** Для не-владельца: открытый резерв проекта в долларах (null = нет). */
+  heldUsd?: number | null;
 }
 
 export interface ProjectSummary {
@@ -227,27 +227,27 @@ export interface EstimateInfo {
   warnings: string[];
 }
 
-/** Смета для НЕ-владельца: только кредиты, USD в payload не существует. */
+/** Пользовательская смета: итоговая цена уже включает сервисную маржу. */
 export interface EstimateForUser {
-  kind: 'credits';
+  kind: 'balance';
   stages: string[];
-  /** Смета в кредитах (null = живые тарифы недоступны — запуск не дадим). */
-  credits: number | null;
-  /** Доступно юзеру (баланс минус открытые резервы). */
-  balanceCredits: number;
+  /** Цена запуска в USD (null = живые тарифы недоступны — запуск не дадим). */
+  priceUsd: number | null;
+  /** Доступный баланс в USD (общий баланс минус открытые резервы). */
+  balanceUsd: number;
   approximate: boolean;
   warnings: string[];
 }
 
-export interface CreditBalanceInfo {
-  balance: number;
-  held: number;
-  available: number;
+export interface DollarBalanceInfo {
+  balanceUsd: number;
+  heldUsd: number;
+  availableUsd: number;
 }
 
-export interface CreditLedgerEntry {
+export interface DollarLedgerEntry {
   id: string;
-  delta: number;
+  deltaUsd: number;
   kind: 'purchase' | 'charge' | 'refund' | 'adjust';
   note: string;
   createdAt: string;
@@ -255,18 +255,10 @@ export interface CreditLedgerEntry {
 
 export type BillingProviderId = 'cryptopay' | 'lavatop';
 
-export interface CreditPackInfo {
-  id: string;
-  title: string;
-  credits: number;
-  priceLabel: string;
-  /** Какими провайдерами этот пакет оплачивается (есть offer/цена). */
-  pay: BillingProviderId[];
-}
-
-export interface BillingPacksInfo {
+export interface BillingMethodsInfo {
+  minTopupUsd: number;
+  maxTopupUsd: number;
   providers: Array<{ id: BillingProviderId; needsEmail: boolean }>;
-  packs: CreditPackInfo[];
 }
 
 export interface PricingInfo {

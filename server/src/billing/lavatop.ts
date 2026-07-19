@@ -1,7 +1,7 @@
 // Lava.top — единственный файл, знающий его wire-формат.
 // Доки: https://gate.lava.top/docs (OpenAPI, сверено 19.07.2026).
-// - POST /api/v3/invoice: { email, offerId, currency, clientUtm } → { paymentUrl };
-//   маппинг юзера кладём в clientUtm (utm_content=userId, utm_term=packId) — оно
+// - POST /api/v3/invoice: { email, offerId, currency, amount, clientUtm } → { paymentUrl };
+//   amount работает у оффера с динамической ценой; маппинг кладём в clientUtm — он
 //   round-trip в вебхуке (email обязателен, но для маппинга не используется);
 // - вебхук: { eventType, contractId, buyer.email, amount, currency, status, clientUtm };
 // - auth: X-Api-Key заголовок (запросы И вебхук — ApiKeyWebhookAuth в ЛК).
@@ -42,7 +42,15 @@ export function parseLavaEvent(rawBody: Buffer): PaymentEvent {
     kind: 'purchase',
     paymentRef: `lavatop:${contractId}`,
     userId: ref.userId,
+    amountCents: ref.amountCents,
     packId: ref.packId,
+    paidAmountUsd:
+      typeof body.amount === 'number'
+        ? body.amount
+        : typeof body.amount === 'string'
+          ? Number(body.amount)
+          : null,
+    paidCurrency: typeof body.currency === 'string' ? body.currency.toUpperCase() : null,
   };
 }
 
@@ -52,15 +60,13 @@ export class LavaTopProvider implements PaymentProvider {
 
   get ready(): boolean {
     // ОБА секрета обязательны: без webhook-секрета юзер заплатит, но вебхук не
-    // пройдёт verify → кредиты не начислятся («оплачено, не доставлено»). Лучше
+    // пройдёт verify → баланс не пополнится («оплачено, не доставлено»). Лучше
     // не показывать кнопку оплаты картой, пока конфиг неполон.
-    return !!config.lavaApiKey && !!config.lavaWebhookSecret;
+    return !!config.lavaApiKey && !!config.lavaWebhookSecret && !!config.lavaDynamicOfferId;
   }
 
   async createCheckout(input: CheckoutInput): Promise<CheckoutResult> {
     if (!this.ready) throw new Error('Lava.top не настроен на сервере');
-    const offerId = input.pack.lavaOfferId;
-    if (!offerId) throw new Error(`У пакета «${input.pack.id}» не задан lavaOfferId`);
     const email = (input.email ?? '').trim();
     if (!email) throw new Error('Для оплаты картой нужен email');
 
@@ -69,10 +75,14 @@ export class LavaTopProvider implements PaymentProvider {
       headers: { 'Content-Type': 'application/json', 'X-Api-Key': config.lavaApiKey },
       body: JSON.stringify({
         email,
-        offerId,
-        currency: input.pack.lavaCurrency ?? 'RUB',
-        // round-trip маппинг: наш userId+packId переживут поход юзера на оплату
-        clientUtm: { utm_content: encodeRef(input.userId, input.pack.id), utm_term: input.pack.id },
+        offerId: config.lavaDynamicOfferId,
+        currency: 'USD',
+        amount: input.amountUsd,
+        // round-trip маппинг: userId+сумма переживут поход на оплату
+        clientUtm: {
+          utm_content: encodeRef(input.userId, Math.round(input.amountUsd * 100)),
+          utm_term: `usd-${Math.round(input.amountUsd * 100)}`,
+        },
       }),
       signal: AbortSignal.timeout(15000),
     });

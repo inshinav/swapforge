@@ -43,86 +43,28 @@ function useProject(id: string | null) {
   return { proj, err, reload };
 }
 
-/**
- * Первые шаги нового пользователя: чеклист над загрузкой, пока не создана модель
- * или нет ни одного проекта. Скрывается крестиком (localStorage) или сам собой.
- */
 function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem('sf-onboard') === '1');
-  const [hasModels, setHasModels] = useState<boolean | null>(null);
-  const [hasProjects, setHasProjects] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    if (dismissed) return;
-    api.models()
-      .then((models) =>
-        setHasModels(
-          models.some((model) =>
-            model.variants.some((variant) =>
-              model.refs.some(
-                (ref) =>
-                  ref.role === 'model' &&
-                  (ref.variantId === variant.id || ref.variantId === null),
-              ),
-            ),
-          ),
-        ),
-      )
-      .catch(() => setHasModels(null));
-    api.projects().then((p) => setHasProjects(p.length > 0)).catch(() => setHasProjects(null));
-  }, [dismissed]);
-
-  if (dismissed || hasModels === null || hasProjects === null) return null;
-  if (hasModels && hasProjects) return null; // путь пройден — чеклист не нужен
-
-  const dismiss = () => {
-    localStorage.setItem('sf-onboard', '1');
-    setDismissed(true);
-  };
-
-  const Step = ({ done, n, title, sub, onClick }: { done: boolean; n: number; title: string; sub: string; onClick?: () => void }) => (
+  const Step = ({ n, title, onClick }: { n: number; title: string; onClick?: () => void }) => (
     <button
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className={`flex items-start gap-2.5 text-left rounded-lg border px-3 py-2 transition-colors ${
-        done ? 'border-lime/40 bg-lime/5' : onClick ? 'border-line hover:border-lime/40' : 'border-line opacity-80'
+      className={`min-w-0 flex items-center gap-2 text-left rounded-lg border px-3 py-2 transition-colors ${
+        onClick ? 'border-line hover:border-lime/40' : 'border-line'
       }`}
     >
-      <span className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${done ? 'bg-lime text-black' : 'bg-panel2 border border-line2 text-mut'}`}>
-        {done ? '✓' : n}
+      <span className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold bg-panel2 border border-line2 text-mut">
+        {n}
       </span>
-      <span>
-        <span className="text-sm font-semibold block">{title}</span>
-        <span className="text-xs text-mut">{sub}</span>
-      </span>
+      <span className="text-xs sm:text-sm font-semibold truncate">{title}</span>
     </button>
   );
 
   return (
-    <Card glow>
-      <div className="p-4 sm:p-5">
-        <div className="flex items-start gap-3">
-          <div className="flex-1">
-            <div className="text-sm font-bold mb-2">Первые шаги — 5 минут до первого свапа</div>
-            <div className="grid sm:grid-cols-3 gap-2">
-              <Step
-                done={hasModels}
-                n={1}
-                title="Подготовь модель"
-                sub="создай её и добавь реф-лист персонажа"
-                onClick={hasModels ? undefined : onOpenModels}
-              />
-              <Step done={hasProjects} n={2} title="Загрузи ролик" sub="любой длины, лучше один герой в кадре" />
-              <Step done={false} n={3} title="Жми кнопку модели" sub="весь конвейер поедет сам" />
-            </div>
-          </div>
-          <button type="button" onClick={dismiss} className="min-w-11 min-h-11 -mr-2 -mt-2 text-dim hover:text-ink text-sm" title="Скрыть">
-            ×
-          </button>
-        </div>
-      </div>
-    </Card>
+    <div className="grid grid-cols-2 gap-2">
+      <Step n={1} title="Видео" />
+      <Step n={2} title="Модель и запуск" onClick={onOpenModels} />
+    </div>
   );
 }
 
@@ -264,7 +206,6 @@ function UnderTheHood({
       >
         <span className={`transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
         <span className="font-semibold uppercase tracking-wider">Под капотом</span>
-        <span>анализ · промты · старт-кадр · ручной режим</span>
         <span className="flex-1 border-t border-line ml-2" />
       </button>
       {open && (
@@ -366,7 +307,7 @@ function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
   return (
     <div className="sf-in">
       <div
-        className={`rounded-2xl border-2 border-dashed px-8 py-20 text-center transition-colors cursor-pointer select-none ${
+        className={`rounded-2xl border-2 border-dashed px-4 py-14 text-center transition-colors cursor-pointer select-none ${
           drag ? 'border-lime bg-lime/5' : 'border-line2 hover:border-lime/40'
         }`}
         onClick={() => inputRef.current?.click()}
@@ -383,14 +324,8 @@ function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
       >
         {pct === null ? (
           <>
-            <div className="text-5xl mb-4">🎬</div>
-            <div className="text-lg font-bold">Кинь сюда исходный ролик</div>
-            <div className="text-sm text-mut mt-2">
-              mp4 / mov · до 300 МБ · длинные ролики сервис сам нарежет и бесшовно соберёт
-            </div>
-            <div className="text-xs text-dim mt-4">
-              Дальше выбери свою модель — анализ, промты и рендер поедут сами
-            </div>
+            <div className="text-lg font-bold">Загрузить видео</div>
+            <div className="text-sm text-mut mt-2">MP4 / MOV · до 300 МБ · любая длина</div>
           </>
         ) : (
           <>
@@ -441,7 +376,6 @@ function VideoSection({
       <SectionTitle
         step="1"
         title={proj.title}
-        hint="исходник = мир + движение"
         right={
           <Button kind="ghost" onClick={onNew} className="!py-1 !px-2.5 text-xs">
             + Новый свап
@@ -495,13 +429,11 @@ function VideoSection({
 function StoryboardStrip({ proj }: { proj: ProjectFull }) {
   const scenes = proj.frames.filter((f) => f.kind === 'scene').length;
   return (
-    <div>
-      <div className="flex items-center gap-2 text-xs text-mut mb-2">
-        <span className="font-semibold text-ink">Раскадровка</span>
-        <span>{proj.frames.length} кадров</span>
-        {scenes > 0 && <Tag tone="lime">{scenes} смен сцен</Tag>}
-      </div>
-      <div className="flex gap-2 overflow-x-auto sf-scroll pb-2">
+    <details className="rounded-xl border border-line bg-panel2">
+      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-semibold">
+        Кадры · {proj.frames.length}{scenes > 0 ? ` · сцен ${scenes}` : ''}
+      </summary>
+      <div className="flex gap-2 overflow-x-auto sf-scroll px-3 pb-3">
         {proj.frames.map((f) => (
           <figure key={f.file} className="shrink-0 w-[72px]">
             <img
@@ -522,7 +454,7 @@ function StoryboardStrip({ proj }: { proj: ProjectFull }) {
           </figure>
         ))}
       </div>
-    </div>
+    </details>
   );
 }
 

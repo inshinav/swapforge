@@ -1,28 +1,25 @@
-// Баланс кредитов: пакеты (оплата криптой через Crypto Pay / картой через Lava.top),
-// леджер, резервы. USD здесь не существует — юзер живёт в кредитах.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
-  BillingPacksInfo,
+  BillingMethodsInfo,
   BillingProviderId,
-  CreditBalanceInfo,
-  CreditLedgerEntry,
-  CreditPackInfo,
+  DollarBalanceInfo,
+  DollarLedgerEntry,
 } from '@shared/api-types';
 import { api } from '../api';
-import { Button, Card, Empty, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
+import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 const PROVIDER_LABEL: Record<BillingProviderId, string> = {
-  cryptopay: '💎 Криптой',
-  lavatop: '💳 Картой / СБП',
+  cryptopay: 'Криптой',
+  lavatop: 'Картой / СБП',
 };
 
 const KIND_LABEL: Record<
-  CreditLedgerEntry['kind'],
-  { label: string; tone: 'ok' | 'mut' | 'warn' | 'danger' }
+  DollarLedgerEntry['kind'],
+  { label: string; tone: 'ok' | 'mut' | 'warn' }
 > = {
   purchase: { label: 'пополнение', tone: 'ok' },
   charge: { label: 'списание', tone: 'mut' },
-  refund: { label: 'возврат платежа', tone: 'warn' },
+  refund: { label: 'возврат', tone: 'warn' },
   adjust: { label: 'корректировка', tone: 'warn' },
 };
 
@@ -31,11 +28,14 @@ const PENDING_POLL_MAX_MS = 10 * 60_000;
 const PENDING_POLL_DELAYS_MS = [3_000, 5_000, 8_000, 13_000, 21_000, 30_000] as const;
 
 interface PendingPayment {
-  packTitle: string;
-  credits: number;
+  amountUsd: number;
   provider: BillingProviderId;
-  balanceBefore: number;
+  balanceBeforeUsd: number;
   startedAt: number;
+}
+
+function money(value: number): string {
+  return `${value < 0 ? '-$' : '$'}${Math.abs(value).toFixed(2)}`;
 }
 
 function readPendingPayment(): PendingPayment | null {
@@ -44,59 +44,58 @@ function readPendingPayment(): PendingPayment | null {
     if (!raw) return null;
     const p = JSON.parse(raw) as Partial<PendingPayment>;
     if (
-      typeof p.packTitle === 'string' &&
-      typeof p.credits === 'number' &&
+      typeof p.amountUsd === 'number' &&
       (p.provider === 'cryptopay' || p.provider === 'lavatop') &&
-      typeof p.balanceBefore === 'number' &&
+      typeof p.balanceBeforeUsd === 'number' &&
       typeof p.startedAt === 'number' &&
       Date.now() - p.startedAt < PENDING_POLL_MAX_MS
     ) {
       return p as PendingPayment;
     }
   } catch {
-    // Повреждённое локальное состояние не должно ломать экран баланса.
+    // Повреждённое локальное состояние просто сбрасываем.
   }
   localStorage.removeItem(PENDING_PAYMENT_KEY);
   return null;
 }
 
 export default function Billing({
-  neededCredits,
+  neededUsd,
   onBackToSwap,
   onBalanceChange,
 }: {
-  neededCredits: number | null;
+  neededUsd: number | null;
   onBackToSwap: () => void;
-  onBalanceChange: (balance: CreditBalanceInfo) => void;
+  onBalanceChange: (balance: DollarBalanceInfo) => void;
 }) {
-  const [balance, setBalance] = useState<CreditBalanceInfo | null>(null);
-  const [ledger, setLedger] = useState<CreditLedgerEntry[] | null>(null);
-  const [packsInfo, setPacksInfo] = useState<BillingPacksInfo | null>(null);
+  const [balance, setBalance] = useState<DollarBalanceInfo | null>(null);
+  const [ledger, setLedger] = useState<DollarLedgerEntry[] | null>(null);
+  const [methods, setMethods] = useState<BillingMethodsInfo | null>(null);
+  const [amount, setAmount] = useState('5.00');
+  const [emailFor, setEmailFor] = useState<BillingProviderId | null>(null);
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState<BillingProviderId | null>(null);
   const [err, setErr] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
   const [pending, setPending] = useState<PendingPayment | null>(readPendingPayment);
   const [paymentDone, setPaymentDone] = useState<number | null>(null);
   const [paymentTimedOut, setPaymentTimedOut] = useState(false);
 
-  const reload = useCallback(async (): Promise<CreditBalanceInfo | null> => {
-    setRefreshing(true);
+  const reload = useCallback(async (): Promise<DollarBalanceInfo | null> => {
     try {
-      const [b, l, p] = await Promise.all([
-        api.creditBalance(),
-        api.creditLedger(),
-        api.creditPacks(),
+      const [b, l, m] = await Promise.all([
+        api.billingBalance(),
+        api.billingLedger(),
+        api.billingMethods(),
       ]);
       setBalance(b);
       setLedger(l.entries);
-      setPacksInfo(p);
+      setMethods(m);
       onBalanceChange(b);
       setErr('');
       return b;
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       return null;
-    } finally {
-      setRefreshing(false);
     }
   }, [onBalanceChange]);
 
@@ -104,27 +103,30 @@ export default function Billing({
     void reload();
   }, [reload]);
 
+  useEffect(() => {
+    if (!methods) return;
+    const suggested = Math.max(methods.minTopupUsd, neededUsd ?? 0);
+    setAmount(suggested.toFixed(2));
+  }, [methods, neededUsd]);
+
   const checkPendingBalance = useCallback(async (): Promise<boolean> => {
     if (!pending) return false;
     try {
-      const b = await api.creditBalance();
+      const b = await api.billingBalance();
       setBalance(b);
       onBalanceChange(b);
-      if (b.balance <= pending.balanceBefore) return false;
-      setPaymentDone(b.balance - pending.balanceBefore);
+      if (b.balanceUsd <= pending.balanceBeforeUsd) return false;
+      setPaymentDone(b.balanceUsd - pending.balanceBeforeUsd);
       setPending(null);
       setPaymentTimedOut(false);
       localStorage.removeItem(PENDING_PAYMENT_KEY);
       void reload();
       return true;
     } catch {
-      // Ошибка фоновой проверки не перекрывает экран: следующий шаг бэкоффа повторит запрос.
       return false;
     }
   }, [onBalanceChange, pending, reload]);
 
-  // Пока пользователь залогинен и Billing смонтирован, проверяем только лёгкий balance endpoint:
-  // сразу, по focus/visibility и затем с бэкоффом. Через десять минут фоновый опрос прекращается.
   useEffect(() => {
     if (!pending) return;
     let alive = true;
@@ -138,7 +140,6 @@ export default function Billing({
       setPending(null);
       setPaymentTimedOut(true);
     };
-
     const check = async () => {
       if (!alive || checking) return false;
       if (Date.now() - pending.startedAt >= PENDING_POLL_MAX_MS) {
@@ -152,30 +153,16 @@ export default function Billing({
         checking = false;
       }
     };
-
     const schedule = () => {
       if (!alive) return;
       const remaining = PENDING_POLL_MAX_MS - (Date.now() - pending.startedAt);
-      if (remaining <= 0) {
-        expire();
-        return;
-      }
-      const delay = PENDING_POLL_DELAYS_MS[Math.min(attempt, PENDING_POLL_DELAYS_MS.length - 1)]!;
-      attempt += 1;
-      timer = window.setTimeout(() => {
-        void check().then((done) => {
-          if (!done) schedule();
-        });
-      }, Math.min(delay, remaining));
+      if (remaining <= 0) return expire();
+      const delay = PENDING_POLL_DELAYS_MS[Math.min(attempt++, PENDING_POLL_DELAYS_MS.length - 1)]!;
+      timer = window.setTimeout(() => void check().then((done) => !done && schedule()), Math.min(delay, remaining));
     };
-
     const onFocus = () => void check();
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void check();
-    };
-    void check().then((done) => {
-      if (!done) schedule();
-    });
+    const onVisible = () => document.visibilityState === 'visible' && void check();
+    void check().then((done) => !done && schedule());
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
@@ -186,292 +173,163 @@ export default function Billing({
     };
   }, [checkPendingBalance, pending]);
 
-  const packs = packsInfo?.packs ?? [];
-  const needsEmail = new Set(
-    packsInfo?.providers.filter((p) => p.needsEmail).map((p) => p.id) ?? [],
-  );
-  const recommendedPackId = useMemo(() => {
-    if (!neededCredits) return null;
-    return (
-      packs
-        .filter((p) => p.credits >= neededCredits)
-        .slice()
-        .sort((a, b) => a.credits - b.credits)[0]?.id ?? null
-    );
-  }, [neededCredits, packs]);
+  const amountUsd = Number(amount.replace(',', '.'));
+  const amountError = useMemo(() => {
+    if (!methods) return '';
+    if (!Number.isFinite(amountUsd) || !/^\d+(?:[.,]\d{0,2})?$/.test(amount)) return 'Укажи сумму в долларах';
+    if (amountUsd < methods.minTopupUsd) return `Минимум ${money(methods.minTopupUsd)}`;
+    if (amountUsd > methods.maxTopupUsd) return `Максимум ${money(methods.maxTopupUsd)}`;
+    return '';
+  }, [amount, amountUsd, methods]);
 
-  const checkoutStarted = (
-    pack: CreditPackInfo,
-    provider: BillingProviderId,
-    balanceBefore: number,
-  ) => {
-    const next: PendingPayment = {
-      packTitle: pack.title,
-      credits: pack.credits,
-      provider,
-      balanceBefore,
-      startedAt: Date.now(),
-    };
-    localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(next));
-    setPending(next);
-    setPaymentDone(null);
-    setPaymentTimedOut(false);
+  const pay = async (provider: BillingProviderId) => {
+    const needsEmail = methods?.providers.find((p) => p.id === provider)?.needsEmail ?? false;
+    if (needsEmail && emailFor !== provider) {
+      setEmailFor(provider);
+      setErr('');
+      return;
+    }
+    if (amountError) return setErr(amountError);
+    if (needsEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return setErr('Укажи email для чека');
+    }
+
+    // Вкладка резервируется прямо в click-handler, иначе мобильный браузер заблокирует её после await.
+    const paymentTab = window.open('', '_blank');
+    setBusy(provider);
     setErr('');
+    try {
+      const { payUrl } = await api.checkout(amountUsd, provider, email.trim() || undefined);
+      const next: PendingPayment = {
+        amountUsd,
+        provider,
+        balanceBeforeUsd: balance?.balanceUsd ?? 0,
+        startedAt: Date.now(),
+      };
+      localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(next));
+      setPending(next);
+      setPaymentDone(null);
+      setPaymentTimedOut(false);
+      setEmailFor(null);
+      if (paymentTab === null) window.location.href = payUrl;
+      else paymentTab.location = payUrl;
+    } catch (e) {
+      paymentTab?.close();
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
   };
 
   return (
-    <div className="space-y-4 sf-in">
+    <div className="space-y-3 sf-in max-w-2xl mx-auto">
       <Card glow>
-        <SectionTitle
-          title="Баланс"
-          hint="кредиты списываются по факту рендера — смету видно до запуска"
-        />
-        <div className="p-4 sm:p-5 space-y-4">
-          {err && <ErrorNote text={err} />}
+        <SectionTitle title="Баланс" />
+        <div className="p-4 sm:p-6 space-y-5">
+          {balance === null ? (
+            <Spinner />
+          ) : (
+            <div>
+              <div className="text-4xl font-extrabold tracking-tight">{money(balance.availableUsd)}</div>
+              {balance.heldUsd > 0 && <div className="text-xs text-mut mt-1">{money(balance.heldUsd)} зарезервировано</div>}
+            </div>
+          )}
 
-          {neededCredits && (
-            <div className="rounded-xl border border-lime/35 bg-lime/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="flex-1">
-                <div className="text-sm font-semibold">Для этого свапа не хватает {neededCredits} кредитов</div>
-                <div className="text-xs text-mut mt-0.5">Подходящий пакет отмечен ниже — после оплаты вернись к запуску.</div>
-              </div>
-              <Button kind="ghost" className="w-full sm:w-auto" onClick={onBackToSwap}>
-                ← Вернуться к свапу
-              </Button>
+          {neededUsd && (
+            <div className="rounded-xl border border-lime/35 bg-lime/5 px-4 py-3 text-sm">
+              Для запуска не хватает {money(neededUsd)}
             </div>
           )}
 
           {pending && (
-            <div className="rounded-xl border border-warn/35 bg-warn/5 px-4 py-3 flex items-start gap-3">
+            <div className="rounded-xl border border-warn/35 bg-warn/5 px-4 py-3 flex items-center gap-3">
               <Spinner size={16} />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold">Ждём зачисление пакета «{pending.packTitle}»</div>
-                <div className="text-xs text-mut mt-0.5">
-                  Оплата открыта через {PROVIDER_LABEL[pending.provider]}. Баланс проверяется автоматически — обычно это занимает меньше минуты.
-                </div>
-              </div>
-              <button type="button" onClick={() => void checkPendingBalance()} className="min-h-11 px-2 text-xs text-dim hover:text-lime shrink-0">
-                проверить
-              </button>
+              <span className="text-sm flex-1">Ждём зачисление {money(pending.amountUsd)}</span>
+              <button type="button" onClick={() => void checkPendingBalance()} className="min-h-11 px-2 text-xs text-mut hover:text-lime">Проверить</button>
             </div>
           )}
 
           {paymentDone !== null && (
-            <div className="rounded-xl border border-ok/35 bg-ok/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="flex-1 text-sm font-semibold text-ok">✓ Кредиты пришли: +{paymentDone}</div>
-              <Button kind="primary" className="w-full sm:w-auto" onClick={onBackToSwap}>
-                Вернуться к свапу
-              </Button>
+            <div className="rounded-xl border border-ok/35 bg-ok/5 px-4 py-3 flex items-center gap-3">
+              <span className="text-sm font-semibold text-ok flex-1">Деньги пришли: +{money(paymentDone)}</span>
+              <Button kind="primary" onClick={onBackToSwap}>К свапу</Button>
             </div>
           )}
 
-          {paymentTimedOut && (
-            <div className="rounded-xl border border-line bg-panel2 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="flex-1">
-                <div className="text-sm font-semibold">Автопроверка остановлена</div>
-                <div className="text-xs text-mut mt-0.5">
-                  За 10 минут баланс не изменился. Если оплата прошла, обнови его вручную.
-                </div>
-              </div>
-              <Button kind="ghost" className="w-full sm:w-auto" onClick={() => void reload()}>
-                Обновить баланс
-              </Button>
-            </div>
-          )}
+          {paymentTimedOut && <div className="text-sm text-mut">Зачисление ещё не видно. Обнови баланс позже.</div>}
+          {err && <ErrorNote text={err} />}
 
-          {balance === null ? (
-            <Spinner />
-          ) : (
-            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <span className="text-3xl font-extrabold">
-                {balance.available}{' '}
-                <span className="text-base font-semibold text-mut">кредитов</span>
-              </span>
-              {balance.held > 0 && (
-                <span className="text-sm text-warn">
-                  + {balance.held} в резерве активных свапов (спишется по факту)
-                </span>
-              )}
-              <button type="button" onClick={() => void reload()} className="text-xs text-dim hover:text-lime ml-auto">
-                {refreshing ? '…' : '↻ обновить'}
-              </button>
+          <div className="space-y-3">
+            <label htmlFor="topup-amount" className="block text-sm font-semibold">Сумма пополнения</label>
+            <div className="relative">
+              <span className="absolute left-4 inset-y-0 flex items-center text-xl text-mut">$</span>
+              <input
+                id="topup-amount"
+                type="text"
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value.replace(/[^\d.,]/g, ''))}
+                className="w-full min-h-14 rounded-xl bg-panel2 border border-line pl-9 pr-4 py-3 text-xl font-semibold outline-none focus:border-lime/60"
+                aria-describedby="topup-limit"
+              />
             </div>
-          )}
+            <div id="topup-limit" className={amountError ? 'text-xs text-danger' : 'text-xs text-dim'}>
+              {amountError || `От ${money(methods?.minTopupUsd ?? 5)}`}
+            </div>
 
-          <div>
-            <div className="text-sm font-semibold mb-2">Купить кредиты</div>
-            {packs.length === 0 ? (
-              <p className="text-sm text-mut">
-                Пакеты сейчас недоступны — загляни позже или напиши владельцу сервиса.
-              </p>
-            ) : (
-              <div className="grid sm:grid-cols-3 gap-2">
-                {packs.map((p) => (
-                  <PackCard
-                    key={p.id}
-                    pack={p}
-                    needsEmail={needsEmail}
-                    recommended={p.id === recommendedPackId}
-                    balanceBefore={balance?.balance ?? 0}
-                    onCheckoutStarted={checkoutStarted}
-                    onError={setErr}
-                  />
-                ))}
-              </div>
+            {emailFor && (
+              <input
+                autoFocus
+                type="email"
+                inputMode="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email для чека"
+                className="w-full min-h-12 rounded-xl bg-panel2 border border-line px-4 py-3 text-sm outline-none focus:border-lime/60"
+              />
             )}
-            <p className="text-[11px] text-dim mt-2">
-              Точная цена каждого свапа видна перед запуском. После оплаты ничего обновлять вручную не нужно.
-            </p>
+
+            <div className="grid sm:grid-cols-2 gap-2">
+              {methods?.providers.map((provider) => (
+                <Button
+                  key={provider.id}
+                  kind={emailFor === provider.id ? 'primary' : 'ghost'}
+                  busy={busy === provider.id}
+                  className="min-h-12 w-full"
+                  onClick={() => void pay(provider.id)}
+                >
+                  {emailFor === provider.id ? 'Продолжить' : PROVIDER_LABEL[provider.id]}
+                </Button>
+              ))}
+            </div>
+            {methods && methods.providers.length === 0 && <div className="text-sm text-mut">Оплата временно недоступна</div>}
           </div>
         </div>
       </Card>
 
-      <Card>
-        <SectionTitle title="История" hint="все движения кредитов" />
-        <div className="p-4 sm:p-5">
-          {ledger === null ? (
-            <Spinner />
-          ) : ledger.length === 0 ? (
-            <Empty icon="🧾" title="Пока пусто" sub="Первое пополнение появится здесь" />
+      <details className="rounded-xl border border-line bg-panel">
+        <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">История</summary>
+        <div className="border-t border-line px-4">
+          {ledger === null ? <div className="py-4"><Spinner /></div> : ledger.length === 0 ? (
+            <div className="py-4 text-sm text-mut">Пока пусто</div>
           ) : (
-            <ul className="divide-y divide-line text-sm">
-              {ledger.map((e) => {
-                const k = KIND_LABEL[e.kind];
+            <ul className="divide-y divide-line">
+              {ledger.map((entry) => {
+                const kind = KIND_LABEL[entry.kind];
                 return (
-                  <li key={e.id} className="py-3 flex items-start gap-3">
-                    <Tag tone={k.tone}>{k.label}</Tag>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-mut text-xs truncate" title={e.note}>{e.note || '—'}</div>
-                      <div className="text-dim text-[11px] mt-0.5">{e.createdAt.slice(0, 16)}</div>
-                    </div>
-                    <span className={`font-mono font-semibold shrink-0 ${e.delta >= 0 ? 'text-ok' : 'text-ink'}`}>
-                      {e.delta >= 0 ? `+${e.delta}` : e.delta}
+                  <li key={entry.id} className="py-3 flex items-center gap-3 text-sm">
+                    <Tag tone={kind.tone}>{kind.label}</Tag>
+                    <span className="text-xs text-dim flex-1">{entry.createdAt.slice(0, 10)}</span>
+                    <span className={entry.deltaUsd >= 0 ? 'font-semibold text-ok' : 'font-semibold'}>
+                      {entry.deltaUsd >= 0 ? '+' : ''}{money(entry.deltaUsd)}
                     </span>
                   </li>
                 );
               })}
             </ul>
           )}
-          <div className="mt-3">
-            <Button kind="ghost" className="!py-1 !px-2 text-xs" onClick={() => void reload()}>
-              ↻ обновить
-            </Button>
-          </div>
         </div>
-      </Card>
-    </div>
-  );
-}
-
-/** Карточка пакета: выбор способа оплаты → server-initiated checkout → редирект. */
-function PackCard({
-  pack,
-  needsEmail,
-  recommended,
-  balanceBefore,
-  onCheckoutStarted,
-  onError,
-}: {
-  pack: CreditPackInfo;
-  needsEmail: Set<BillingProviderId>;
-  recommended: boolean;
-  balanceBefore: number;
-  onCheckoutStarted: (
-    pack: CreditPackInfo,
-    provider: BillingProviderId,
-    balanceBefore: number,
-  ) => void;
-  onError: (e: string) => void;
-}) {
-  const [busy, setBusy] = useState<BillingProviderId | null>(null);
-  const [emailFor, setEmailFor] = useState<BillingProviderId | null>(null);
-  const [email, setEmail] = useState('');
-  const [emailErr, setEmailErr] = useState('');
-
-  const pay = async (provider: BillingProviderId) => {
-    if (needsEmail.has(provider) && emailFor !== provider) {
-      setEmailFor(provider);
-      setEmailErr('');
-      return;
-    }
-    if (needsEmail.has(provider) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setEmailErr('Введи корректный email для чека');
-      return;
-    }
-
-    // Открываем вкладку синхронно по пользовательскому клику: после await мобильный
-    // браузер уже считает window.open попапом. Если вкладка всё же заблокирована,
-    // ниже уйдём на оплату в текущей.
-    const paymentTab = window.open('', '_blank');
-    setBusy(provider);
-    onError('');
-    setEmailErr('');
-    try {
-      const { payUrl } = await api.checkout(pack.id, provider, email.trim() || undefined);
-      onCheckoutStarted(pack, provider, balanceBefore);
-      if (paymentTab === null) window.location.href = payUrl;
-      else paymentTab.location = payUrl;
-      setEmailFor(null);
-    } catch (e) {
-      paymentTab?.close();
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const emailId = `billing-email-${pack.id}`;
-  return (
-    <div className={`rounded-xl border bg-panel2 px-4 py-3 flex flex-col ${recommended ? 'border-lime/60 shadow-[0_0_24px_-16px_rgba(198,242,78,0.7)]' : 'border-line'}`}>
-      <div className="flex items-start gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold">{pack.title}</div>
-          <div className="text-2xl font-extrabold text-lime">{pack.credits}</div>
-        </div>
-        {recommended && <Tag tone="lime">покроет нехватку</Tag>}
-      </div>
-      <div className="text-xs text-mut mb-3">кредитов · {pack.priceLabel}</div>
-
-      {emailFor && needsEmail.has(emailFor) && (
-        <div className="mb-3 rounded-lg border border-line bg-panel px-3 py-2.5">
-          <div className="flex items-center gap-2 mb-1.5">
-            <label htmlFor={emailId} className="text-xs font-semibold">Email для чека</label>
-            <button type="button" className="min-h-11 px-2 -my-2 text-[11px] text-dim hover:text-ink ml-auto" onClick={() => setEmailFor(null)}>
-              отмена
-            </button>
-          </div>
-          <input
-            id={emailId}
-            autoFocus
-            type="email"
-            inputMode="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="name@example.com"
-            className="w-full min-h-11 rounded-lg bg-panel2 border border-line px-2.5 py-2 text-sm outline-none focus:border-lime/50"
-          />
-          <p className="text-[11px] text-dim mt-1.5">Lava.top отправит сюда кассовый чек. Для входа email не используется.</p>
-          {emailErr && <p className="text-[11px] text-danger mt-1">{emailErr}</p>}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2 mt-auto">
-        {pack.pay.length === 0 && <span className="text-[11px] text-dim">оплата недоступна</span>}
-        {pack.pay.map((provider) => {
-          const continuing = provider === emailFor && needsEmail.has(provider);
-          return (
-            <Button
-              key={provider}
-              kind={continuing ? 'primary' : 'ghost'}
-              busy={busy === provider}
-              className="min-h-11 !px-2 text-xs w-full"
-              onClick={() => void pay(provider)}
-            >
-              {continuing ? 'Продолжить — картой / СБП' : PROVIDER_LABEL[provider]}
-            </Button>
-          );
-        })}
-      </div>
+      </details>
     </div>
   );
 }

@@ -52,9 +52,13 @@ export function parseCryptoPayEvent(rawBody: Buffer): PaymentEvent {
     kind: 'purchase',
     paymentRef: `cryptopay:${invoiceId}`,
     userId: ref.userId,
+    amountCents: ref.amountCents,
     packId: ref.packId,
-    paidAmount: paidAmount !== null && Number.isFinite(paidAmount) ? paidAmount : null,
-    paidAsset: typeof inv.asset === 'string' ? inv.asset.toUpperCase() : null,
+    paidAmountUsd:
+      ref.amountCents !== undefined && paidAmount !== null && Number.isFinite(paidAmount) ? paidAmount : null,
+    paidCurrency: ref.amountCents !== undefined && typeof inv.fiat === 'string' ? inv.fiat.toUpperCase() : null,
+    paidAmount: ref.packId && paidAmount !== null && Number.isFinite(paidAmount) ? paidAmount : null,
+    paidAsset: ref.packId && typeof inv.asset === 'string' ? inv.asset.toUpperCase() : null,
   };
 }
 
@@ -68,11 +72,7 @@ export class CryptoPayProvider implements PaymentProvider {
 
   async createCheckout(input: CheckoutInput): Promise<CheckoutResult> {
     if (!this.ready) throw new Error('Crypto Pay не настроен на сервере');
-    const asset = input.pack.cryptoAsset ?? 'USDT';
-    const amount = input.pack.cryptoAmount;
-    if (!amount || amount <= 0) {
-      throw new Error(`У пакета «${input.pack.id}» не задана крипто-цена (cryptoAmount)`);
-    }
+    const amountCents = Math.round(input.amountUsd * 100);
     const res = await fetch(`${apiBase()}/createInvoice`, {
       method: 'POST',
       headers: {
@@ -80,11 +80,12 @@ export class CryptoPayProvider implements PaymentProvider {
         'Crypto-Pay-API-Token': config.cryptoPayToken,
       },
       body: JSON.stringify({
-        currency_type: 'crypto',
-        asset,
-        amount: String(amount),
-        description: `${input.pack.title} — ${input.pack.credits} кредитов SwapForge`,
-        payload: encodeRef(input.userId, input.pack.id),
+        currency_type: 'fiat',
+        fiat: 'USD',
+        accepted_assets: config.cryptoPayAcceptedAssets,
+        amount: input.amountUsd.toFixed(2),
+        description: `Пополнение баланса SwapForge на $${input.amountUsd.toFixed(2)}`,
+        payload: encodeRef(input.userId, amountCents),
         paid_btn_name: 'callback',
         paid_btn_url: `${config.publicBaseUrl}#billing`,
         expires_in: 3600,

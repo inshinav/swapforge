@@ -1,6 +1,6 @@
 // Кредиты: hold/settle/release, провайдер-агностичный вебхук (Crypto Pay + Lava.top),
 // изоляция USD от не-владельца (regex по сериализованным payload), release при фейлах.
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +16,7 @@ process.env.BILLING_PROVIDERS = 'cryptopay,lavatop';
 process.env.CRYPTO_PAY_TOKEN = 'cp-test-token';
 process.env.LAVA_API_KEY = 'lava-test-key';
 process.env.LAVA_WEBHOOK_SECRET = 'lava-hook-secret';
+process.env.LAVA_DYNAMIC_OFFER_ID = 'dynamic-usd-offer';
 process.env.SWAPFORGE_PACKS_JSON = JSON.stringify([
   { id: 'start', title: 'Старт', credits: 300, priceLabel: '≈3 USDT / 299 ₽', cryptoAsset: 'USDT', cryptoAmount: 3, lavaOfferId: 'offer-start', lavaCurrency: 'RUB' },
   { id: 'big', title: 'Большой', credits: 1200, priceLabel: '≈12 USDT / 999 ₽', cryptoAsset: 'USDT', cryptoAmount: 12, lavaOfferId: 'offer-big', lavaCurrency: 'RUB' },
@@ -38,8 +39,8 @@ const { reconcileOrphanHolds, releaseFlowHoldOnFailure, settleProjectHold, toUse
   '../src/billing/flow'
 );
 const { encodeRef } = await import('../src/billing/provider');
-const { parseCryptoPayEvent, verifyCryptoPaySignature } = await import('../src/billing/cryptopay');
-const { parseLavaEvent } = await import('../src/billing/lavatop');
+const { CryptoPayProvider, parseCryptoPayEvent, verifyCryptoPaySignature } = await import('../src/billing/cryptopay');
+const { LavaTopProvider, parseLavaEvent } = await import('../src/billing/lavatop');
 const { makeAuthedApp } = await import('./helpers');
 import type { EstimateInfo } from '../../shared/api-types';
 
@@ -220,17 +221,17 @@ describe('сверка осиротевших холдов на старте (F3
 
 describe('Crypto Pay адаптер', () => {
   const TOKEN = 'cp-test-token';
-  const invoice = (userId: string, packId: string, invoiceId = 55501) => ({
+  const invoice = (userId: string, amountCents: number | string, invoiceId = 55501) => ({
     update_id: 1,
     update_type: 'invoice_paid',
     request_date: 'x',
-    payload: { invoice_id: invoiceId, status: 'paid', asset: 'USDT', amount: '3', payload: encodeRef(userId, packId) },
+    payload: { invoice_id: invoiceId, status: 'paid', fiat: 'USD', amount: '5.00', payload: encodeRef(userId, amountCents) },
   });
   const signed = (body: Buffer, token = TOKEN) =>
     createHmac('sha256', createHash('sha256').update(token).digest()).update(body).digest('hex');
 
   it('подпись: HMAC(body, SHA256(token)); чужой токен/подмена тела — нет', () => {
-    const body = Buffer.from(JSON.stringify(invoice('u1', 'start')));
+    const body = Buffer.from(JSON.stringify(invoice('u1', 500)));
     expect(verifyCryptoPaySignature(body, signed(body), TOKEN)).toBe(true);
     expect(verifyCryptoPaySignature(body, signed(body, 'другой'), TOKEN)).toBe(false);
     expect(verifyCryptoPaySignature(Buffer.from('{}'), signed(body), TOKEN)).toBe(false);
@@ -238,54 +239,103 @@ describe('Crypto Pay адаптер', () => {
   });
 
   it('parseCryptoPayEvent: purchase (payload round-trip) / ignored / invalid', () => {
-    const ev = parseCryptoPayEvent(Buffer.from(JSON.stringify(invoice('user-42', 'start', 777))));
+    const ev = parseCryptoPayEvent(Buffer.from(JSON.stringify(invoice('user-42', 500, 777))));
     expect(ev).toMatchObject({
       kind: 'purchase',
       paymentRef: 'cryptopay:777',
       userId: 'user-42',
-      packId: 'start',
-      paidAmount: 3,
-      paidAsset: 'USDT',
+      amountCents: 500,
+      paidAmountUsd: 5,
+      paidCurrency: 'USD',
     });
     // не invoice_paid → ignored
     expect(parseCryptoPayEvent(Buffer.from(JSON.stringify({ update_type: 'invoice_created' }))).kind).toBe('ignored');
     // invoice_paid, но status!=paid → ignored
-    const active = invoice('u', 'start');
+    const active = invoice('u', 500);
     active.payload.status = 'active';
     expect(parseCryptoPayEvent(Buffer.from(JSON.stringify(active))).kind).toBe('ignored');
     // без нашего payload → invalid
-    const noPayload = invoice('u', 'start');
+    const noPayload = invoice('u', 500);
     (noPayload.payload as { payload?: string }).payload = 'чужая-строка';
     expect(parseCryptoPayEvent(Buffer.from(JSON.stringify(noPayload))).kind).toBe('invalid');
     expect(parseCryptoPayEvent(Buffer.from('не json')).kind).toBe('invalid');
   });
+
+  it('createCheckout создаёт точный fiat-USD инвойс с оплатой криптовалютой', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: { bot_invoice_url: 'https://pay.test/i' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    try {
+      await expect(new CryptoPayProvider().createCheckout({ userId: 'u-1', amountUsd: 7.25 })).resolves.toEqual({
+        payUrl: 'https://pay.test/i',
+      });
+      const init = fetchMock.mock.calls[0]![1]!;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        currency_type: 'fiat',
+        fiat: 'USD',
+        amount: '7.25',
+        payload: encodeRef('u-1', 725),
+      });
+      expect(String(body.accepted_assets)).toContain('USDT');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
 });
 
 describe('Lava.top адаптер', () => {
-  const ok = (userId: string, packId: string, contractId = 'c-123') => ({
+  const ok = (userId: string, amountCents: number | string, contractId = 'c-123') => ({
     eventType: 'payment.success',
     product: { id: 'p1', title: 'Старт' },
     contractId,
     buyer: { email: 'x@y.z' },
-    amount: 299,
-    currency: 'RUB',
+    amount: 12,
+    currency: 'USD',
     status: 'completed',
-    clientUtm: { utm_content: encodeRef(userId, packId), utm_term: packId },
+    clientUtm: { utm_content: encodeRef(userId, amountCents), utm_term: `usd-${amountCents}` },
   });
 
   it('parseLavaEvent: purchase (utm round-trip) / ignored / invalid', () => {
-    const ev = parseLavaEvent(Buffer.from(JSON.stringify(ok('user-7', 'big', 'ctr-9'))));
-    expect(ev).toEqual({ kind: 'purchase', paymentRef: 'lavatop:ctr-9', userId: 'user-7', packId: 'big' });
+    const ev = parseLavaEvent(Buffer.from(JSON.stringify(ok('user-7', 1200, 'ctr-9'))));
+    expect(ev).toEqual({
+      kind: 'purchase',
+      paymentRef: 'lavatop:ctr-9',
+      userId: 'user-7',
+      amountCents: 1200,
+      packId: undefined,
+      paidAmountUsd: 12,
+      paidCurrency: 'USD',
+    });
     // не payment.success → ignored
     expect(parseLavaEvent(Buffer.from(JSON.stringify({ eventType: 'subscription.cancelled' }))).kind).toBe('ignored');
     // success, но status!=completed → ignored
-    const failed = ok('u', 'big');
+    const failed = ok('u', 1200);
     failed.status = 'failed';
     expect(parseLavaEvent(Buffer.from(JSON.stringify(failed))).kind).toBe('ignored');
     // без нашего utm_content → invalid
-    const noUtm = ok('u', 'big');
+    const noUtm = ok('u', 1200);
     noUtm.clientUtm.utm_content = 'google';
     expect(parseLavaEvent(Buffer.from(JSON.stringify(noUtm))).kind).toBe('invalid');
+  });
+
+  it('createCheckout передаёт сумму динамическому USD-офферу', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ paymentUrl: 'https://lava.test/pay' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    try {
+      await new LavaTopProvider().createCheckout({ userId: 'u-2', amountUsd: 9.99, email: 'x@y.z' });
+      const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({ offerId: 'dynamic-usd-offer', currency: 'USD', amount: 9.99 });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });
 
@@ -320,28 +370,59 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
     });
   };
 
-  const invoiceFor = (userId: string, packId: string, invoiceId: number) => ({
+  const invoiceFor = (userId: string, amountCents: number, invoiceId: number, paidUsd = amountCents / 100) => ({
     update_type: 'invoice_paid',
-    payload: { invoice_id: invoiceId, status: 'paid', payload: encodeRef(userId, packId) },
+    payload: { invoice_id: invoiceId, status: 'paid', fiat: 'USD', amount: paidUsd.toFixed(2), payload: encodeRef(userId, amountCents) },
   });
 
   beforeAll(async () => {
     app = await makeAuthedApp(9501, 'Покупатель');
   });
 
-  it('валидный крипто-платёж начисляет пакет один раз; replay — ноль', async () => {
+  it('публичный баланс и способы оплаты — в USD, пополнение только от $5', async () => {
+    const balanceRes = await app.app.inject({ method: 'GET', url: '/api/billing/balance' });
+    expect(balanceRes.statusCode).toBe(200);
+    expect(balanceRes.json()).toEqual({ balanceUsd: 0, heldUsd: 0, availableUsd: 0 });
+
+    const methodsRes = await app.app.inject({ method: 'GET', url: '/api/billing/packs' });
+    expect(methodsRes.json()).toMatchObject({
+      minTopupUsd: 5,
+      maxTopupUsd: 1000,
+      providers: expect.arrayContaining([
+        { id: 'cryptopay', needsEmail: false },
+        { id: 'lavatop', needsEmail: true },
+      ]),
+    });
+    expect((methodsRes.json() as Record<string, unknown>).packs).toBeUndefined();
+
+    const tooSmall = await app.app.inject({
+      method: 'POST',
+      url: '/api/billing/checkout',
+      payload: { amountUsd: 4.99, provider: 'cryptopay' },
+    });
+    expect(tooSmall.statusCode).toBe(400);
+    const tooPrecise = await app.app.inject({
+      method: 'POST',
+      url: '/api/billing/checkout',
+      payload: { amountUsd: 5.001, provider: 'cryptopay' },
+    });
+    expect(tooPrecise.statusCode).toBe(400);
+  });
+
+  it('валидный крипто-платёж пополняет точную USD-сумму один раз; replay — ноль', async () => {
     const me = app.userId;
-    const r1 = await sendCrypto(invoiceFor(me, 'start', 90001));
+    const before = creditBalance(me).balance;
+    const r1 = await sendCrypto(invoiceFor(me, 725, 90001));
     expect(r1.statusCode).toBe(200);
-    expect(creditBalance(me).balance).toBe(300);
-    const r2 = await sendCrypto(invoiceFor(me, 'start', 90001));
+    expect(creditBalance(me).balance).toBe(before + 725);
+    const r2 = await sendCrypto(invoiceFor(me, 725, 90001));
     expect(r2.statusCode).toBe(200);
-    expect(creditBalance(me).balance).toBe(300); // не задвоилось (payment_ref UNIQUE)
+    expect(creditBalance(me).balance).toBe(before + 725); // не задвоилось (payment_ref UNIQUE)
   });
 
   it('битая подпись → 403, ничего не начислено', async () => {
     const before = creditBalance(app.userId).balance;
-    const r = await sendCrypto(invoiceFor(app.userId, 'start', 90002), 'wrong-token');
+    const r = await sendCrypto(invoiceFor(app.userId, 500, 90002), 'wrong-token');
     expect(r.statusCode).toBe(403);
     expect(creditBalance(app.userId).balance).toBe(before);
   });
@@ -352,29 +433,24 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
   });
 
   it('платёж с чужим/несуществующим userId → 200 без начисления (не теряем молча)', async () => {
-    const r = await sendCrypto(invoiceFor('нет-такого', 'start', 90003));
+    const r = await sendCrypto(invoiceFor('нет-такого', 500, 90003));
     expect(r.statusCode).toBe(200);
     expect((r.json() as { unmatched?: boolean }).unmatched).toBe(true);
   });
 
-  it('недоплата по сумме/активу → не начисляем (defense-in-depth)', async () => {
+  it('недоплата USD → не начисляем (defense-in-depth)', async () => {
     const me = app.userId;
     const before = creditBalance(me).balance;
-    // пакет start ждёт 3 USDT — оплачено 1
-    const underpaid = {
-      update_type: 'invoice_paid',
-      payload: { invoice_id: 90010, status: 'paid', asset: 'USDT', amount: '1', payload: encodeRef(me, 'start') },
-    };
+    const underpaid = invoiceFor(me, 500, 90010, 4.99);
     const r = await sendCrypto(underpaid);
     expect(r.statusCode).toBe(200);
     expect((r.json() as { unmatched?: boolean }).unmatched).toBe(true);
     expect(creditBalance(me).balance).toBe(before); // ничего не начислено
-    // чужой актив (3 TON вместо 3 USDT) — тоже отклоняем
-    const wrongAsset = {
+    const wrongCurrency = {
       update_type: 'invoice_paid',
-      payload: { invoice_id: 90011, status: 'paid', asset: 'TON', amount: '3', payload: encodeRef(me, 'start') },
+      payload: { invoice_id: 90011, status: 'paid', fiat: 'EUR', amount: '5', payload: encodeRef(me, 500) },
     };
-    const r2 = await sendCrypto(wrongAsset);
+    const r2 = await sendCrypto(wrongCurrency);
     expect((r2.json() as { unmatched?: boolean }).unmatched).toBe(true);
     expect(creditBalance(me).balance).toBe(before);
   });
@@ -385,7 +461,9 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
       eventType: 'payment.success',
       contractId: 'ctr-777',
       status: 'completed',
-      clientUtm: { utm_content: encodeRef(buyer.userId, 'big'), utm_term: 'big' },
+      amount: 12,
+      currency: 'USD',
+      clientUtm: { utm_content: encodeRef(buyer.userId, 1200), utm_term: 'usd-1200' },
     };
     const good = await buyer.app.inject({
       method: 'POST',
@@ -407,8 +485,8 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
   });
 });
 
-describe('изоляция USD от не-владельца', () => {
-  it('toUserEstimate не содержит ни одного usd-поля/знака $', () => {
+describe('публичная USD-смета без себестоимости оператора', () => {
+  it('toUserEstimate возвращает итоговую цену и долларовый баланс', () => {
     const u = mkUser(809);
     grantPurchase(u, 100, `ref-${randomUUID()}`, 'тест');
     const est: EstimateInfo = {
@@ -421,15 +499,15 @@ describe('изоляция USD от не-владельца', () => {
       warnings: ['баланс WaveSpeed $11.46 маловат', 'смета примерная'],
     };
     const user = toUserEstimate(est, u);
-    const json = JSON.stringify(user);
-    expect(json).not.toMatch(/[Uu]sd|\$/);
-    expect(user.credits).toBe(563); // ceil(2.25 × 2 × 1.25 × 100)
-    expect(user.balanceCredits).toBe(100);
-    expect(user.warnings.join()).toContain('Не хватает кредитов');
-    expect(user.warnings.join()).toContain('смета примерная'); // без-$ ворнинги проходят
+    expect(user.kind).toBe('balance');
+    expect(user.priceUsd).toBe(5.63); // ceil(2.25 × 2 × 1.25 × 100) / 100
+    expect(user.balanceUsd).toBe(1);
+    expect(user.warnings.join()).toContain('Нужно $5.63');
+    expect(JSON.stringify(user)).not.toContain('openai');
+    expect(JSON.stringify(user)).not.toContain('wavespeed');
   });
 
-  it('GET /api/projects/:id не-владельцу отдаёт payload без USD, с heldCredits', async () => {
+  it('GET /api/projects/:id скрывает себестоимость и отдаёт heldUsd', async () => {
     const tenant = await makeAuthedApp(9503, 'Тенант');
     const p = mkProject(tenant.userId);
     getDb()
@@ -447,7 +525,7 @@ describe('изоляция USD от не-владельца', () => {
     expect(body).not.toMatch(/costActualUsd":[0-9]/);
     expect(body).not.toMatch(/wavespeedUsd":[0-9]/);
     expect(body).not.toMatch(/projectUsd":[1-9]/);
-    expect((res.json() as { costs: { heldCredits: number } }).costs.heldCredits).toBe(420);
+    expect((res.json() as { costs: { heldUsd: number } }).costs.heldUsd).toBe(4.2);
     await tenant.app.close();
   });
 });

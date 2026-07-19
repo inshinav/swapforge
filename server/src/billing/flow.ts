@@ -1,4 +1,4 @@
-// Склейка кредитов с конвейером. Здесь живёт вся политика «когда hold закрывается»:
+// Склейка внутреннего долларового баланса с конвейером. В БД суммы хранятся в центах.
 // - settle — единый финал рендера (completeFromResult): факт = WS-факт + LLM с момента
 //   постановки hold-а, cap = hold;
 // - release при падении флоу — ТОЛЬКО если у проекта нет живой/добираемой WS-задачи
@@ -25,21 +25,21 @@ export function isMeteredUserId(userId: string | null | undefined): boolean {
   return u?.role !== 'owner';
 }
 
-/** Смета для не-владельца: только кредиты, ни одного USD-поля/знака $. */
+/** Смета для не-владельца: публичная цена в USD уже включает все наценки. */
 export function toUserEstimate(est: EstimateInfo, userId: string): EstimateForUser {
   const { available } = creditBalance(userId);
-  const credits = est.totalUsd !== null ? priceCredits(est.totalUsd) : null;
-  const warnings = est.warnings.filter((w) => !w.includes('$'));
-  if (credits === null) {
+  const priceCents = est.totalUsd !== null ? priceCredits(est.totalUsd) : null;
+  const warnings: string[] = [];
+  if (priceCents === null) {
     warnings.push('Точная смета временно недоступна — попробуй чуть позже');
-  } else if (credits > available) {
-    warnings.push(`Не хватает кредитов: нужно ≈ ${credits}, доступно ${available} — пополни на вкладке «Баланс»`);
+  } else if (priceCents > available) {
+    warnings.push(`Нужно $${(priceCents / 100).toFixed(2)}, на балансе $${(available / 100).toFixed(2)}`);
   }
   return {
-    kind: 'credits',
+    kind: 'balance',
     stages: est.stages,
-    credits,
-    balanceCredits: available,
+    priceUsd: priceCents === null ? null : priceCents / 100,
+    balanceUsd: available / 100,
     approximate: est.approximate,
     warnings,
   };

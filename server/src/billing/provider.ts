@@ -1,18 +1,17 @@
 // Провайдер-нейтральный слой оплаты. Кредиты/холды/идемпотентность (credits.ts)
 // НЕ знают про конкретного провайдера — они видят только этот интерфейс.
-// Server-initiated: createCheckout сам создаёт инвойс и кладёт НАШ userId+packId
+// Server-initiated: createCheckout сам создаёт инвойс и кладёт НАШ userId+сумму
 // в провайдерский round-trip канал (payload у Crypto Pay, clientUtm у Lava) →
 // вебхук возвращает их обратно, маппинг платёж→юзер 100%-й без внешних lookup.
 import { config } from '../config';
 import { CryptoPayProvider } from './cryptopay';
 import { LavaTopProvider } from './lavatop';
-import type { CreditPack } from './packs';
-
 export type ProviderId = 'cryptopay' | 'lavatop';
 
 export interface CheckoutInput {
   userId: string;
-  pack: CreditPack;
+  /** Сумма пользовательского баланса в USD; до входа в провайдер нормализована до центов. */
+  amountUsd: number;
   /** Email покупателя (Lava требует; Crypto Pay игнорирует). */
   email?: string;
 }
@@ -29,10 +28,14 @@ export type PaymentEvent =
       paymentRef: string;
       /** НАШ user_id (мы сами положили его в инвойс). */
       userId: string;
-      packId: string;
-      /** Фактически оплаченная сумма (для сверки с ценой пакета; null если провайдер не дал). */
+      /** Новые инвойсы содержат точную сумму пополнения; packId нужен для старых незакрытых счетов. */
+      amountCents?: number;
+      packId?: string;
+      /** Номинал инвойса в USD для защиты от недоплаты/рассинхрона. */
+      paidAmountUsd?: number | null;
+      paidCurrency?: string | null;
+      /** Только для совместимости со старыми пакетными крипто-инвойсами. */
       paidAmount?: number | null;
-      /** Актив/валюта оплаты (USDT / RUB …). */
       paidAsset?: string | null;
     }
   | { kind: 'ignored'; reason: string }
@@ -50,16 +53,26 @@ export interface PaymentProvider {
   parseWebhook(rawBody: Buffer): PaymentEvent;
 }
 
-/** Единая упаковка нашего userId+packId в round-trip строку провайдера. */
-export function encodeRef(userId: string, packId: string): string {
-  return JSON.stringify({ u: userId, p: packId });
+/** Единая упаковка userId+суммы в round-trip строку провайдера. */
+export function encodeRef(userId: string, amountCents: number | string): string {
+  // string — только для тестов/обработки старых пакетных счетов.
+  return typeof amountCents === 'number'
+    ? JSON.stringify({ u: userId, c: amountCents })
+    : JSON.stringify({ u: userId, p: amountCents });
 }
 
-export function decodeRef(raw: string | undefined | null): { userId: string; packId: string } | null {
+export function decodeRef(
+  raw: string | undefined | null,
+): { userId: string; amountCents?: number; packId?: string } | null {
   if (!raw) return null;
   try {
-    const o = JSON.parse(raw) as { u?: unknown; p?: unknown };
-    if (typeof o.u === 'string' && typeof o.p === 'string') return { userId: o.u, packId: o.p };
+    const o = JSON.parse(raw) as { u?: unknown; c?: unknown; p?: unknown };
+    if (typeof o.u !== 'string') return null;
+    if (typeof o.c === 'number' && Number.isSafeInteger(o.c) && o.c > 0) {
+      return { userId: o.u, amountCents: o.c };
+    }
+    // Совместимость с уже выпущенными пакетными инвойсами.
+    if (typeof o.p === 'string') return { userId: o.u, packId: o.p };
   } catch {
     /* не наш payload */
   }

@@ -44,25 +44,21 @@ export default function Models() {
   return (
     <div className="space-y-4 sf-in">
       <Card glow>
-        <SectionTitle
-          title="Мои модели"
-          hint="создай персонажа один раз — его кнопки появятся на экране свапа"
-        />
+        <SectionTitle title="Мои модели" />
         <div className="p-5 space-y-3">
           <div className="flex flex-wrap gap-2">
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void create()}
-              placeholder="Имя модели — например MotoLola"
+              placeholder="Имя модели"
               className="flex-1 min-w-[220px] min-h-11 rounded-lg bg-panel2 border border-line px-3 py-2 text-sm outline-none focus:border-lime/50"
             />
             <Button kind="primary" busy={creating} disabled={!newName.trim()} onClick={() => void create()}>
-              + Создать модель
+              Создать
             </Button>
           </div>
           {err && <ErrorNote text={err} />}
-          <SheetTips />
         </div>
       </Card>
 
@@ -74,41 +70,10 @@ export default function Models() {
         <Empty
           icon="✨"
           title="Моделей пока нет"
-          sub="Создай первую: имя → реф-листы → кнопка на экране свапа готова"
+          sub="Создай модель и добавь её референс"
         />
       ) : (
         models.map((m) => <ModelCard key={m.id} model={m} onChanged={reload} />)
-      )}
-    </div>
-  );
-}
-
-/** Советы по листам — зеркало docs/prompting-logic §7, тем же паттерном, что в RefsSection. */
-function SheetTips() {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <button type="button" onClick={() => setOpen(!open)} className="min-h-11 text-xs text-dim hover:text-lime">
-        {open ? '▾' : '▸'} какие листы дают лучший результат?
-      </button>
-      {open && (
-        <ul className="mt-2 text-xs text-mut space-y-1 rounded-lg border border-line bg-panel2 px-3 py-2.5">
-          <li>
-            <b className="text-ink">Модель:</b> реф-лист «все ракурсы» лочит identity сильнее любых слов;
-            минимум — чёткое фронтальное лицо при хорошем свете + фигура в полный рост в нужном аутфите.
-          </li>
-          <li>
-            <b className="text-ink">Техника:</b> чистый вид 3/4 без людей в кадре; она подставится только
-            если такая техника есть в исходнике — это уже прописано в автоописании.
-          </li>
-          <li>
-            <b className="text-ink">Свет:</b> чем ближе свет и ракурс листа к будущим роликам — тем чище свап.
-          </li>
-          <li>
-            <b className="text-ink">Нота:</b> «Описать автоматически» даёт черновик — проверь цвета и детали,
-            ключевые дискриминаторы держи КАПСОМ («платиново-БЕЛЫЕ волосы», «ОДНА КОСА»).
-          </li>
-        </ul>
       )}
     </div>
   );

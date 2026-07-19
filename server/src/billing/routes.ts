@@ -1,13 +1,14 @@
 // Биллинг-роуты, провайдер-нейтральные. Server-initiated checkout: сервер сам
 // создаёт инвойс у выбранного провайдера (Crypto Pay / Lava.top) и кладёт НАШ
-// userId+packId в round-trip канал → вебхук возвращает их обратно. Вебхуки живут в
+// userId+сумму в round-trip канал → вебхук возвращает их обратно. Вебхуки живут в
 // encapsulated-scope с raw-buffer парсером (подпись/секрет считаются по сырому телу).
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { getDb } from '../db';
 import { requireOwner } from '../auth/middleware';
 import { rateLimit } from '../rateLimit';
+import { config } from '../config';
 import { adjustCredits, creditBalance, grantPurchase, listLedger } from './credits';
-import { getPack, listPacks } from './packs';
+import { getPack } from './packs';
 import { getProvider, readyProviders } from './provider';
 
 function bad(reply: FastifyReply, code: number, msg: string) {
@@ -15,29 +16,43 @@ function bad(reply: FastifyReply, code: number, msg: string) {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const usd = (cents: number): number => Math.round(cents) / 100;
+
+function publicBalance(userId: string) {
+  const b = creditBalance(userId);
+  return { balanceUsd: usd(b.balance), heldUsd: usd(b.held), availableUsd: usd(b.available) };
+}
+
+function topupCents(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  const cents = Math.round(raw * 100);
+  if (Math.abs(raw * 100 - cents) > 1e-7) return null;
+  const min = Math.round(config.minTopupUsd * 100);
+  const max = Math.round(config.maxTopupUsd * 100);
+  return cents >= min && cents <= max ? cents : null;
+}
 
 export function registerBillingRoutes(app: FastifyInstance): void {
-  app.get('/api/billing/balance', async (req) => creditBalance(req.user!.id));
+  app.get('/api/billing/balance', async (req) => publicBalance(req.user!.id));
 
   app.get('/api/billing/ledger', async (req) => {
-    return { entries: listLedger(req.user!.id, 100) };
+    return {
+      entries: listLedger(req.user!.id, 100).map((e) => ({
+        id: e.id,
+        deltaUsd: usd(e.delta),
+        kind: e.kind,
+        note: e.note,
+        createdAt: e.createdAt,
+      })),
+    };
   });
 
-  // Пакеты + какие способы оплаты доступны (клиент рисует нужные кнопки/форму email)
+  // Оставляем URL /packs для совместимости клиента, но пакетов в продукте больше нет.
   app.get('/api/billing/packs', async () => {
-    const providers = readyProviders();
     return {
-      providers: providers.map((p) => ({ id: p.id, needsEmail: p.needsEmail })),
-      packs: listPacks().map((p) => ({
-        id: p.id,
-        title: p.title,
-        credits: p.credits,
-        priceLabel: p.priceLabel,
-        // какими провайдерами этот пакт реально оплачивается (задан offer/цена)
-        pay: providers
-          .filter((pr) => (pr.id === 'cryptopay' ? !!p.cryptoAmount : !!p.lavaOfferId))
-          .map((pr) => pr.id),
-      })),
+      minTopupUsd: config.minTopupUsd,
+      maxTopupUsd: config.maxTopupUsd,
+      providers: readyProviders().map((p) => ({ id: p.id, needsEmail: p.needsEmail })),
     };
   });
 
@@ -45,11 +60,13 @@ export function registerBillingRoutes(app: FastifyInstance): void {
   // Рейт-лимит: каждый вызов делает исходящий createInvoice к провайдеру.
   const checkoutLimiter = rateLimit(20, 5 * 60_000);
   app.post('/api/billing/checkout', { preHandler: checkoutLimiter }, async (req, reply) => {
-    const body = (req.body ?? {}) as { packId?: string; provider?: string; email?: string };
+    const body = (req.body ?? {}) as { amountUsd?: number; provider?: string; email?: string };
     const provider = getProvider(body.provider ?? '');
     if (!provider || !provider.ready) return bad(reply, 400, 'Способ оплаты недоступен');
-    const pack = getPack(body.packId ?? '');
-    if (!pack) return bad(reply, 404, 'Пакет не найден');
+    const amountCents = topupCents(body.amountUsd);
+    if (amountCents === null) {
+      return bad(reply, 400, `Укажи сумму от $${config.minTopupUsd} до $${config.maxTopupUsd}, не больше 2 знаков после точки`);
+    }
 
     let email = (body.email ?? '').trim();
     if (provider.needsEmail) {
@@ -65,7 +82,7 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     }
 
     try {
-      const { payUrl } = await provider.createCheckout({ userId: req.user!.id, pack, email });
+      const { payUrl } = await provider.createCheckout({ userId: req.user!.id, amountUsd: usd(amountCents), email });
       return { payUrl };
     } catch (e) {
       req.log.error({ err: e instanceof Error ? e.message : e }, 'checkout не удался');
@@ -120,11 +137,13 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       const user = getDb().prepare(`SELECT id FROM users WHERE id = ?`).get(ev.userId) as
         | { id: string }
         | undefined;
-      const pack = getPack(ev.packId);
-      if (!user || !pack) {
+      const legacyPack = ev.packId ? getPack(ev.packId) : null;
+      const expectedCents = ev.amountCents ?? legacyPack?.credits ?? null;
+      const amountValid = ev.amountCents === undefined || topupCents(ev.amountCents / 100) === ev.amountCents;
+      if (!user || expectedCents === null || !amountValid) {
         // деньги не теряем молча: 200 (провайдер не ретраит вечно) + громкий лог
         console.error(
-          `[billing:${providerId}] платёж ${ev.paymentRef} без юзера/пакета (user=${ev.userId} pack=${ev.packId}) — разберись через /api/billing/adjust`,
+          `[billing:${providerId}] платёж ${ev.paymentRef} без юзера/суммы (user=${ev.userId} amount=${ev.amountCents} pack=${ev.packId}) — разберись через /api/billing/adjust`,
         );
         return { ok: true, unmatched: true };
       }
@@ -132,24 +151,39 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       // Defense-in-depth: если провайдер сообщил сумму — сверяем с ценой пакета
       // (защита от рассинхрона SWAPFORGE_PACKS_JSON при «висящем» старом инвойсе).
       // Актив тоже должен совпасть, иначе 3 USDT != 3 TON. Недоплата → не начисляем.
-      if (providerId === 'cryptopay' && typeof ev.paidAmount === 'number' && pack.cryptoAmount) {
-        const assetOk = !ev.paidAsset || ev.paidAsset === (pack.cryptoAsset ?? 'USDT');
-        if (!assetOk || ev.paidAmount + 1e-9 < pack.cryptoAmount) {
+      if (legacyPack && providerId === 'cryptopay' && typeof ev.paidAmount === 'number' && legacyPack.cryptoAmount) {
+        const assetOk = !ev.paidAsset || ev.paidAsset === (legacyPack.cryptoAsset ?? 'USDT');
+        if (!assetOk || ev.paidAmount + 1e-9 < legacyPack.cryptoAmount) {
           console.error(
-            `[billing:${providerId}] сумма/актив не совпали для ${ev.paymentRef}: оплачено ${ev.paidAmount} ${ev.paidAsset}, ожидалось ${pack.cryptoAmount} ${pack.cryptoAsset ?? 'USDT'} — не начисляю, разберись руками`,
+            `[billing:${providerId}] сумма/актив не совпали для ${ev.paymentRef}: оплачено ${ev.paidAmount} ${ev.paidAsset}, ожидалось ${legacyPack.cryptoAmount} ${legacyPack.cryptoAsset ?? 'USDT'} — не начисляю, разберись руками`,
           );
           adjustCredits(user.id, 0, `недоплата/несовпадение ${ev.paymentRef} (${ev.paidAmount} ${ev.paidAsset})`);
           return { ok: true, unmatched: true };
         }
       }
 
+      if (!legacyPack) {
+        const paidCents = typeof ev.paidAmountUsd === 'number' && Number.isFinite(ev.paidAmountUsd)
+          ? Math.round(ev.paidAmountUsd * 100)
+          : null;
+        const currencyOk = ev.paidCurrency === 'USD';
+        if (!currencyOk || paidCents === null || paidCents < expectedCents) {
+          console.error(
+            `[billing:${providerId}] USD-сумма не совпала для ${ev.paymentRef}: оплачено ${ev.paidAmountUsd} ${ev.paidCurrency}, ожидалось $${usd(expectedCents).toFixed(2)} — не начисляю`,
+          );
+          return { ok: true, unmatched: true };
+        }
+      }
+
       const res = grantPurchase(
         user.id,
-        pack.credits,
+        expectedCents,
         ev.paymentRef,
-        `пакет «${pack.title}» через ${providerId} (${ev.paymentRef})`,
+        legacyPack
+          ? `пакет «${legacyPack.title}» через ${providerId} (${ev.paymentRef})`
+          : `пополнение $${usd(expectedCents).toFixed(2)} через ${providerId}`,
       );
-      req.log.info({ provider: providerId, user: user.id, pack: pack.id, res }, 'webhook: покупка');
+      req.log.info({ provider: providerId, user: user.id, amountUsd: usd(expectedCents), res }, 'webhook: пополнение');
       return { ok: true, result: res };
     });
   });

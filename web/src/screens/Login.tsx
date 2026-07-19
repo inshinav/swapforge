@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CreditPackInfo, HealthInfo, TgWidgetPayload } from '@shared/api-types';
-// packs приходят объектом {providers, packs}; на лендинге берём только список
+import type { HealthInfo, TgWidgetPayload } from '@shared/api-types';
 import { api, appBase } from '../api';
 import { Card, ErrorNote, Spinner } from '../ui';
 
@@ -16,7 +15,6 @@ declare global {
  */
 export default function Login({ onAuthed }: { onAuthed: () => void }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [packs, setPacks] = useState<CreditPackInfo[]>([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [widgetState, setWidgetState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -25,7 +23,6 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
-    api.creditPacks().then((r) => setPacks(r.packs)).catch(() => setPacks([]));
   }, []);
 
   useEffect(() => {
@@ -81,15 +78,7 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
             <h1 className="text-2xl font-extrabold tracking-tight">
               Swap<span className="text-lime">Forge</span>
             </h1>
-            <p className="text-mut text-sm mt-2 leading-relaxed">
-              Твоя AI-модель — в любом ролике. Загрузи референсы один раз, кидай видео и
-              получай чистый свап: мир, свет и движение исходника нетронуты.
-            </p>
-            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-3 text-[11px] text-dim">
-              <span>⚡ свап в один клик</span>
-              <span>🎯 identity держится</span>
-              <span>💳 цена видна до запуска</span>
-            </div>
+            <p className="text-mut text-sm mt-2">Замени персонажа в видео за несколько шагов.</p>
           </div>
 
           {health === null && <Spinner />}
@@ -100,15 +89,7 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
             </p>
           )}
 
-          {(health?.tgBot || health?.devAuth) && (
-            <div className="w-full rounded-xl border border-line bg-panel2/60 px-4 py-3">
-              <div className="font-semibold">Войти через Telegram</div>
-              <div className="text-xs text-mut mt-1 leading-relaxed">
-                Один клик, без пароля и регистрации по email. Telegram привяжет твои модели,
-                проекты и кредиты к одному аккаунту.
-              </div>
-            </div>
-          )}
+          {(health?.tgBot || health?.devAuth) && <div className="font-semibold">Войти через Telegram</div>}
 
           <div ref={widgetRef} className="min-h-[46px] flex items-center justify-center" />
           {health?.tgBot && widgetState === 'loading' && (
@@ -147,20 +128,6 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
               >
                 dev: юзер Б
               </button>
-            </div>
-          )}
-
-          {packs.length > 0 && (
-            <div className="w-full">
-              <div className="text-xs text-mut mb-1.5">Пакеты кредитов</div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {packs.slice(0, 3).map((p) => (
-                  <div key={p.id} className="rounded-lg border border-line bg-panel2 px-2 py-1.5">
-                    <div className="text-sm font-bold text-lime">{p.credits}</div>
-                    <div className="text-[10px] text-dim">{p.priceLabel}</div>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 

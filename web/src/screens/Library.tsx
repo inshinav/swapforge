@@ -40,11 +40,10 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <div className="sf-in">
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
         <h1 className="font-bold text-lg">Библиотека</h1>
         <span className="text-xs text-dim">{items.length} проектов</span>
-        <div className="flex-1" />
-        <label className="flex items-center gap-2 text-xs text-mut cursor-pointer">
+        <label className="w-full sm:w-auto sm:ml-auto flex items-center gap-2 text-xs text-mut cursor-pointer">
           <input
             type="checkbox"
             checked={onlyWorked}
@@ -59,7 +58,7 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
         <Empty
           icon="🗂️"
           title={onlyWorked ? 'Пока нет сработавших свапов' : 'Библиотека пуста'}
-          sub="Каждый проект с фидбеком делает следующие промты умнее — few-shot подмешивает удачный опыт"
+          sub="Готовые работы появятся здесь"
         />
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

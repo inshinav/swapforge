@@ -1,9 +1,9 @@
 import type {
   AuthUser,
-  BillingPacksInfo,
+  BillingMethodsInfo,
   BillingProviderId,
-  CreditBalanceInfo,
-  CreditLedgerEntry,
+  DollarBalanceInfo,
+  DollarLedgerEntry,
   EstimateForUser,
   EstimateInfo,
   HealthInfo,
@@ -200,13 +200,13 @@ export const api = {
   estimate: (id: string) =>
     fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo | EstimateForUser>(r)),
 
-  // ── v4: кредиты ──────────────────────────────────────────────────────────
-  creditBalance: () => fetch(u('api/billing/balance')).then((r) => j<CreditBalanceInfo>(r)),
-  creditLedger: () =>
-    fetch(u('api/billing/ledger')).then((r) => j<{ entries: CreditLedgerEntry[] }>(r)),
-  creditPacks: () => fetch(u('api/billing/packs')).then((r) => j<BillingPacksInfo>(r)),
-  checkout: (packId: string, provider: BillingProviderId, email?: string) =>
-    post(u('api/billing/checkout'), { packId, provider, email }).then((r) => j<{ payUrl: string }>(r)),
+  // ── пользовательский баланс в USD ────────────────────────────────────────
+  billingBalance: () => fetch(u('api/billing/balance')).then((r) => j<DollarBalanceInfo>(r)),
+  billingLedger: () =>
+    fetch(u('api/billing/ledger')).then((r) => j<{ entries: DollarLedgerEntry[] }>(r)),
+  billingMethods: () => fetch(u('api/billing/packs')).then((r) => j<BillingMethodsInfo>(r)),
+  checkout: (amountUsd: number, provider: BillingProviderId, email?: string) =>
+    post(u('api/billing/checkout'), { amountUsd, provider, email }).then((r) => j<{ payUrl: string }>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',

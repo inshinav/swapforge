@@ -13,7 +13,7 @@ import { ApiError, api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 type AnyEstimate = EstimateInfo | EstimateForUser;
-const isCreditEst = (e: AnyEstimate): e is EstimateForUser => 'kind' in e && e.kind === 'credits';
+const isBalanceEst = (e: AnyEstimate): e is EstimateForUser => 'kind' in e && e.kind === 'balance';
 
 /** Кнопка «Кто в кадре?» = вариант модели; собирается из ModelInfo на клиенте. */
 interface VariantButton {
@@ -60,14 +60,13 @@ export function SwapPanel({
   onCustom: () => void;
   /** Переход в конструктор «Мои модели» (пустой стейт кнопок). */
   onOpenModels: () => void;
-  /** Прямой переход из нехватки кредитов к подходящему пакету. */
+  /** Прямой переход из нехватки денег к пополнению баланса. */
   onOpenBilling: (needed: number) => void;
 }) {
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
   const [enhanceFigure, setEnhanceFigure] = useState(savedFlags?.enhanceFigure ?? false);
   const [wish, setWish] = useState(savedFlags?.wish ?? '');
-  const [wishOpen, setWishOpen] = useState(!!savedFlags?.wish);
   const [confirmUnknown, setConfirmUnknown] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState<string | null>(null);
@@ -121,8 +120,8 @@ export function SwapPanel({
       reload();
     } catch (e) {
       setLaunchErr(e instanceof Error ? e.message : String(e));
-      if (e instanceof ApiError && e.status === 402 && est && isCreditEst(est) && est.credits !== null) {
-        setLaunchShortfall(Math.max(1, est.credits - est.balanceCredits));
+      if (e instanceof ApiError && e.status === 402 && est && isBalanceEst(est) && est.priceUsd !== null) {
+        setLaunchShortfall(Math.max(0.01, est.priceUsd - est.balanceUsd));
       }
     } finally {
       setLaunching(false);
@@ -143,9 +142,8 @@ export function SwapPanel({
   return (
     <Card glow>
       <SectionTitle
-        step="3"
-        title="Свап в один клик"
-        hint="анализ → промты → старт-кадр → рендер WaveSpeed — всё само"
+        step="2"
+        title="Модель и запуск"
       />
       <div className="p-5 space-y-4">
         {running ? (
@@ -190,45 +188,22 @@ export function SwapPanel({
               </div>
             )}
 
-            <div className="grid sm:grid-cols-2 gap-2">
-              <FlagBox
-                checked={removeText}
-                onChange={setRemoveText}
-                title="Убрать текст с видео"
-                hint="снять капшены/стикеры/вотермарки и чисто восстановить фон за ними"
-              />
-              <FlagBox
-                checked={enhanceFigure}
-                onChange={setEnhanceFigure}
-                title="Усилить фигуру"
-                hint="шире бёдра, выпуклее ягодицы, уже талия, больше грудь — лицо не трогаем"
-              />
-            </div>
-
-            <div>
-              <button
-                type="button"
-                onClick={() => setWishOpen(!wishOpen)}
-                className="text-xs text-dim hover:text-lime"
-              >
-                {wishOpen ? '▾' : '▸'} пожелания к ролику{wish.trim() ? ' · заданы' : ''}
-              </button>
-              {wishOpen && (
-                <div className="mt-2 space-y-1.5">
-                  <textarea
-                    value={wish}
-                    onChange={(e) => setWish(e.target.value.slice(0, 500))}
-                    rows={2}
-                    placeholder="Например: «пусть на футболке будет логотип X», «сделай закат»…"
-                    className="w-full rounded-lg bg-panel2 border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
-                  />
-                  <p className="text-[11px] text-warn">
-                    ⚠ Лучше не использовать: результат менее стабильный. Рекомендуемый режим — базовый:
-                    меняем только модель и объекты, весь реализм, локацию и движение оставляем как в исходнике.
-                  </p>
+            <details className="rounded-xl border border-line bg-panel2">
+              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">Настройки</summary>
+              <div className="border-t border-line p-3 space-y-3">
+                <div className="grid sm:grid-cols-2 gap-2">
+                  <FlagBox checked={removeText} onChange={setRemoveText} title="Убрать текст" hint="капшены и стикеры" />
+                  <FlagBox checked={enhanceFigure} onChange={setEnhanceFigure} title="Усилить фигуру" hint="лицо не меняется" />
                 </div>
-              )}
-            </div>
+                <textarea
+                  value={wish}
+                  onChange={(e) => setWish(e.target.value.slice(0, 500))}
+                  rows={2}
+                  placeholder="Пожелание к ролику (необязательно)"
+                  className="w-full rounded-lg bg-panel border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
+                />
+              </div>
+            </details>
 
             <EstimateLine
               est={est}
@@ -236,7 +211,7 @@ export function SwapPanel({
               onRefresh={loadEstimate}
               onOpenBilling={onOpenBilling}
             />
-            {est && !isCreditEst(est) && est.wavespeed.usd === null && (
+            {est && !isBalanceEst(est) && est.wavespeed.usd === null && (
               <label className="flex items-center gap-2 text-xs text-warn cursor-pointer">
                 <input
                   type="checkbox"
@@ -277,8 +252,7 @@ export function SwapPanel({
                           <div className="w-full h-24 bg-panel flex items-center justify-center text-2xl">👤</div>
                         )}
                         <div className="px-3 py-2">
-                          <div className="text-sm font-semibold">⚡ {b.label}</div>
-                          <div className="text-xs text-dim">жми — свап поедет сразу</div>
+                          <div className="text-sm font-semibold">{b.label}</div>
                         </div>
                       </button>
                     ))}
@@ -286,22 +260,18 @@ export function SwapPanel({
                       <button
                         type="button"
                         onClick={onOpenModels}
-                        className="text-left rounded-xl border border-lime/40 hover:border-lime/70 bg-lime/5 px-3 py-2 transition-colors flex flex-col justify-center min-h-24"
+                        className="text-left rounded-xl border border-lime/40 hover:border-lime/70 bg-lime/5 px-3 py-3 transition-colors min-h-12"
                       >
-                        <div className="text-sm font-semibold">✨ Создай свою модель</div>
-                        <div className="text-xs text-mut">
-                          загрузи реф-листы один раз — кнопка появится здесь навсегда
-                        </div>
+                        <div className="text-sm font-semibold">Создать модель</div>
                       </button>
                     )}
                     <button
                       type="button"
                       disabled={launching}
                       onClick={onCustom}
-                      className="text-left rounded-xl border border-dashed border-line2 hover:border-lime/40 bg-panel2/50 px-3 py-2 transition-colors flex flex-col justify-center min-h-24"
+                      className="text-left rounded-xl border border-dashed border-line2 hover:border-lime/40 bg-panel2/50 px-3 py-3 transition-colors min-h-12"
                     >
-                      <div className="text-sm font-semibold">📎 Свои референсы</div>
-                      <div className="text-xs text-dim">загрузить фото модели и техники вручную</div>
+                      <div className="text-sm font-semibold">Свои референсы</div>
                     </button>
                   </div>
                 )}
@@ -345,7 +315,7 @@ export function SwapPanel({
                 <ErrorNote text={launchErr} />
                 {launchShortfall && (
                   <Button kind="primary" onClick={() => onOpenBilling(launchShortfall)}>
-                    Пополнить на {launchShortfall} кредитов
+                    Пополнить на ${launchShortfall.toFixed(2)}
                   </Button>
                 )}
               </div>
@@ -410,23 +380,20 @@ function EstimateLine({
         <Spinner size={14} /> считаю смету по живым тарифам…
       </div>
     );
-  // Не-владелец: смета и баланс в кредитах, USD в его мире не существует
-  if (isCreditEst(est)) {
-    const short = est.credits !== null && est.credits > est.balanceCredits;
-    const shortfall = est.credits !== null ? Math.max(0, est.credits - est.balanceCredits) : 0;
+  if (isBalanceEst(est)) {
+    const short = est.priceUsd !== null && est.priceUsd > est.balanceUsd;
+    const shortfall = est.priceUsd !== null ? Math.max(0, est.priceUsd - est.balanceUsd) : 0;
     return (
-      <div className="rounded-xl border border-line bg-panel2 px-4 py-3 text-sm space-y-1.5">
+      <div className="rounded-xl border border-line bg-panel2 px-4 py-3 text-sm space-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-bold text-base">
-            {est.credits !== null ? `≈ ${est.credits} кредитов` : 'смета недоступна'}
-            {est.approximate && est.credits !== null ? ' (примерно)' : ''}
+            {est.priceUsd !== null ? `≈ $${est.priceUsd.toFixed(2)}` : 'Цена недоступна'}
           </span>
           <span className={short ? 'text-danger font-semibold' : 'text-mut'}>
-            доступно {est.balanceCredits}
+            баланс ${est.balanceUsd.toFixed(2)}
           </span>
-          <span className="text-dim text-xs">спишется по факту, не больше сметы</span>
           <button type="button" onClick={onRefresh} className="text-xs text-dim hover:text-lime ml-auto">
-            ↻ обновить
+            Обновить
           </button>
         </div>
         {est.warnings.length > 0 && (
@@ -438,7 +405,7 @@ function EstimateLine({
         )}
         {short && shortfall > 0 && (
           <Button kind="primary" className="w-full sm:w-auto" onClick={() => onOpenBilling(shortfall)}>
-            Пополнить на {shortfall} кредитов
+            Пополнить на ${shortfall.toFixed(2)}
           </Button>
         )}
       </div>
@@ -603,9 +570,9 @@ function ProgressStepper({ proj, gen }: { proj: ProjectFull; gen: GenerationRow 
                 : ''}
           </span>
         )}
-        {!run && proj.costs.heldCredits != null && (
+        {!run && proj.costs.heldUsd != null && (
           <span className="text-mut">
-            зарезервировано {proj.costs.heldCredits} кредитов — спишется по факту, не больше резерва
+            зарезервировано ${proj.costs.heldUsd.toFixed(2)}
           </span>
         )}
         <span className="text-dim ml-auto">страницу можно закрыть — свап продолжится на сервере</span>

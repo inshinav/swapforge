@@ -517,7 +517,7 @@ async function runUploadAndSubmit(
     markFailed(
       genId,
       metered
-        ? 'Рендер временно недоступен на стороне сервиса — попробуй позже, кредиты не списаны'
+        ? 'Рендер временно недоступен — попробуй позже, деньги не списаны'
         : `Не хватает баланса WaveSpeed: рендер ≈ $${renderEstUsd.toFixed(2)}, на счету $${balanceBefore.toFixed(2)} — пополни и нажми «Повторить рендер»`,
     );
     return;
@@ -546,14 +546,14 @@ async function runUploadAndSubmit(
         /* ниже fail-closed по доступности сметы */
       }
       if (userEstimateUsd === null) {
-        markFailed(genId, 'Смета временно недоступна — попробуй чуть позже, кредиты не списаны');
+        markFailed(genId, 'Цена временно недоступна — попробуй чуть позже, деньги не списаны');
         return;
       }
       const res = placeHold(p.user_id!, projectId, priceCredits(userEstimateUsd));
       if (!res.ok) {
         markFailed(
           genId,
-          `Не хватает кредитов: нужно ≈ ${res.needCredits}, доступно ${res.availableCredits} — пополни на вкладке «Баланс» и нажми «Повторить рендер»`,
+          `Нужно $${(res.needCredits / 100).toFixed(2)}, на балансе $${(res.availableCredits / 100).toFixed(2)} — пополни баланс и повтори рендер`,
         );
         return;
       }

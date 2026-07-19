@@ -192,7 +192,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!p) return bad(reply, 404, 'Проект не найден');
     try {
       const est = await buildEstimate(p);
-      // Не-владельцу — только кредиты: USD оператора не существует в его мире
+      // Не-владельцу — только итоговая пользовательская цена, без себестоимости оператора.
       return req.user!.role === 'owner' ? est : toUserEstimate(est, req.user!.id);
     } catch (e) {
       return bad(reply, 502, `Смета недоступна: ${e instanceof Error ? e.message : String(e)}`);
@@ -273,12 +273,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!p) return bad(reply, 404, 'Проект не найден');
     const full = toFull(p);
     // Не-владельцу USD не существует: счётчики нулятся, из генераций вычищаются
-    // цены; вместо них — открытый кредитный резерв (спишется по факту)
+    // цены провайдеров; вместо них — пользовательский резерв в USD (спишется по факту)
     if (req.user!.role !== 'owner') {
       full.costs = {
         projectUsd: 0,
         activeRun: null,
-        heldCredits: openHoldForProject(id)?.credits ?? null,
+        heldUsd: (openHoldForProject(id)?.credits ?? 0) / 100 || null,
       };
       full.generations = full.generations.map((g) => ({
         ...g,
@@ -411,7 +411,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         409,
         isOwner
           ? `Не хватает баланса WaveSpeed: рендер ≈ $${est.wavespeed.usd.toFixed(2)}, на счету $${est.balanceUsd.toFixed(2)} — пополни и жми ещё раз`
-          : 'Рендер временно недоступен на стороне сервиса — попробуй позже, кредиты не списаны',
+          : 'Рендер временно недоступен — попробуй позже, деньги не списаны',
       );
     }
 
@@ -436,7 +436,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         return bad(
           reply,
           402,
-          `Не хватает кредитов: нужно ≈ ${hold.needCredits}, доступно ${hold.availableCredits} — пополни на вкладке «Баланс»`,
+          `Нужно $${(hold.needCredits / 100).toFixed(2)}, на балансе $${(hold.availableCredits / 100).toFixed(2)}`,
         );
       }
     }
