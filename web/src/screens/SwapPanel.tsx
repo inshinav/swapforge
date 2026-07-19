@@ -9,6 +9,7 @@ import type {
   ModelInfo,
   ProjectFull,
 } from '@shared/api-types';
+import type { ReferenceAudit } from '@shared/analysis';
 import { ApiError, api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
@@ -93,6 +94,10 @@ export function SwapPanel({
       ? proj.generations[0]!
       : null;
   const hasModelRef = proj.refs.some((r) => r.role === 'model');
+  const audit = proj.analysis?.referenceAudit;
+  const auditBlocked = !!audit && (audit.verdict === 'blocked' || audit.issues.some((i) => i.severity === 'blocker'));
+  const auditReview = !!audit && audit.verdict === 'review' && !audit.accepted && !auditBlocked;
+  const auditNeedsDecision = auditBlocked || auditReview;
 
   const loadEstimate = useCallback(() => {
     setEstErr(null);
@@ -107,7 +112,7 @@ export function SwapPanel({
     // смета пересчитывается после каждого завершения стадий/рендера
   }, [proj.id, running, proj.generations.length, proj.promptVersions, loadEstimate]);
 
-  const launch = async (variantId?: string) => {
+  const launch = async (variantId?: string, confirmReferenceRisks = false) => {
     setLaunching(true);
     setLaunchErr(null);
     setLaunchShortfall(null);
@@ -118,6 +123,7 @@ export function SwapPanel({
         flags: { removeText, enhanceFigure },
         wish: wish.trim() || undefined,
         confirmUnknownCost: confirmUnknown || undefined,
+        confirmReferenceRisks: confirmReferenceRisks || undefined,
         variantId,
       });
       reload();
@@ -129,6 +135,13 @@ export function SwapPanel({
     } finally {
       setLaunching(false);
     }
+  };
+
+  const revealReferences = () => {
+    onCustom();
+    window.setTimeout(() => {
+      document.getElementById('project-references')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
   };
 
   const genAction = async (fn: () => Promise<unknown>) => {
@@ -153,8 +166,17 @@ export function SwapPanel({
           <ProgressStepper proj={proj} gen={activeGen} detailed={owner} />
         ) : (
           <>
-            {proj.flow === 'auto' && proj.error && (
+            {proj.flow === 'auto' && proj.error && !auditNeedsDecision && (
               <ErrorNote text={proj.error} onRetry={() => void launch()} />
+            )}
+            {audit && (
+              <ReferenceAuditCard
+                audit={audit}
+                busy={launching}
+                onAddReferences={revealReferences}
+                onOpenModels={onOpenModels}
+                onContinue={auditReview ? () => void launch(undefined, true) : undefined}
+              />
             )}
             {failedGen && (
               <div className="rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 space-y-2">
@@ -197,7 +219,7 @@ export function SwapPanel({
               onRefresh={loadEstimate}
               onOpenBilling={onOpenBilling}
             />
-            {est && !isBalanceEst(est) && est.wavespeed.usd === null && (
+            {!auditNeedsDecision && est && !isBalanceEst(est) && est.wavespeed.usd === null && (
               <label className="flex items-center gap-2 text-xs text-warn cursor-pointer">
                 <input
                   type="checkbox"
@@ -214,7 +236,7 @@ export function SwapPanel({
               <div className="space-y-2">
                 <div>
                   <div className="text-sm font-semibold">Нажми на нужный пресет</div>
-                  <div className="text-xs text-mut mt-0.5">Весь ролик запустится автоматически.</div>
+                  <div className="text-xs text-mut mt-0.5">Сначала сверим его с каждой сценой. Если всё подходит — ролик запустится сам.</div>
                 </div>
                 {buttons === null ? (
                   <div className="flex items-center gap-2 text-sm text-mut">
@@ -242,7 +264,7 @@ export function SwapPanel({
                         )}
                         <div className="px-3 py-2 flex items-center gap-2">
                           <div className="text-sm font-semibold truncate">{b.label}</div>
-                          <span className="ml-auto text-[11px] font-bold text-lime">Создать</span>
+                          <span className="ml-auto text-[11px] font-bold text-lime">Проверить</span>
                         </div>
                       </button>
                     ))}
@@ -279,7 +301,7 @@ export function SwapPanel({
                 <Button
                   kind="primary"
                   busy={launching}
-                  disabled={!hasModelRef || proj.videoPurged}
+                  disabled={!hasModelRef || proj.videoPurged || auditNeedsDecision}
                   onClick={() => void launch()}
                   className="!px-6 !py-3 text-base"
                   title={
@@ -290,7 +312,7 @@ export function SwapPanel({
                         : undefined
                   }
                 >
-                  ⚡ Создать ролик
+                  {auditNeedsDecision ? 'Сначала исправь риски выше' : '⚡ Проверить и создать'}
                 </Button>
                 {!hasModelRef && (
                   <span className="text-xs text-warn">нужен реф с ролью «модель» (блок выше)</span>
@@ -330,6 +352,109 @@ export function SwapPanel({
         )}
       </div>
     </Card>
+  );
+}
+
+const AUDIT_ROLE: Record<ReferenceAudit['issues'][number]['role'], string> = {
+  model: 'модель',
+  vehicle: 'транспорт',
+  object: 'объект',
+  source_video: 'исходное видео',
+};
+
+function ReferenceAuditCard({
+  audit,
+  busy,
+  onAddReferences,
+  onOpenModels,
+  onContinue,
+}: {
+  audit: ReferenceAudit;
+  busy: boolean;
+  onAddReferences: () => void;
+  onOpenModels: () => void;
+  onContinue?: () => void;
+}) {
+  const blocked = audit.verdict === 'blocked' || audit.issues.some((i) => i.severity === 'blocker');
+  const needsDecision = blocked || (audit.verdict === 'review' && !audit.accepted);
+
+  if (!needsDecision) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-ok/25 bg-ok/5 px-3 py-2 text-xs">
+        <span className="text-ok">✓</span>
+        <span className="font-semibold">Референсы подходят к сценам</span>
+        <span className="text-dim hidden sm:inline">Проверены ракурсы, видимость и контакты.</span>
+      </div>
+    );
+  }
+
+  return (
+    <section className={`rounded-xl border p-3 sm:p-4 space-y-3 ${blocked ? 'border-danger/35 bg-danger/5' : 'border-warn/35 bg-warn/5'}`}>
+      <div className="flex items-start gap-3">
+        <span className={`mt-0.5 text-lg ${blocked ? 'text-danger' : 'text-warn'}`}>{blocked ? '⚠' : '!'}</span>
+        <div className="min-w-0">
+          <div className="font-bold">{blocked ? 'Нужно исправить референсы' : 'Есть риск артефактов'}</div>
+          <p className="text-xs text-mut mt-1">{audit.summary}</p>
+          <p className="text-xs text-dim mt-1">Рендер не запускался. За него списания нет; учтена только уже выполненная проверка.</p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {audit.issues.map((issue, index) => (
+          <article key={`${issue.title}-${index}`} className="rounded-lg border border-line bg-panel2 px-3 py-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag tone={issue.severity === 'blocker' ? 'danger' : 'warn'}>
+                {issue.severity === 'blocker' ? 'обязательно' : 'риск'}
+              </Tag>
+              <span className="font-semibold text-sm">{issue.title}</span>
+              <span className="text-dim ml-auto">
+                {issue.sceneIndex > 0 ? `сцена ${issue.sceneIndex} · ` : ''}{issue.moment} · {AUDIT_ROLE[issue.role]}
+              </span>
+            </div>
+            <p className="mt-2 text-mut"><span className="text-dim">Видно сейчас:</span> {issue.evidence}</p>
+            <p className="mt-1 text-warn"><span className="font-semibold">Если оставить:</span> {issue.risk}</p>
+            <div className="mt-2 rounded-lg border border-lime/20 bg-lime/5 px-2.5 py-2 text-ink/90">
+              <span className="font-semibold text-lime">Что сделать:</span> {issue.action}
+              {issue.requiredShots.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {issue.requiredShots.map((shot) => <span key={shot} className="rounded-md bg-panel border border-line px-2 py-1">{shot}</span>)}
+                </div>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {audit.checks.some((check) => check.missing.length > 0 || check.qualityNotes.length > 0) && (
+        <details className="rounded-lg border border-line bg-panel2">
+          <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">Что проверено по фото</summary>
+          <div className="border-t border-line px-3 py-2 space-y-2 text-xs">
+            {audit.checks.map((check, index) => (
+              <div key={`${check.role}-${index}`}>
+                <div className="font-semibold">{check.subject}</div>
+                {check.covered.length > 0 && <div className="text-ok mt-0.5">Есть: {check.covered.join(' · ')}</div>}
+                {check.missing.length > 0 && <div className="text-warn mt-0.5">Не хватает: {check.missing.join(' · ')}</div>}
+                {check.qualityNotes.length > 0 && <div className="text-mut mt-0.5">{check.qualityNotes.join(' · ')}</div>}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Button kind="primary" className="w-full sm:w-auto" onClick={onAddReferences}>
+          Добавить нужные фото
+        </Button>
+        <Button kind="ghost" className="w-full sm:w-auto" onClick={onOpenModels}>
+          Обновить пресет на будущее
+        </Button>
+        {!blocked && onContinue && (
+          <Button kind="ghost" busy={busy} className="w-full sm:w-auto sm:ml-auto" onClick={onContinue}>
+            Продолжить с риском
+          </Button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -481,7 +606,7 @@ function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
   });
   return [
     { key: 'storyboard', label: 'Раскадровка', ...mark(framesDone, s === 'storyboarding', 'ffmpeg ищет смены сцен · ~10–30 с', t.storyboard) },
-    { key: 'analyze', label: 'Анализ', ...mark(analysisDone, s === 'analyzing', 'vision смотрит кадры и строит карту рисков · ~30–90 с', t.analyze) },
+    { key: 'analyze', label: 'Проверка сцен и референсов', ...mark(analysisDone, s === 'analyzing', 'сверяем нужные ракурсы, контакты и риск артефактов · ~30–90 с', t.analyze) },
     { key: 'generate', label: 'Промты', ...mark(promptsDone, s === 'generating', 'доктрина куёт пару промтов · ~15–50 с', t.generate) },
     { key: 'startframe', label: 'Стартовый кадр', ...mark(startframeDone, s === 'startframing', 'gpt-image-2 · high · ~1–2 мин', t.startframe) },
     ...(genS === 'queued'
@@ -530,8 +655,8 @@ function deriveUserSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
   return [
     {
       key: 'prepare',
-      label: 'Разбираем исходник',
-      ...mark(prepared, local === 'storyboarding' || local === 'analyzing', 'Сохраняем движения, свет и композицию.'),
+      label: 'Проверяем сцены и фото',
+      ...mark(prepared, local === 'storyboarding' || local === 'analyzing', 'Ищем риск смены лица, образа, объектов и плохих стыков.'),
     },
     {
       key: 'look',

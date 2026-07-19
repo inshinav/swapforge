@@ -19,6 +19,11 @@ const { DOCTRINE_SYSTEM } = await import('../src/engine/doctrine');
 const { getDb } = await import('../src/db');
 const { ARTIFACTS, ARTIFACT_TYPES } = await import('../../shared/taxonomy');
 const { ANALYSIS_JSON_SCHEMA, AnalysisZ } = await import('../../shared/analysis');
+const {
+  REFERENCE_AUDIT_GUIDANCE,
+  referenceAuditPause,
+  referenceFingerprint,
+} = await import('../src/engine/reference-audit');
 
 import type { Analysis } from '../../shared/analysis';
 import type { RefInfo, VideoMeta } from '../../shared/api-types';
@@ -151,6 +156,57 @@ describe('таксономия и схемы', () => {
   it('фикстура анализа проходит zod', () => {
     expect(AnalysisZ.safeParse(ANALYSIS).success).toBe(true);
   });
+  it('новая strict-схема требует покадровый аудит референсов, легаси JSON по-прежнему читается', () => {
+    const s = ANALYSIS_JSON_SCHEMA as {
+      required: string[];
+      properties: Record<string, { required?: string[]; additionalProperties?: boolean }>;
+    };
+    expect(s.required).toContain('referenceAudit');
+    expect(s.properties.referenceAudit!.additionalProperties).toBe(false);
+    expect(s.properties.referenceAudit!.required).toEqual(expect.arrayContaining(['verdict', 'summary', 'checks', 'issues']));
+    expect(AnalysisZ.safeParse(ANALYSIS).success).toBe(true); // старые analysis_json без поля
+  });
+});
+
+describe('аудит готовности референсов', () => {
+  const audit = (severity: 'blocker' | 'warning', accepted = false): Analysis => ({
+    ...ANALYSIS,
+    referenceAudit: {
+      verdict: severity === 'blocker' ? 'blocked' : 'review',
+      summary: 'Нужен профиль',
+      checks: [],
+      issues: [
+        {
+          severity,
+          sceneIndex: 2,
+          moment: '8.0–9.0с',
+          role: 'model',
+          title: 'Нет профиля',
+          evidence: 'В сцене лицо сбоку, в рефах только анфас',
+          risk: 'черты лица изменятся',
+          action: 'сними профиль при ровном свете',
+          requiredShots: ['чёткий профиль'],
+        },
+      ],
+      accepted,
+    },
+  });
+
+  it('blocker нельзя обойти, warning требует явного решения', () => {
+    expect(referenceAuditPause(audit('blocker', true))).toBe('blocked');
+    expect(referenceAuditPause(audit('warning'))).toBe('review');
+    expect(referenceAuditPause(audit('warning', true))).toBeNull();
+    expect(referenceAuditPause(ANALYSIS)).toBeNull();
+  });
+
+  it('отпечаток меняется от порядка, роли и заметки референсов', () => {
+    const base = referenceFingerprint(REFS);
+    expect(referenceFingerprint(REFS.map((r) => ({ ...r })))).toBe(base);
+    expect(referenceFingerprint(REFS.map((r, i) => (i === 0 ? { ...r, note: `${r.note}!` } : r)))).not.toBe(base);
+    expect(referenceFingerprint(REFS.map((r, i) => ({ ...r, idx: 1 - i })))).not.toBe(base);
+    expect(REFERENCE_AUDIT_GUIDANCE).toContain('multi-angle reference sheet is valid');
+    expect(REFERENCE_AUDIT_GUIDANCE).toContain('Maximum usable project references is 8');
+  });
 });
 
 describe('манифест и параметры', () => {
@@ -168,6 +224,7 @@ describe('манифест и параметры', () => {
     expect(p.reference_images[0]!.file).toBe('start-frame.png');
     expect(p.aspect_ratio).toBe('9:16');
     expect(p.enable_web_search).toBe(false);
+    expect(p.refFingerprint).toBe(referenceFingerprint(REFS));
   });
 });
 

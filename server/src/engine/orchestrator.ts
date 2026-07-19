@@ -3,6 +3,8 @@
 import fs from 'node:fs';
 import { getDb } from '../db';
 import { startDir } from '../storage';
+import { referenceFingerprint } from './reference-audit';
+import type { RefInfo } from '../../../shared/api-types';
 
 export interface FlowFlags {
   removeText: boolean;
@@ -42,6 +44,8 @@ export interface StageSnapshot {
   latestVersion: number;
   /** Флаги, с которыми сгенерирована последняя версия промтов (null = промтов нет). */
   latestPromptFlags: FlowFlags | null;
+  /** false = референсы менялись после этой версии промтов. */
+  latestPromptRefsMatch?: boolean;
   /** Чего хочет проект сейчас (галочки на момент запуска). */
   wantedFlags: FlowFlags;
   /** Есть ли старт-кадр для latestVersion. */
@@ -58,7 +62,12 @@ export interface StageSnapshot {
 export function nextStageOf(s: StageSnapshot): StageName {
   if (!s.framesReady) return 'storyboard';
   if (!s.analysisReady) return 'analyze';
-  if (s.latestVersion === 0 || !s.latestPromptFlags || !flagsEqual(s.latestPromptFlags, s.wantedFlags)) {
+  if (
+    s.latestVersion === 0 ||
+    !s.latestPromptFlags ||
+    !flagsEqual(s.latestPromptFlags, s.wantedFlags) ||
+    s.latestPromptRefsMatch === false
+  ) {
     return 'generate';
   }
   if (!s.startframeReady) return 'startframe';
@@ -99,11 +108,40 @@ export function snapshotProject(p: ProjectRowLike): StageSnapshot {
     .get(p.id) as { v: number };
   const latestVersion = maxV.v;
   let latestPromptFlags: FlowFlags | null = null;
+  let latestPromptRefsMatch = true;
   if (latestVersion > 0) {
     const row = db
-      .prepare(`SELECT flags_json FROM prompts WHERE project_id = ? AND version = ? LIMIT 1`)
-      .get(p.id, latestVersion) as { flags_json: string | null } | undefined;
+      .prepare(`SELECT flags_json, params_json FROM prompts WHERE project_id = ? AND version = ? AND kind = 'video' LIMIT 1`)
+      .get(p.id, latestVersion) as { flags_json: string | null; params_json: string | null } | undefined;
     latestPromptFlags = parseFlags(row?.flags_json);
+    try {
+      const stored = row?.params_json
+        ? (JSON.parse(row.params_json) as { refFingerprint?: unknown }).refFingerprint
+        : null;
+      const refs = db
+        .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx`)
+        .all(p.id) as unknown as RefInfo[];
+      if (typeof stored === 'string') {
+        latestPromptRefsMatch = stored === referenceFingerprint(refs);
+      } else {
+        // Легаси-проект без нового аудита продолжает работать как раньше. Если же
+        // новый аудит уже есть, а отпечатка у промта нет — это первая безопасная
+        // пересборка после внедрения/изменения референсов.
+        let auditedWithRefs = false;
+        try {
+          auditedWithRefs = !!(
+            p.analysis_json &&
+            (JSON.parse(p.analysis_json) as { referenceAudit?: unknown }).referenceAudit
+          );
+        } catch {
+          /* старый битый анализ обрабатывается прежним путём */
+        }
+        latestPromptRefsMatch = !auditedWithRefs || refs.length === 0;
+      }
+    } catch {
+      // Старые/повреждённые params_json не ломают уже созданные проекты.
+      latestPromptRefsMatch = true;
+    }
   }
   const gen =
     latestVersion > 0
@@ -118,6 +156,7 @@ export function snapshotProject(p: ProjectRowLike): StageSnapshot {
     analysisReady: !!p.analysis_json,
     latestVersion,
     latestPromptFlags,
+    latestPromptRefsMatch,
     wantedFlags: parseFlags(p.flags_json),
     startframeReady: latestVersion > 0 && startframeExists(p.id, latestVersion),
     latestGenStatus: gen?.status ?? null,

@@ -159,7 +159,11 @@ function ProjectView({
   return (
     <div className="space-y-5 sf-in">
       <VideoSection proj={proj} reload={reload} onNew={() => onProjectCreated('')} />
-      {refsInMain && <RefsSection proj={proj} reload={reload} />}
+      {refsInMain && (
+        <div id="project-references">
+          <RefsSection proj={proj} reload={reload} />
+        </div>
+      )}
       <SwapPanel
         proj={proj}
         reload={reload}

@@ -75,6 +75,8 @@ export interface SeedanceParams {
   resolution: string;
   enable_web_search: boolean;
   durationNote: string;
+  /** Отпечаток порядка/ролей/заметок референсов, чтобы их правка пересобирала промты. */
+  refFingerprint?: string;
 }
 
 export interface FlowFlagsDto {

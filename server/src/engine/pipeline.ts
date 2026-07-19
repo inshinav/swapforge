@@ -13,7 +13,8 @@ import { startRender } from './render';
 import { releaseFlowHoldOnFailure } from '../billing/flow';
 import { randomUUID } from 'node:crypto';
 import type { Analysis } from '../../../shared/analysis';
-import type { RefInfo, VideoMeta } from '../../../shared/api-types';
+import type { FrameInfo, RefInfo, VideoMeta } from '../../../shared/api-types';
+import { referenceAuditMessage, referenceAuditPause } from './reference-audit';
 
 interface ProjectRow {
   id: string;
@@ -83,10 +84,13 @@ export function startAnalysis(projectId: string): void {
     fn: async () => {
       const p = loadProject(projectId);
       if (!p.frames_json || !p.meta_json) throw new Error('Сначала нужна раскадровка');
+      const frames = JSON.parse(p.frames_json) as FrameInfo[];
+      if (frames.length === 0) throw new Error('Раскадровка пуста — запусти её заново');
       const analysis = await runAnalysis(
         projectId,
         JSON.parse(p.meta_json) as VideoMeta,
-        JSON.parse(p.frames_json),
+        frames,
+        loadRefs(projectId),
       );
       getDb()
         .prepare(`UPDATE projects SET analysis_json = ?, tags_json = ? WHERE id = ?`)
@@ -210,6 +214,15 @@ export function advanceFlow(projectId: string): void {
     | undefined;
   if (!p || p.flow !== 'auto') return;
   if (BUSY_STATUSES.has(p.status) || isQueued(projectId)) return;
+
+  const analysis = p.analysis_json ? (JSON.parse(p.analysis_json) as Analysis) : null;
+  const auditPause = referenceAuditPause(analysis);
+  if (analysis?.referenceAudit && auditPause) {
+    const msg = referenceAuditMessage(analysis.referenceAudit, auditPause);
+    db.prepare(`UPDATE projects SET error = ? WHERE id = ?`).run(msg, projectId);
+    releaseFlowHoldOnFailure(projectId, null, auditPause === 'blocked' ? 'референсы требуют исправления' : 'ожидается решение по рискам');
+    return;
+  }
 
   const snap = snapshotProject(p);
   const stage = nextStageOf(snap);

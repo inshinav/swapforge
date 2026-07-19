@@ -136,6 +136,7 @@ export const api = {
       wish?: string;
       generateAudio?: boolean;
       confirmUnknownCost?: boolean;
+      confirmReferenceRisks?: boolean;
       variantId?: string;
       preset?: string;
     },

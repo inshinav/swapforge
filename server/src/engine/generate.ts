@@ -14,6 +14,7 @@ import { config, modelChainFor } from '../config';
 import { buildDoctrineSystem, ITERATION_ADDENDUM } from './doctrine';
 import type { FlowFlags } from './orchestrator';
 import type { SimilarExample } from './similar';
+import { referenceFingerprint } from './reference-audit';
 
 export interface IterationCtx {
   prevVideoPrompt: string;
@@ -223,5 +224,6 @@ export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[]): SeedanceP
     resolution: '720p для итераций → 1080p финал',
     enable_web_search: false,
     durationNote: `автодетект из входа (${meta.durationSec}с), кламп 4–15 с`,
+    refFingerprint: referenceFingerprint(refs),
   };
 }

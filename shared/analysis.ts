@@ -11,6 +11,41 @@ export const ArtifactTypeZ = z.enum([
   'cross_wiring',
 ]);
 
+export const ReferenceAuditSeverityZ = z.enum(['blocker', 'warning']);
+export const ReferenceAuditRoleZ = z.enum(['model', 'vehicle', 'object', 'source_video']);
+
+export const ReferenceAuditZ = z.object({
+  verdict: z.enum(['ready', 'review', 'blocked']),
+  summary: z.string(),
+  checks: z.array(
+    z.object({
+      role: ReferenceAuditRoleZ,
+      subject: z.string(),
+      covered: z.array(z.string()),
+      missing: z.array(z.string()),
+      qualityNotes: z.array(z.string()),
+    }),
+  ),
+  issues: z.array(
+    z.object({
+      severity: ReferenceAuditSeverityZ,
+      sceneIndex: z.number(),
+      moment: z.string(),
+      role: ReferenceAuditRoleZ,
+      title: z.string(),
+      evidence: z.string(),
+      risk: z.string(),
+      action: z.string(),
+      requiredShots: z.array(z.string()),
+    }),
+  ),
+  /** Внутренние поля сервера: LLM их не заполняет. */
+  accepted: z.boolean().optional(),
+  refFingerprint: z.string().optional(),
+});
+
+export type ReferenceAudit = z.infer<typeof ReferenceAuditZ>;
+
 export const AnalysisZ = z.object({
   storyboard: z.array(
     z.object({
@@ -51,6 +86,9 @@ export const AnalysisZ = z.object({
       suppressorLine: z.string(),
     }),
   ),
+  /** Проверка выбранных референсов именно против сцен этого ролика.
+   *  optional сохраняет чтение старых analysis_json. В новых ответах поле обязательно. */
+  referenceAudit: ReferenceAuditZ.optional(),
   startFrame: z.object({
     description: z.string(),
     composition: z.string(),
@@ -101,6 +139,32 @@ export const ANALYSIS_JSON_SCHEMA = obj({
       suppressorLine: str,
     }),
   ),
+  referenceAudit: obj({
+    verdict: { type: 'string', enum: ['ready', 'review', 'blocked'] },
+    summary: str,
+    checks: arr(
+      obj({
+        role: { type: 'string', enum: ['model', 'vehicle', 'object', 'source_video'] },
+        subject: str,
+        covered: arr(str),
+        missing: arr(str),
+        qualityNotes: arr(str),
+      }),
+    ),
+    issues: arr(
+      obj({
+        severity: { type: 'string', enum: ['blocker', 'warning'] },
+        sceneIndex: num,
+        moment: str,
+        role: { type: 'string', enum: ['model', 'vehicle', 'object', 'source_video'] },
+        title: str,
+        evidence: str,
+        risk: str,
+        action: str,
+        requiredShots: arr(str),
+      }),
+    ),
+  }),
   startFrame: obj({ description: str, composition: str, subjectPlacement: str, lightNote: str }),
   tags: arr(str),
 });

@@ -49,6 +49,8 @@ import { monthSummary } from './usage';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
 import type { HealthInfo, PricingInfo, RefInfo } from '../../shared/api-types';
+import type { Analysis } from '../../shared/analysis';
+import { referenceAuditMessage, referenceAuditPause } from './engine/reference-audit';
 
 const BUSY = BUSY_STATUSES;
 const VIDEO_MIME: Record<string, string> = {
@@ -98,6 +100,18 @@ function getOwnedProject(req: FastifyRequest, id: string): DbProject | undefined
   return getDb()
     .prepare(`SELECT * FROM projects WHERE id = ? AND user_id = ?`)
     .get(id, req.user.id) as DbProject | undefined;
+}
+
+/** Любое изменение пакета референсов требует нового совместного vision-аудита. */
+function invalidateReferenceAnalysis(projectId: string): void {
+  getDb()
+    .prepare(
+      `UPDATE projects
+          SET analysis_json = NULL, tags_json = NULL, error = NULL,
+              status = CASE WHEN frames_json IS NOT NULL THEN 'storyboarded' ELSE status END
+        WHERE id = ?`,
+    )
+    .run(projectId);
 }
 
 interface OwnedGen {
@@ -336,7 +350,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/projects/:id/swap', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { id } = req.params as { id: string };
-    const p = getOwnedProject(req, id);
+    let p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     // Занятый ЧУЖИМ рендером слот больше не отбивает: свап дойдёт до рендера и встанет
@@ -360,12 +374,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       variantId?: string;
       /** legacy-алиас захардкоженных пресетов (уходит после чекпоинта этапа 1). */
       preset?: string;
+      /** Явное решение продолжить при предупреждениях (blocker этим не обходится). */
+      confirmReferenceRisks?: boolean;
     };
 
     // Кнопка модели: подкладываем реф-листы варианта в чистый проект — дальше всё как обычно
     if (body.variantId) {
       try {
         applyModelVariant(req.user!.id, id, body.variantId);
+        invalidateReferenceAnalysis(id);
+        p = getOwnedProject(req, id)!;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return bad(reply, msg.includes('не найдена') ? 404 : 409, msg);
@@ -375,6 +393,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       if (!preset) return bad(reply, 404, 'Неизвестный пресет');
       try {
         applyPreset(id, preset);
+        invalidateReferenceAnalysis(id);
+        p = getOwnedProject(req, id)!;
       } catch (e) {
         return bad(reply, 409, e instanceof Error ? e.message : String(e));
       }
@@ -384,6 +404,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT 1 FROM refs WHERE project_id = ? AND role = 'model' LIMIT 1`)
       .get(id);
     if (!hasModelRef) return bad(reply, 409, 'Нужен хотя бы один референс с ролью «модель»');
+
+    // Аудит идёт до промтов/рендера. Blocker непреодолим, warning требует отдельного
+    // решения пользователя; оба пути происходят ДО нового денежного резерва.
+    let analysis = p.analysis_json ? (JSON.parse(p.analysis_json) as Analysis) : null;
+    const auditPause = referenceAuditPause(analysis);
+    if (analysis?.referenceAudit && auditPause === 'blocked') {
+      return bad(reply, 409, referenceAuditMessage(analysis.referenceAudit, auditPause));
+    }
+    if (analysis?.referenceAudit && auditPause === 'review') {
+      if (!body.confirmReferenceRisks) {
+        return bad(reply, 409, referenceAuditMessage(analysis.referenceAudit, auditPause));
+      }
+      analysis = {
+        ...analysis,
+        referenceAudit: { ...analysis.referenceAudit, accepted: true },
+      };
+      const json = JSON.stringify(analysis);
+      getDb().prepare(`UPDATE projects SET analysis_json = ?, error = NULL WHERE id = ?`).run(json, id);
+      p = { ...p, analysis_json: json, error: null };
+    }
     // Звук: если тело его не прислало — берём сохранённую настройку проекта («под капотом»),
     // а не дефолт: иначе свежий PATCH затирался бы протухшим значением из UI
     const flagsJson = JSON.stringify({
@@ -579,6 +619,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
+    if (BUSY.has(p.status) || isQueued(id) || projectHasActiveGeneration(id) || projectHasQueuedGeneration(id)) {
+      return bad(reply, 409, 'Дождись окончания текущей задачи, затем меняй референсы');
+    }
     if (req.user!.role !== 'owner' && userUsageBytes(req.user!.id) >= config.userStorageCapBytes) {
       return bad(reply, 413, 'Твоё хранилище заполнено — удали старые проекты в Библиотеке');
     }
@@ -645,12 +688,17 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       `INSERT INTO refs (id, project_id, idx, role, file, note, role_source, auto_note)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(refId, id, maxIdx.m + 1, role, file, note, roleSource, autoNote);
+    invalidateReferenceAnalysis(id);
     return { id: refId, file, role, roleSource };
   });
 
   app.patch('/api/projects/:id/refs', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!getOwnedProject(req, id)) return bad(reply, 404, 'Проект не найден');
+    const p = getOwnedProject(req, id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    if (BUSY.has(p.status) || isQueued(id) || projectHasActiveGeneration(id) || projectHasQueuedGeneration(id)) {
+      return bad(reply, 409, 'Дождись окончания текущей задачи, затем меняй референсы');
+    }
     const body = (req.body ?? {}) as {
       order?: string[];
       updates?: Array<{ id: string; role?: string; note?: string }>;
@@ -675,12 +723,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         );
       }
     }
+    if ((body.order?.length ?? 0) > 0 || (body.updates?.length ?? 0) > 0) {
+      invalidateReferenceAnalysis(id);
+    }
     return { ok: true };
   });
 
   app.delete('/api/projects/:id/refs/:refId', async (req, reply) => {
     const { id, refId } = req.params as { id: string; refId: string };
-    if (!getOwnedProject(req, id)) return bad(reply, 404, 'Проект не найден');
+    const p = getOwnedProject(req, id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    if (BUSY.has(p.status) || isQueued(id) || projectHasActiveGeneration(id) || projectHasQueuedGeneration(id)) {
+      return bad(reply, 409, 'Дождись окончания текущей задачи, затем меняй референсы');
+    }
     const db = getDb();
     const ref = db
       .prepare(`SELECT file FROM refs WHERE id = ? AND project_id = ?`)
@@ -694,6 +749,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .all(id) as Array<{ id: string }>;
     const upd = db.prepare(`UPDATE refs SET idx = ? WHERE id = ?`);
     rest.forEach((r, i) => upd.run(i, r.id));
+    invalidateReferenceAnalysis(id);
     return { ok: true };
   });
 
@@ -728,6 +784,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!p) return bad(reply, 404, 'Проект не найден');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.analysis_json) return bad(reply, 409, 'Сначала нужен анализ ролика');
+    const analysis = JSON.parse(p.analysis_json) as Analysis;
+    const auditPause = referenceAuditPause(analysis);
+    if (analysis.referenceAudit && auditPause) {
+      return bad(reply, 409, referenceAuditMessage(analysis.referenceAudit, auditPause));
+    }
     const refCount = getDb()
       .prepare(`SELECT COUNT(*) AS c FROM refs WHERE project_id = ?`)
       .get(id) as { c: number };

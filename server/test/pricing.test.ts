@@ -246,6 +246,7 @@ describe('оркестратор: флаги и решающая таблица'
     expect(
       nextStageOf({ ...base, wantedFlags: { removeText: true, enhanceFigure: false, wish: '' } }),
     ).toBe('generate'); // смена галочек → регенерация
+    expect(nextStageOf({ ...base, latestPromptRefsMatch: false })).toBe('generate');
     expect(nextStageOf({ ...base, startframeReady: false })).toBe('startframe');
     expect(nextStageOf(base)).toBe('render');
     expect(nextStageOf({ ...base, latestGenStatus: 'done' })).toBe('done');

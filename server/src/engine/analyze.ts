@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ANALYSIS_JSON_SCHEMA, AnalysisZ, type Analysis } from '../../../shared/analysis';
 import type { FrameInfo, VideoMeta } from '../../../shared/api-types';
-import { framesDir } from '../storage';
+import type { RefInfo } from '../../../shared/api-types';
+import { framesDir, refsDir } from '../storage';
 import { getLlm, type ContentPart } from '../llm/provider';
 import { modelChainFor } from '../config';
 import { ANALYST_SYSTEM } from './doctrine';
+import { REFERENCE_AUDIT_GUIDANCE, referenceFingerprint } from './reference-audit';
 
 export function frameToPart(projectId: string, file: string): { b64: string; mime: string } {
   const p = path.join(framesDir(projectId), file);
@@ -16,13 +18,15 @@ export async function runAnalysis(
   projectId: string,
   meta: VideoMeta,
   frames: FrameInfo[],
+  refs: RefInfo[] = [],
 ): Promise<Analysis> {
   const parts: ContentPart[] = [
     {
       type: 'text',
       text:
         `SOURCE VIDEO: duration ${meta.durationSec}s, ${meta.width}x${meta.height} (${meta.aspect}), ${meta.fps} fps.\n` +
-        `${frames.length} frames follow, each preceded by its label. "scene" = scene-change boundary, "grid" = uniform sampling, "first" = the exact first frame.`,
+        `${frames.length} frames follow, each preceded by its label. "scene" = scene-change boundary, "grid" = uniform sampling, "first" = the exact first frame.\n` +
+        REFERENCE_AUDIT_GUIDANCE,
     },
   ];
   for (const f of frames) {
@@ -33,6 +37,23 @@ export async function runAnalysis(
       // сценовые и первый кадр — важные, сетка — дешёвым low-detail
       detail: f.kind === 'grid' ? 'low' : 'high',
     });
+  }
+  parts.push({
+    type: 'text',
+    text: refs.length
+      ? `PROJECT REFERENCES (${refs.length}; only the first 8 can reach Seedance, in this exact order):`
+      : 'PROJECT REFERENCES: none attached. Mark the missing model reference as a blocker.',
+  });
+  for (const [i, ref] of refs.entries()) {
+    const p = path.join(refsDir(projectId), ref.file);
+    if (!fs.existsSync(p)) continue;
+    const ext = path.extname(ref.file).toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+    parts.push({
+      type: 'text',
+      text: `Project reference ${i + 1}: role=${ref.role}; user note=${ref.note || 'none'}; ${i >= 8 ? 'NOT SENT TO SEEDANCE because it exceeds the 8-reference cap' : 'sent to Seedance'}.`,
+    });
+    parts.push({ type: 'image', b64: fs.readFileSync(p).toString('base64'), mime, detail: 'high' });
   }
 
   const llm = await getLlm();
@@ -55,5 +76,13 @@ export async function runAnalysis(
         .join('; ')}`,
     );
   }
-  return parsed.data;
+  const analysis = parsed.data;
+  if (analysis.referenceAudit) {
+    const hasBlocker = analysis.referenceAudit.issues.some((i) => i.severity === 'blocker');
+    const hasWarning = analysis.referenceAudit.issues.some((i) => i.severity === 'warning');
+    analysis.referenceAudit.verdict = hasBlocker ? 'blocked' : hasWarning ? 'review' : 'ready';
+    analysis.referenceAudit.accepted = false;
+    analysis.referenceAudit.refFingerprint = referenceFingerprint(refs);
+  }
+  return analysis;
 }
