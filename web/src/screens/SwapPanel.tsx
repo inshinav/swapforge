@@ -522,7 +522,18 @@ function deriveSteps(proj: ProjectFull, gen: GenerationRow | null): Step[] {
         ]
       : []),
     { key: 'upload', label: 'Загрузка в WaveSpeed', ...mark(!!genS && genS !== 'uploading_assets' && genS !== 'queued', genS === 'uploading_assets', 'ролик + кадр + рефы улетают на WaveSpeed', gen?.uploadSec) },
-    { key: 'render', label: 'Рендер Seedance', ...mark(genS === 'downloading' || genS === 'done', genS === 'submitted' || genS === 'rendering', 'обычно 2–10 мин — можно уйти со страницы', gen?.renderSec) },
+    {
+      key: 'render',
+      label: 'Рендер Seedance',
+      ...mark(
+        genS === 'downloading' || genS === 'done',
+        genS === 'submitted' || genS === 'rendering',
+        (gen?.segmentCount ?? 1) > 1
+          ? `части ${Math.min((gen?.segmentDone ?? 0) + 1, gen?.segmentCount ?? 1)}/${gen?.segmentCount} · затем бесшовная склейка`
+          : 'обычно 2–10 мин — можно уйти со страницы',
+        gen?.renderSec,
+      ),
+    },
     { key: 'download', label: 'Скачивание', ...mark(genS === 'done', genS === 'downloading', 'забираю готовый ролик в библиотеку') },
   ];
 }

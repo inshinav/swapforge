@@ -59,10 +59,10 @@ function mkProject(userId: string): string {
 
 describe('priceCredits', () => {
   it('ceil(usd × markup × 100), минимум 1', () => {
-    expect(priceCredits(2.1)).toBe(420); // 2.1 × 2 × 100
+    expect(priceCredits(2.1)).toBe(525); // 2.1 × 2 × 1.25 × 100
     expect(priceCredits(0.001)).toBe(1);
     expect(priceCredits(0)).toBe(1);
-    expect(priceCredits(1.234)).toBe(247); // ceil(246.8)
+    expect(priceCredits(1.234)).toBe(309); // ceil(308.5)
   });
 });
 
@@ -134,8 +134,8 @@ describe('hold/settle/release', () => {
       )
       .run(randomUUID(), p, u);
     settleProjectHold(p, 'gen-1', 1.89);
-    // (1.89 + 0.10) × 2 × 100 = 398
-    expect(creditBalance(u).balance).toBe(1000 - 398);
+    // (1.89 + 0.10) × 2 × 1.25 × 100 = 497.5 → 498
+    expect(creditBalance(u).balance).toBe(1000 - 498);
   });
 
   it('settle НЕ трогает hold, привязанный к ДРУГОЙ генерации (F2)', () => {
@@ -170,8 +170,8 @@ describe('release-политика при фейлах', () => {
       .run(randomUUID(), p, u);
     // стадия до рендера упала: flow-hold (generation_id=null) → genId=null
     releaseFlowHoldOnFailure(p, null, 'анализ упал');
-    // списано ceil(0.05×2×100)=10, остальное вернулось
-    expect(creditBalance(u)).toEqual({ balance: 990, held: 0, available: 990 });
+    // списано ceil(0.05×2×1.25×100)=13, остальное вернулось
+    expect(creditBalance(u)).toEqual({ balance: 987, held: 0, available: 987 });
   });
 
   it('failed-генерация С ws_prediction_id блокирует release (recheck может добрать)', () => {
@@ -213,8 +213,8 @@ describe('сверка осиротевших холдов на старте (F3
     const fixed = reconcileOrphanHolds();
     expect(fixed).toBeGreaterThanOrEqual(1);
     expect(openHoldForProject(p)).toBeUndefined();
-    // списано ceil(1.5×2×100)=300 (cap 500 не превышен)
-    expect(creditBalance(u).balance).toBe(1000 - 300);
+    // списано ceil(1.5×2×1.25×100)=375 (cap 500 не превышен)
+    expect(creditBalance(u).balance).toBe(1000 - 375);
   });
 });
 
@@ -423,7 +423,7 @@ describe('изоляция USD от не-владельца', () => {
     const user = toUserEstimate(est, u);
     const json = JSON.stringify(user);
     expect(json).not.toMatch(/[Uu]sd|\$/);
-    expect(user.credits).toBe(450); // 2.25 × 2 × 100
+    expect(user.credits).toBe(563); // ceil(2.25 × 2 × 1.25 × 100)
     expect(user.balanceCredits).toBe(100);
     expect(user.warnings.join()).toContain('Не хватает кредитов');
     expect(user.warnings.join()).toContain('смета примерная'); // без-$ ворнинги проходят

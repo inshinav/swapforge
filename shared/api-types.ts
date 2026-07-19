@@ -112,6 +112,9 @@ export interface GenerationRow {
   renderSec: number | null;
   /** Позиция в FIFO-очереди (1 = следующий); только для status='queued'. */
   queuePosition?: number | null;
+  /** Для длинного ролика: сколько частей подготовлено из общего числа. */
+  segmentCount?: number;
+  segmentDone?: number;
 }
 
 export interface PresetInfo {

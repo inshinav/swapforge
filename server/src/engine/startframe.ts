@@ -65,6 +65,10 @@ interface ImagesResponse {
 export interface StartFrameOpts {
   /** Кадр строго 9:16 (авто-флоу: выход рендера фиксирован 9:16 независимо от AR исходника). */
   forceNineSixteen?: boolean;
+  /** Для продолжения длинного ролика: точный кадр на границе сегмента вместо frames/first.jpg. */
+  sourceFramePath?: string;
+  /** Стабильное имя файла для рестарт-безопасного сегментного пайплайна. */
+  outputFile?: string;
   /** Тестовая инъекция вызова Images API. */
   _editFn?: (params: Record<string, unknown>) => Promise<ImagesResponse>;
 }
@@ -101,7 +105,7 @@ export async function generateStartFrame(
   if (images.length === 0) throw new Error('Нет референсов — приложи фото модели');
   // Первый кадр исходника — ПЕРВЫМ изображением: кадр = in-place edit (фон/ракурс/свет
   // остаются пиксель-в-пиксель), а не реконструкция по описанию (та уводила композицию)
-  const firstFrame = path.join(framesDir(projectId), 'first.jpg');
+  const firstFrame = opts.sourceFramePath ?? path.join(framesDir(projectId), 'first.jpg');
   const hasSourceFrame = fs.existsSync(firstFrame);
   if (hasSourceFrame) {
     images.unshift(await toFile(fs.createReadStream(firstFrame), 'source-frame.jpg', { type: 'image/jpeg' }));
@@ -201,7 +205,7 @@ export async function generateStartFrame(
   if (!b64) throw new Error('Images API вернул ответ без изображения');
 
   fs.mkdirSync(startDir(projectId), { recursive: true });
-  const file = `start_v${version}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`;
+  const file = opts.outputFile ?? `start_v${version}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`;
   fs.writeFileSync(path.join(startDir(projectId), file), Buffer.from(b64, 'base64'));
   return file;
 }

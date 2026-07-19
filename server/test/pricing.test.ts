@@ -322,6 +322,24 @@ describe('buildEstimate: сквозная смета', () => {
     expect(est.wavespeed.usd).toBeCloseTo(4.5, 5);
     expect(est.warnings.some((w) => w.includes('пополни'))).toBe(true);
   });
+  it('30с считает несколько Seedance-задач и дополнительные GPT Image кадры', async () => {
+    await ensureLitellmFresh(litellmFetch);
+    const meta = JSON.stringify({ durationSec: 30, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 1 });
+    const est = await buildEstimate(
+      {
+        id: 'est-long',
+        frames_json: null,
+        analysis_json: null,
+        flags_json: null,
+        meta_json: meta,
+        video_purged: 0,
+      },
+      fakeWs({ getBalance: async () => 100 }),
+    );
+    expect(est.wavespeed.usd).toBeGreaterThan(4.5);
+    expect(est.openai.perTask.filter((t) => t.task.startsWith('start_frame_segment_')).length).toBe(2);
+    expect(est.warnings).toContain('длинный исходник будет бесшовно собран из 3 частей');
+  });
   it('кэш баланса 60с: два вызова — один сетевой', async () => {
     let calls = 0;
     const ws = fakeWs({

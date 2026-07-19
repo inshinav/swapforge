@@ -1,5 +1,5 @@
 // Кредитный движок. Инварианты:
-// - 1 кредит = 1 «цена-цент»: priceCredits(usd) = max(1, ceil(usd × CREDIT_MARKUP × 100));
+// - Пользовательская цена = себестоимость × CREDIT_MARKUP × (1 + USER_MARGIN_PCT/100).
 //   USD не-владельцу не показывается нигде — только кредиты.
 // - Леджер append-only; available = SUM(ledger) − SUM(open-холдов).
 // - Любая read-then-write инварианта — ТОЛЬКО в sync-коллбеке tx() (BEGIN IMMEDIATE,
@@ -16,7 +16,8 @@ import { getDb } from '../db';
 
 export function priceCredits(usd: number): number {
   if (!Number.isFinite(usd) || usd <= 0) return 1;
-  return Math.max(1, Math.ceil(usd * config.creditMarkup * 100));
+  const marginPct = Number.isFinite(config.userMarginPct) ? Math.max(0, config.userMarginPct) : 25;
+  return Math.max(1, Math.ceil(usd * config.creditMarkup * (1 + marginPct / 100) * 100));
 }
 
 /** Синхронная транзакция: fn НЕ async — await внутри сломал бы атомарность. */

@@ -7,9 +7,12 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import { config } from '../config';
 import { wavespeed, type WaveSpeed, type WsPrediction } from '../wavespeed';
-import { estimateRender } from '../pricing';
+import { buildEstimate, estimateRender, estimateVideoRender } from '../pricing';
 import { enforceStorageCap, projectDir, refsDir, rendersDir, startDir } from '../storage';
+import { cutVideoSegment, extractFrameAt, stitchVideoSegments } from '../ffmpeg';
 import { parseFlags, type FlowFlags } from './orchestrator';
+import { generateStartFrame } from './startframe';
+import { planVideoSegments, SEAM_OVERLAP_SECONDS, type VideoSegmentPlan } from './segments';
 import { attachHoldGeneration, openHoldForProject, placeHold, priceCredits } from '../billing/credits';
 import {
   forceReleaseProjectHold,
@@ -17,7 +20,8 @@ import {
   releaseFlowHoldOnFailure,
   settleProjectHold,
 } from '../billing/flow';
-import type { VideoMeta } from '../../../shared/api-types';
+import type { FrameInfo, RefInfo, VideoMeta } from '../../../shared/api-types';
+import type { Analysis } from '../../../shared/analysis';
 
 /** Ошибка с HTTP-статусом для роутов (409 = гейт, 404 = нет объекта). */
 export class RenderGateError extends Error {
@@ -46,6 +50,9 @@ interface GenRow {
   balance_before_usd: number | null;
   retry_of: string | null;
   submitted_at: string | null;
+  segments_json: string | null;
+  segment_count: number;
+  segment_done: number;
 }
 
 interface AssetRef {
@@ -58,6 +65,28 @@ interface Assets {
   refs?: Record<string, AssetRef>; // refId → url
 }
 
+type LongSegmentStatus = 'planned' | 'prepared' | 'submitted' | 'done' | 'failed';
+interface LongSegmentState extends VideoSegmentPlan {
+  status: LongSegmentStatus;
+  sourceFile?: string;
+  anchorFile?: string;
+  startFile?: string;
+  videoUrl?: string;
+  startUrl?: string;
+  predictionId?: string;
+  submittedAt?: string;
+  outputFile?: string;
+  costUsd?: number | null;
+  costSource?: string | null;
+  nsfw?: string;
+}
+
+interface LongRenderState {
+  version: 1;
+  overlapSec: number;
+  segments: LongSegmentState[];
+}
+
 const ASSET_FRESH_MS = 6 * 24 * 3_600_000; // WaveSpeed хранит 7 дней; берём с запасом
 
 function db() {
@@ -68,7 +97,7 @@ function loadGen(genId: string): GenRow | undefined {
   return db().prepare(`SELECT * FROM generations WHERE id = ?`).get(genId) as GenRow | undefined;
 }
 
-/** Единственный активный рендер на весь сервис: и дельта баланса честная, и двойной траты нет. */
+/** Последний активный рендер (диагностика/обратная совместимость тестов). */
 export function activeGeneration(): { id: string; project_id: string } | null {
   const row = db()
     .prepare(
@@ -78,6 +107,16 @@ export function activeGeneration(): { id: string; project_id: string } | null {
     )
     .get() as { id: string; project_id: string } | undefined;
   return row ?? null;
+}
+
+export function activeGenerationCount(): number {
+  const row = db()
+    .prepare(
+      `SELECT COUNT(*) AS c FROM generations
+        WHERE status IN ('uploading_assets','submitted','rendering','downloading')`,
+    )
+    .get() as { c: number };
+  return row.c;
 }
 
 export function projectHasActiveGeneration(projectId: string): boolean {
@@ -111,6 +150,25 @@ function saveAssets(genId: string, assets: Assets): void {
   db()
     .prepare(`UPDATE generations SET ws_assets_json = ? WHERE id = ?`)
     .run(JSON.stringify(assets), genId);
+}
+
+function parseLongState(json: string | null): LongRenderState | null {
+  if (!json) return null;
+  try {
+    const state = JSON.parse(json) as LongRenderState;
+    return state?.version === 1 && Array.isArray(state.segments) && state.segments.length > 1
+      ? state
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLongState(genId: string, state: LongRenderState): void {
+  const done = state.segments.filter((s) => s.status === 'done').length;
+  db()
+    .prepare(`UPDATE generations SET segments_json = ?, segment_count = ?, segment_done = ? WHERE id = ?`)
+    .run(JSON.stringify(state), state.segments.length, done, genId);
 }
 
 function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean } = {}): void {
@@ -163,13 +221,22 @@ export interface StartRenderOpts {
   retryOf?: string;
   /** Явные флаги (для ручного рендера старой версии); по умолчанию — флаги проекта. */
   pollBaseMs?: number;
+  /** Только для интеграционных тестов длинного конвейера. */
+  _longHooks?: LongRenderHooks;
+}
+
+export interface LongRenderHooks {
+  cut?: typeof cutVideoSegment;
+  extract?: typeof extractFrameAt;
+  startFrame?: typeof generateStartFrame;
+  stitch?: typeof stitchVideoSegments;
 }
 
 /**
  * Создаёт генерацию. Свободный глобальный слот → detached-цепочка сразу
  * (upload → submit → poll → download); занятый → status='queued', FIFO-продвижение
- * promoteNext() по освобождению слота. Конкурентность остаётся 1 глобально —
- * иначе ломается факт по дельте баланса.
+ * promoteNext() по освобождению слота. Число параллельных удалённых рендеров
+ * задаётся RENDER_CONCURRENCY (по умолчанию 3).
  * Бросает RenderGateError при нарушении гейтов — строка генерации при этом НЕ создаётся.
  */
 export function startRender(projectId: string, version: number, opts: StartRenderOpts = {}): string {
@@ -241,7 +308,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
   };
   // Проверка слота и INSERT — синхронный блок без await: event-loop-атомарно,
   // двух uploading_assets не родится. 'queued' НЕ входит в ACTIVE_GEN_STATUSES.
-  const slotBusy = activeGeneration() !== null;
+  const slotBusy = activeGenerationCount() >= config.renderConcurrency;
   d.prepare(
     `INSERT INTO generations (id, project_id, version, status, params_json, retry_of, user_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -255,6 +322,30 @@ export function startRender(projectId: string, version: number, opts: StartRende
     p.user_id,
   );
 
+  // Retry длинного ролика переиспользует уже оплаченные/скачанные части. Только
+  // терминально упавший текущий кусок сбрасывается для нового сабмита.
+  if (opts.retryOf) {
+    const priorLong = parseLongState(loadGen(opts.retryOf)?.segments_json ?? null);
+    if (priorLong) {
+      for (const segment of priorLong.segments) {
+        if (segment.status === 'failed' || (segment.status === 'submitted' && !segment.outputFile)) {
+          segment.status = segment.sourceFile && segment.startFile ? 'prepared' : 'planned';
+          delete segment.predictionId;
+          delete segment.submittedAt;
+          delete segment.videoUrl;
+          delete segment.startUrl;
+        }
+      }
+      const priorWork = longWorkDir(projectId, opts.retryOf);
+      const nextWork = longWorkDir(projectId, genId);
+      if (fs.existsSync(priorWork)) {
+        fs.mkdirSync(path.dirname(nextWork), { recursive: true });
+        fs.cpSync(priorWork, nextWork, { recursive: true });
+      }
+      saveLongState(genId, priorLong);
+    }
+  }
+
   // Привязываем открытый резерв проекта к ЭТОЙ генерации сразу при создании: с этого
   // момента только её жизненный цикл может закрыть hold. Retry создаёт новый gen и
   // переклеивает hold на него → событие старого gen не тронет чужой резерв (F2).
@@ -267,7 +358,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
   void (async () => {
     try {
       const meta = JSON.parse(p.meta_json!) as VideoMeta;
-      const est = await estimateRender(meta.durationSec, ws);
+      const est = await estimateVideoRender(meta.durationSec, ws);
       db()
         .prepare(`UPDATE generations SET cost_est_json = ? WHERE id = ?`)
         .run(JSON.stringify({ wavespeedUsd: est.usd, billedSeconds: est.billedSeconds }), genId);
@@ -277,7 +368,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
   })();
 
   if (!slotBusy) {
-    void runUploadAndSubmit(genId, ws, opts.pollBaseMs).catch((e) => {
+    void runUploadAndSubmit(genId, ws, opts.pollBaseMs, opts._longHooks).catch((e) => {
       markFailed(genId, e instanceof Error ? e.message : String(e));
     });
   }
@@ -309,17 +400,18 @@ export function queuePositionOf(genId: string): number | null {
  */
 export function promoteNext(ws: WaveSpeed = wavespeed, pollBaseMs?: number): void {
   const d = db();
-  let claimed: string | null = null;
+  const claimed: string[] = [];
   d.exec('BEGIN IMMEDIATE');
   try {
-    if (!activeGeneration()) {
-      const next = d
-        .prepare(`SELECT id FROM generations WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1`)
-        .get() as { id: string } | undefined;
-      if (next) {
-        d.prepare(`UPDATE generations SET status = 'uploading_assets' WHERE id = ? AND status = 'queued'`).run(next.id);
-        claimed = next.id;
-      }
+    const openSlots = Math.max(0, config.renderConcurrency - activeGenerationCount());
+    const next = d
+      .prepare(`SELECT id FROM generations WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT ?`)
+      .all(openSlots) as Array<{ id: string }>;
+    for (const row of next) {
+      const changed = d
+        .prepare(`UPDATE generations SET status = 'uploading_assets' WHERE id = ? AND status = 'queued'`)
+        .run(row.id);
+      if (Number(changed.changes) > 0) claimed.push(row.id);
     }
     d.exec('COMMIT');
   } catch (e) {
@@ -327,8 +419,7 @@ export function promoteNext(ws: WaveSpeed = wavespeed, pollBaseMs?: number): voi
     console.error('[queue] promoteNext упал:', e instanceof Error ? e.message : e);
     return;
   }
-  if (claimed) {
-    const id = claimed;
+  for (const id of claimed) {
     console.log(`[queue] продвигаю gen=${id}`);
     void runUploadAndSubmit(id, ws, pollBaseMs).catch((e) => {
       markFailed(id, e instanceof Error ? e.message : String(e));
@@ -372,15 +463,27 @@ export function parseGenerateAudio(flagsJson: string | null | undefined): boolea
   }
 }
 
-async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: number): Promise<void> {
+async function runUploadAndSubmit(
+  genId: string,
+  ws: WaveSpeed,
+  pollBaseMs?: number,
+  longHooks?: LongRenderHooks,
+): Promise<void> {
   const d = db();
   const gen = loadGen(genId);
   if (!gen) return;
   const projectId = gen.project_id;
   const p = d
-    .prepare(`SELECT video_file, flags_json, user_id FROM projects WHERE id = ?`)
+    .prepare(`SELECT video_file, flags_json, user_id, meta_json, analysis_json, frames_json FROM projects WHERE id = ?`)
     .get(projectId) as
-    | { video_file: string | null; flags_json: string | null; user_id: string | null }
+    | {
+        video_file: string | null;
+        flags_json: string | null;
+        user_id: string | null;
+        meta_json: string | null;
+        analysis_json: string | null;
+        frames_json: string | null;
+      }
     | undefined;
   if (!p?.video_file) throw new Error('Исходник недоступен');
   // Не-владелец платит кредитами; тексты денежных отказов для него — без USD оператора
@@ -405,7 +508,7 @@ async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: num
       .prepare(`SELECT meta_json FROM projects WHERE id = ?`)
       .get(projectId) as { meta_json: string | null } | undefined;
     if (metaRow?.meta_json) {
-      renderEstUsd = (await estimateRender((JSON.parse(metaRow.meta_json) as VideoMeta).durationSec, ws)).usd;
+      renderEstUsd = (await estimateVideoRender((JSON.parse(metaRow.meta_json) as VideoMeta).durationSec, ws)).usd;
     }
   } catch {
     /* смета вторична — не блокируем */
@@ -425,11 +528,28 @@ async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: num
   if (metered) {
     let holdId = openHoldForProject(projectId)?.id ?? null;
     if (!holdId) {
-      if (renderEstUsd === null) {
+      let userEstimateUsd = renderEstUsd;
+      try {
+        const fullEstimate = await buildEstimate(
+          {
+            id: projectId,
+            frames_json: p.frames_json,
+            analysis_json: p.analysis_json,
+            flags_json: p.flags_json,
+            meta_json: p.meta_json,
+            video_purged: 0,
+          },
+          ws,
+        );
+        userEstimateUsd = fullEstimate.totalUsd;
+      } catch {
+        /* ниже fail-closed по доступности сметы */
+      }
+      if (userEstimateUsd === null) {
         markFailed(genId, 'Смета временно недоступна — попробуй чуть позже, кредиты не списаны');
         return;
       }
-      const res = placeHold(p.user_id!, projectId, priceCredits(renderEstUsd));
+      const res = placeHold(p.user_id!, projectId, priceCredits(userEstimateUsd));
       if (!res.ok) {
         markFailed(
           genId,
@@ -440,6 +560,30 @@ async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: num
       holdId = res.holdId;
     }
     attachHoldGeneration(holdId, genId);
+  }
+
+  const meta = p.meta_json ? (JSON.parse(p.meta_json) as VideoMeta) : null;
+  if (meta && meta.durationSec > 15) {
+    try {
+      await runLongVideo(
+        genId,
+        ws,
+        {
+          ...p,
+          video_file: p.video_file,
+          meta,
+          analysis: p.analysis_json ? (JSON.parse(p.analysis_json) as Analysis) : null,
+          frames: p.frames_json ? (JSON.parse(p.frames_json) as FrameInfo[]) : [],
+        },
+        refs as RefInfo[],
+        pollBaseMs,
+        longHooks,
+      );
+    } catch (e) {
+      const terminal = e instanceof LongWsFailure && e.terminal;
+      markFailed(genId, e instanceof Error ? e.message : String(e), { wsTerminal: terminal });
+    }
+    return;
   }
 
   // Переиспользуем свежие URL (ретрай после сбоя не перезаливает сотни мегабайт)
@@ -513,6 +657,326 @@ async function runUploadAndSubmit(genId: string, ws: WaveSpeed, pollBaseMs?: num
     return;
   }
   attachPoller(genId, ws, pollBaseMs);
+}
+
+class LongWsFailure extends Error {
+  terminal: boolean;
+  constructor(message: string, terminal = false) {
+    super(message);
+    this.name = 'LongWsFailure';
+    this.terminal = terminal;
+  }
+}
+
+const longRunners = new Set<string>();
+
+function longWorkDir(projectId: string, genId: string): string {
+  return path.join(projectDir(projectId), 'render-work', genId);
+}
+
+function longFile(projectId: string, genId: string, file: string): string {
+  return path.join(longWorkDir(projectId, genId), file);
+}
+
+function continuationImagePrompt(base: string, segment: LongSegmentState, count: number): string {
+  return `${base}\n\nCONTINUATION SEGMENT ${segment.index + 1}/${count}. Reference image 1 is the exact continuity anchor aligned with source time ${segment.startSec.toFixed(2)}s (preferably extracted from the already swapped previous segment). Treat it as a strict in-place edit: preserve its camera, pose, identity, silhouette, object placement, lighting and background pixel-for-pixel; change only the designated model/objects from the remaining reference images. This frame must connect naturally to the adjacent segment.`;
+}
+
+function continuationVideoPrompt(base: string, segment: LongSegmentState, count: number): string {
+  return `${base}\n\nCONTINUATION SEGMENT ${segment.index + 1}/${count}, source time ${segment.startSec.toFixed(2)}–${segment.endSec.toFixed(2)}s. Begin exactly from reference image 1 and preserve the source segment's local motion, camera path, timing and object contacts. Keep identity and lighting stable through the overlap so this segment crossfades seamlessly with its neighbours.`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitLongPrediction(
+  predictionId: string,
+  submittedAt: string,
+  ws: WaveSpeed,
+  baseMs: number,
+): Promise<WsPrediction> {
+  let errors = 0;
+  const started = Date.parse(submittedAt);
+  for (;;) {
+    if (Date.now() - started > config.renderPollBudgetMs) {
+      throw new LongWsFailure(
+        `Рендер части идёт дольше ${Math.round(config.renderPollBudgetMs / 60000)} мин — нажми «Проверить ещё раз»`,
+      );
+    }
+    let result: WsPrediction;
+    try {
+      result = await ws.pollResult(predictionId);
+      errors = 0;
+    } catch (e) {
+      errors++;
+      if (errors >= 5) {
+        throw new LongWsFailure(
+          `Сеть до WaveSpeed потеряна (${e instanceof Error ? e.message.slice(0, 120) : e}) — нажми «Проверить ещё раз»`,
+        );
+      }
+      await delay(baseMs * 2);
+      continue;
+    }
+    if (result.status === 'completed') return result;
+    if (result.status === 'failed') throw new LongWsFailure(ruWsFailure(result.error), true);
+    await delay(Date.now() - started > 120_000 ? baseMs * 2 : baseMs);
+  }
+}
+
+async function predictionCost(
+  durationSec: number,
+  result: WsPrediction,
+  ws: WaveSpeed,
+): Promise<{ usd: number | null; source: string | null }> {
+  const estimate = await estimateRender(durationSec, ws).catch(() => null);
+  const sanityCap = estimate?.usd ? estimate.usd * 3 : 50;
+  for (const key of ['cost', 'total_price', 'price', 'billing_amount']) {
+    const value = (result.raw as Record<string, unknown>)[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      const usd = [value, value / 100, value / 1e6].find(
+        (candidate) => candidate > 0.0005 && candidate <= sanityCap && candidate < 100,
+      );
+      if (usd !== undefined) return { usd: Math.round(usd * 10000) / 10000, source: 'api' };
+    }
+  }
+  return estimate?.usd !== null && estimate?.usd !== undefined
+    ? { usd: estimate.usd, source: 'formula' }
+    : { usd: null, source: null };
+}
+
+async function runLongVideo(
+  genId: string,
+  ws: WaveSpeed,
+  project: {
+    video_file: string;
+    flags_json: string | null;
+    user_id: string | null;
+    meta: VideoMeta;
+    analysis: Analysis | null;
+    frames: FrameInfo[];
+  },
+  refs: RefInfo[],
+  pollBaseMs?: number,
+  hooks: LongRenderHooks = {},
+): Promise<void> {
+  if (longRunners.has(genId)) return;
+  longRunners.add(genId);
+  const d = db();
+  const gen = loadGen(genId);
+  if (!gen) {
+    longRunners.delete(genId);
+    return;
+  }
+  const projectId = gen.project_id;
+  const source = path.join(projectDir(projectId), project.video_file);
+  const work = longWorkDir(projectId, genId);
+  fs.mkdirSync(work, { recursive: true });
+
+  try {
+    let state = parseLongState(gen.segments_json);
+    if (!state) {
+      state = {
+        version: 1,
+        overlapSec: SEAM_OVERLAP_SECONDS,
+        segments: planVideoSegments(project.meta.durationSec, project.analysis, project.frames).map((s) => ({
+          ...s,
+          status: 'planned',
+        })),
+      };
+      saveLongState(genId, state);
+    }
+
+    const prompts = d
+      .prepare(`SELECT kind, text FROM prompts WHERE project_id = ? AND version = ? AND kind IN ('image','video')`)
+      .all(projectId, gen.version) as Array<{ kind: 'image' | 'video'; text: string }>;
+    const imagePrompt = prompts.find((p) => p.kind === 'image')?.text;
+    const videoPrompt = prompts.find((p) => p.kind === 'video')?.text;
+    if (!imagePrompt || !videoPrompt) throw new LongWsFailure('Нет пары промтов для длинного рендера');
+
+    const assets: Assets = { refs: {}, ...freshAssets(gen.ws_assets_json) };
+    assets.refs ??= {};
+    const usableRefs = refs.slice(0, 8);
+    for (const ref of usableRefs) {
+      if (!assets.refs[ref.id]) {
+        const url = await ws.uploadBinary(path.join(refsDir(projectId), ref.file));
+        assets.refs[ref.id] = { url, at: new Date().toISOString() };
+        saveAssets(genId, assets);
+      }
+    }
+
+    const originalStart = latestStartFrame(projectId, gen.version);
+    if (!originalStart) throw new LongWsFailure('Стартовый кадр исчез — сгенерируй его заново');
+
+    for (const segment of state.segments) {
+      if (segment.status === 'done' && segment.outputFile && fs.existsSync(longFile(projectId, genId, segment.outputFile))) {
+        continue;
+      }
+      if (segment.status === 'done') segment.status = 'planned';
+
+      const number = String(segment.index + 1).padStart(2, '0');
+      if (!segment.sourceFile || !fs.existsSync(longFile(projectId, genId, segment.sourceFile))) {
+        segment.sourceFile = `segment_${number}_source.mp4`;
+        await (hooks.cut ?? cutVideoSegment)(source, longFile(projectId, genId, segment.sourceFile), segment.startSec, segment.endSec);
+      }
+
+      if (segment.index === 0) {
+        segment.startFile = originalStart;
+      } else if (!segment.startFile || !fs.existsSync(path.join(startDir(projectId), segment.startFile))) {
+        segment.anchorFile = `segment_${number}_anchor.jpg`;
+        const anchor = longFile(projectId, genId, segment.anchorFile);
+        const previous = state.segments[segment.index - 1];
+        const previousRender = previous?.outputFile
+          ? longFile(projectId, genId, previous.outputFile)
+          : null;
+        if (previous && previousRender && fs.existsSync(previousRender)) {
+          // Кадр уже содержит свап предыдущей части — это сильнее фиксирует identity
+          // на стыке, чем повторная генерация только от оригинального source-frame.
+          await (hooks.extract ?? extractFrameAt)(
+            previousRender,
+            Math.max(0, segment.startSec - previous.startSec),
+            anchor,
+          );
+        } else {
+          await (hooks.extract ?? extractFrameAt)(source, segment.startSec, anchor);
+        }
+        segment.startFile = `segment_${genId}_${number}_start.png`;
+        await (hooks.startFrame ?? generateStartFrame)(
+          projectId,
+          gen.version,
+          continuationImagePrompt(imagePrompt, segment, state.segments.length),
+          refs,
+          { ...project.meta, durationSec: segment.endSec - segment.startSec },
+          { forceNineSixteen: true, sourceFramePath: anchor, outputFile: segment.startFile },
+        );
+      }
+      segment.status = segment.predictionId ? 'submitted' : 'prepared';
+      saveLongState(genId, state);
+
+      let result: WsPrediction;
+      if (segment.predictionId) {
+        result = await waitLongPrediction(
+          segment.predictionId,
+          segment.submittedAt ?? new Date().toISOString(),
+          ws,
+          pollBaseMs ?? DEFAULT_POLL_BASE_MS,
+        );
+      } else {
+        // URL сегментных ассетов намеренно обновляются перед каждым новым сабмитом:
+        // retry через несколько дней не должен полагаться на истёкший CDN URL.
+        segment.videoUrl = await ws.uploadBinary(longFile(projectId, genId, segment.sourceFile));
+        segment.startUrl = await ws.uploadBinary(path.join(startDir(projectId), segment.startFile));
+        const fresh = loadGen(genId);
+        if (!fresh || !ACTIVE_GEN_STATUSES.includes(fresh.status)) return;
+        segment.predictionId = await ws.submitVideoEdit({
+          prompt: continuationVideoPrompt(videoPrompt, segment, state.segments.length),
+          video: segment.videoUrl,
+          reference_images: [segment.startUrl, ...usableRefs.map((r) => assets.refs![r.id]!.url)],
+          aspect_ratio: '9:16',
+          resolution: config.seedanceResolution,
+          generate_audio: parseGenerateAudio(project.flags_json),
+          enable_web_search: false,
+        });
+        segment.submittedAt = new Date().toISOString();
+        segment.status = 'submitted';
+        d.prepare(
+          `UPDATE generations SET ws_prediction_id = ?, status = 'submitted',
+             submitted_at = COALESCE(submitted_at, datetime('now')) WHERE id = ?`,
+        ).run(segment.predictionId, genId);
+        saveLongState(genId, state);
+        result = await waitLongPrediction(
+          segment.predictionId,
+          segment.submittedAt,
+          ws,
+          pollBaseMs ?? DEFAULT_POLL_BASE_MS,
+        );
+      }
+
+      const output = result.outputs[0];
+      if (!output) throw new LongWsFailure('WaveSpeed не вернул ссылку на результат части');
+      d.prepare(`UPDATE generations SET status = 'downloading' WHERE id = ?`).run(genId);
+      segment.outputFile = `segment_${number}_render.mp4`;
+      await ws.downloadOutput(output, longFile(projectId, genId, segment.outputFile), config.renderMaxBytes);
+      const cost = await predictionCost(segment.endSec - segment.startSec, result, ws);
+      segment.costUsd = cost.usd;
+      segment.costSource = cost.source;
+      segment.nsfw = extractNsfw(result.raw);
+      segment.status = 'done';
+      saveLongState(genId, state);
+      if (segment.index < state.segments.length - 1) {
+        d.prepare(`UPDATE generations SET status = 'rendering' WHERE id = ?`).run(genId);
+      }
+    }
+
+    const outputs = state.segments.map((s) => longFile(projectId, genId, s.outputFile!));
+    const file = `gen_${genId}.mp4`;
+    const dest = path.join(rendersDir(projectId), file);
+    d.prepare(`UPDATE generations SET status = 'downloading' WHERE id = ?`).run(genId);
+    const bytes = await (hooks.stitch ?? stitchVideoSegments)(outputs, dest, state.overlapSec, source);
+    const knownCosts = state.segments.map((s) => s.costUsd).filter((n): n is number => typeof n === 'number');
+    const costUsd = knownCosts.length === state.segments.length
+      ? Math.round(knownCosts.reduce((sum, n) => sum + n, 0) * 10000) / 10000
+      : null;
+    const sources = new Set(state.segments.map((s) => s.costSource).filter(Boolean));
+    const costSource = sources.size === 1 ? ([...sources][0] ?? null) : knownCosts.length ? 'formula' : null;
+    const nsfw = state.segments.map((s) => s.nsfw).filter(Boolean).join(' · ');
+    d.prepare(
+      `UPDATE generations SET status = 'done', file = ?, bytes = ?, error = NULL,
+          cost_actual_usd = ?, cost_source = ?, segment_done = segment_count,
+          finished_at = datetime('now'), notes = CASE WHEN notes = '' AND ? != '' THEN ? ELSE notes END
+        WHERE id = ?`,
+    ).run(file, bytes, costUsd, costSource, nsfw, nsfw, genId);
+    settleProjectHold(projectId, genId, costUsd);
+    fs.rmSync(work, { recursive: true, force: true });
+    enforceStorageCap();
+    console.log(`[render-long] done gen=${genId} segments=${state.segments.length} bytes=${bytes} cost=$${costUsd ?? '?'}`);
+    promoteNext(ws);
+  } catch (e) {
+    const state = parseLongState(loadGen(genId)?.segments_json ?? null);
+    if (e instanceof LongWsFailure && e.terminal && state) {
+      const current = state.segments.find((s) => s.status === 'submitted');
+      if (current) current.status = 'failed';
+      saveLongState(genId, state);
+    }
+    throw e;
+  } finally {
+    longRunners.delete(genId);
+  }
+}
+
+async function resumeLongVideo(genId: string, ws: WaveSpeed, pollBaseMs?: number): Promise<void> {
+  const gen = loadGen(genId);
+  if (!gen) return;
+  const p = db()
+    .prepare(`SELECT video_file, flags_json, user_id, meta_json, analysis_json, frames_json FROM projects WHERE id = ?`)
+    .get(gen.project_id) as
+    | {
+        video_file: string | null;
+        flags_json: string | null;
+        user_id: string | null;
+        meta_json: string | null;
+        analysis_json: string | null;
+        frames_json: string | null;
+      }
+    | undefined;
+  if (!p?.video_file || !p.meta_json) throw new LongWsFailure('Исходник длинного ролика недоступен');
+  const refs = db()
+    .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
+    .all(gen.project_id) as unknown as RefInfo[];
+  await runLongVideo(
+    genId,
+    ws,
+    {
+      video_file: p.video_file,
+      flags_json: p.flags_json,
+      user_id: p.user_id,
+      meta: JSON.parse(p.meta_json) as VideoMeta,
+      analysis: p.analysis_json ? (JSON.parse(p.analysis_json) as Analysis) : null,
+      frames: p.frames_json ? (JSON.parse(p.frames_json) as FrameInfo[]) : [],
+    },
+    refs,
+    pollBaseMs,
+  );
 }
 
 // ── Поллер ──────────────────────────────────────────────────────────────────
@@ -686,8 +1150,9 @@ async function captureCost(
       if (usd !== undefined) return { usd: Math.round(usd * 10000) / 10000, source: 'api' };
     }
   }
-  // 2) дельта баланса (надёжна: рендер-конкурентность = 1)
-  if (typeof gen.balance_before_usd === 'number') {
+  // 2) дельта баланса валидна только в явно однопоточном режиме. При параллельных
+  // рендерах она смешивает списания разных пользователей — тогда сразу идём к формуле.
+  if (config.renderConcurrency === 1 && typeof gen.balance_before_usd === 'number') {
     try {
       const after = await ws.getBalance();
       const delta = gen.balance_before_usd - after;
@@ -704,7 +1169,7 @@ async function captureCost(
       .get(gen.project_id) as { meta_json: string | null } | undefined;
     if (meta?.meta_json) {
       const m = JSON.parse(meta.meta_json) as VideoMeta;
-      const e = await estimateRender(m.durationSec, ws);
+      const e = await estimateVideoRender(m.durationSec, ws);
       if (e.usd !== null) return { usd: e.usd, source: 'formula' };
     }
   } catch {
@@ -740,9 +1205,19 @@ export function resumeGenerations(ws: WaveSpeed = wavespeed): { failed: number; 
   // финала (status IN submitted/rendering/failed) иначе не пустил бы поллер к повтору
   d.prepare(`UPDATE generations SET status = 'rendering' WHERE status = 'downloading'`).run();
   const rows = d
-    .prepare(`SELECT id FROM generations WHERE status IN ('submitted','rendering')`)
-    .all() as Array<{ id: string }>;
-  for (const row of rows) attachPoller(row.id, ws);
+    .prepare(`SELECT id, segments_json FROM generations WHERE status IN ('submitted','rendering')`)
+    .all() as Array<{ id: string; segments_json: string | null }>;
+  for (const row of rows) {
+    if (parseLongState(row.segments_json)) {
+      void resumeLongVideo(row.id, ws).catch((e) => {
+        markFailed(row.id, e instanceof Error ? e.message : String(e), {
+          wsTerminal: e instanceof LongWsFailure && e.terminal,
+        });
+      });
+    } else {
+      attachPoller(row.id, ws);
+    }
+  }
   if (failed || rows.length) {
     console.log(`[render] resume: поллеров=${rows.length}, прерванных аплоадов=${failed}`);
   }
@@ -761,6 +1236,22 @@ export async function retryGeneration(genId: string, ws: WaveSpeed = wavespeed):
   const gen = loadGen(genId);
   if (!gen) throw new RenderGateError(404, 'Генерация не найдена');
   if (gen.status !== 'failed') throw new RenderGateError(409, 'Повторить можно только неудавшийся рендер');
+  const longState = parseLongState(gen.segments_json);
+  // Если все удалённые части уже готовы, упала только локальная склейка/диск. Не
+  // создаём новый рендер и не рискуем повторным списанием — просто продолжаем финал.
+  if (
+    longState &&
+    !longState.segments.some((s) => s.status === 'failed') &&
+    (!!gen.ws_prediction_id || !!openHoldForProject(gen.project_id))
+  ) {
+    db().prepare(`UPDATE generations SET status = 'rendering', error = NULL, finished_at = NULL WHERE id = ?`).run(genId);
+    void resumeLongVideo(genId, ws).catch((e) => {
+      markFailed(genId, e instanceof Error ? e.message : String(e), {
+        wsTerminal: e instanceof LongWsFailure && e.terminal,
+      });
+    });
+    return genId;
+  }
   if (gen.ws_prediction_id) {
     let r: WsPrediction;
     try {
@@ -793,6 +1284,25 @@ export async function recheckGeneration(genId: string, ws: WaveSpeed = wavespeed
   const gen = loadGen(genId);
   if (!gen) throw new RenderGateError(404, 'Генерация не найдена');
   if (gen.status === 'done') return 'done';
+  const longState = parseLongState(gen.segments_json);
+  if (longState) {
+    if (longState.segments.some((s) => s.status === 'failed')) return 'failed';
+    if (!gen.ws_prediction_id) {
+      throw new RenderGateError(409, 'Удалённая задача ещё не стартовала — используй «Повторить рендер»');
+    }
+    if (activeGenerationCount() >= config.renderConcurrency && !ACTIVE_GEN_STATUSES.includes(gen.status)) {
+      throw new RenderGateError(409, 'Все слоты заняты другими рендерами — проверь чуть позже');
+    }
+    db().prepare(
+      `UPDATE generations SET status = 'rendering', error = NULL, finished_at = NULL WHERE id = ?`,
+    ).run(genId);
+    void resumeLongVideo(genId, ws).catch((e) => {
+      markFailed(genId, e instanceof Error ? e.message : String(e), {
+        wsTerminal: e instanceof LongWsFailure && e.terminal,
+      });
+    });
+    return 'rendering';
+  }
   if (!gen.ws_prediction_id) throw new RenderGateError(409, 'У этой генерации нет id задачи WaveSpeed');
   const r = await ws.pollResult(gen.ws_prediction_id);
   if (r.status === 'completed') {
@@ -804,9 +1314,8 @@ export async function recheckGeneration(genId: string, ws: WaveSpeed = wavespeed
     return 'failed';
   }
   // всё ещё в работе на стороне WaveSpeed
-  const other = activeGeneration();
-  if (other && other.id !== genId) {
-    throw new RenderGateError(409, 'Задача ещё рендерится у WaveSpeed, но сейчас идёт другой рендер — проверь позже');
+  if (activeGenerationCount() >= config.renderConcurrency && !ACTIVE_GEN_STATUSES.includes(gen.status)) {
+    throw new RenderGateError(409, 'Задача ещё рендерится у WaveSpeed, но все слоты заняты — проверь позже');
   }
   db()
     .prepare(

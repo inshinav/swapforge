@@ -205,3 +205,108 @@ export async function storyboard(
   }
   return frames;
 }
+
+/** Точный source-frame для начала следующего сегмента (не зависит от keyframe исходника). */
+export async function extractFrameAt(videoFile: string, atSec: number, outputFile: string): Promise<void> {
+  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+  await run('ffmpeg', [
+    '-y', '-ss', Math.max(0, atSec).toFixed(3), '-i', videoFile,
+    '-vf', SCALE_FIRST, '-frames:v', '1', '-q:v', '2', outputFile,
+  ]);
+}
+
+/** Кадрово-точная нарезка; re-encode нужен, чтобы каждый кусок действительно начинался с anchor. */
+export async function cutVideoSegment(
+  videoFile: string,
+  outputFile: string,
+  startSec: number,
+  endSec: number,
+): Promise<void> {
+  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+  await run(
+    'ffmpeg',
+    [
+      '-y', '-ss', Math.max(0, startSec).toFixed(3), '-i', videoFile,
+      '-t', Math.max(0.1, endSec - startSec).toFixed(3),
+      '-map', '0:v:0', '-map', '0:a:0?',
+      '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outputFile,
+    ],
+    10 * 60_000,
+  );
+}
+
+async function mediaShape(file: string): Promise<{ duration: number; hasAudio: boolean }> {
+  const { stdout } = await run('ffprobe', [
+    '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file,
+  ]);
+  const j = JSON.parse(stdout) as {
+    format?: { duration?: string };
+    streams?: Array<{ codec_type?: string; duration?: string }>;
+  };
+  const video = j.streams?.find((s) => s.codec_type === 'video');
+  return {
+    duration: Number(j.format?.duration ?? video?.duration ?? 0),
+    hasAudio: !!j.streams?.some((s) => s.codec_type === 'audio'),
+  };
+}
+
+/**
+ * Склеивает готовые части через короткий xfade. Если у всех частей есть звук —
+ * синхронный acrossfade; иначе берёт непрерывную дорожку исходника как безопасный fallback.
+ */
+export async function stitchVideoSegments(
+  segmentFiles: string[],
+  outputFile: string,
+  overlapSec: number,
+  sourceAudioFile?: string,
+): Promise<number> {
+  if (segmentFiles.length === 0) throw new Error('Нет сегментов для склейки');
+  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+  if (segmentFiles.length === 1) {
+    fs.copyFileSync(segmentFiles[0]!, outputFile);
+    return fs.statSync(outputFile).size;
+  }
+
+  const shapes = await Promise.all(segmentFiles.map(mediaShape));
+  const allHaveAudio = shapes.every((s) => s.hasAudio);
+  const inputs = segmentFiles.flatMap((f) => ['-i', f]);
+  if (!allHaveAudio && sourceAudioFile) inputs.push('-i', sourceAudioFile);
+
+  const filters: string[] = [];
+  for (let i = 0; i < segmentFiles.length; i++) {
+    filters.push(
+      `[${i}:v]fps=30,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[v${i}]`,
+    );
+    if (allHaveAudio) filters.push(`[${i}:a]aresample=async=1:first_pts=0[a${i}]`);
+  }
+
+  let videoLabel = 'v0';
+  let audioLabel = 'a0';
+  let mergedDuration = shapes[0]!.duration;
+  for (let i = 1; i < segmentFiles.length; i++) {
+    const seam = Math.max(0.15, Math.min(overlapSec, mergedDuration / 3, shapes[i]!.duration / 3));
+    const offset = Math.max(0, mergedDuration - seam);
+    const nextVideo = `vx${i}`;
+    filters.push(`[${videoLabel}][v${i}]xfade=transition=fade:duration=${seam.toFixed(3)}:offset=${offset.toFixed(3)}[${nextVideo}]`);
+    videoLabel = nextVideo;
+    if (allHaveAudio) {
+      const nextAudio = `ax${i}`;
+      filters.push(`[${audioLabel}][a${i}]acrossfade=d=${seam.toFixed(3)}:c1=tri:c2=tri[${nextAudio}]`);
+      audioLabel = nextAudio;
+    }
+    mergedDuration += shapes[i]!.duration - seam;
+  }
+
+  const args = [
+    '-y', ...inputs, '-filter_complex', filters.join(';'), '-map', `[${videoLabel}]`,
+  ];
+  if (allHaveAudio) args.push('-map', `[${audioLabel}]`);
+  else if (sourceAudioFile) args.push('-map', `${segmentFiles.length}:a:0?`, '-t', mergedDuration.toFixed(3));
+  args.push(
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outputFile,
+  );
+  await run('ffmpeg', args, 20 * 60_000);
+  return fs.statSync(outputFile).size;
+}

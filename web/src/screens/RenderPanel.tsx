@@ -104,6 +104,7 @@ function GenMeta({ g }: { g: GenerationRow }) {
     <div className="flex flex-wrap gap-2">
       <Tag>{p.generate_audio === false ? 'звук исходника' : 'нативный звук'}</Tag>
       <Tag>версия промтов {g.version}</Tag>
+      {(g.segmentCount ?? 1) > 1 && <Tag tone="lime">бесшовно собрано из {g.segmentCount} частей</Tag>}
       {g.costActualUsd !== null ? (
         <Tag tone="ok">
           факт ${g.costActualUsd.toFixed(2)}

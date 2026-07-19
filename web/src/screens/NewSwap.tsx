@@ -113,7 +113,7 @@ function WelcomeChecklist({ onOpenModels }: { onOpenModels: () => void }) {
                 sub="создай её и добавь реф-лист персонажа"
                 onClick={hasModels ? undefined : onOpenModels}
               />
-              <Step done={hasProjects} n={2} title="Загрузи ролик" sub="4–15 секунд, один герой в кадре" />
+              <Step done={hasProjects} n={2} title="Загрузи ролик" sub="любой длины, лучше один герой в кадре" />
               <Step done={false} n={3} title="Жми кнопку модели" sub="весь конвейер поедет сам" />
             </div>
           </div>
@@ -386,7 +386,7 @@ function UploadZone({ onCreated }: { onCreated: (id: string) => void }) {
             <div className="text-5xl mb-4">🎬</div>
             <div className="text-lg font-bold">Кинь сюда исходный ролик</div>
             <div className="text-sm text-mut mt-2">
-              mp4 / mov · до 300 МБ · идеально 4–15 секунд
+              mp4 / mov · до 300 МБ · длинные ролики сервис сам нарежет и бесшовно соберёт
             </div>
             <div className="text-xs text-dim mt-4">
               Дальше выбери свою модель — анализ, промты и рендер поедут сами
@@ -434,7 +434,7 @@ function VideoSection({
 }) {
   const m = proj.meta;
   const storyboarding = proj.status === 'storyboarding';
-  const longWarn = m && m.durationSec > 15.5;
+  const longWarn = m && m.durationSec > 15;
 
   return (
     <Card>
@@ -468,7 +468,7 @@ function VideoSection({
           {m && (
             <div className="flex flex-wrap gap-2 mb-4">
               <Tag tone={longWarn ? 'warn' : 'mut'}>
-                {m.durationSec.toFixed(1)} с{longWarn ? ' · Seedance кламп 4–15 с' : ''}
+                {m.durationSec.toFixed(1)} с{longWarn ? ' · будет собрано из частей до 15 с' : ''}
               </Tag>
               <Tag>{m.fps} fps</Tag>
               <Tag>{(m.sizeBytes / 1024 ** 2).toFixed(1)} МБ</Tag>

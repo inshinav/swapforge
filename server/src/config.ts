@@ -48,8 +48,10 @@ export const config = {
   /** Дев-вход без Telegram (localhost не привязать к BotFather). Запрещён в prod. */
   devAuthBypass: env('AUTH_DEV_BYPASS') === '1',
   // ── v4: кредиты/биллинг ──────────────────────────────────────────────────
-  /** 1 кредит = 1 «цена-цент»: priceCredits(usd) = ceil(usd × markup × 100). */
+  /** Технический коэффициент себестоимости (буфер тарифов/ретраев). */
   creditMarkup: Number(env('CREDIT_MARKUP', '2')),
+  /** Пользовательская маржа поверх рассчитанной себестоимости. 25 = +25%. */
+  userMarginPct: Number(env('USER_MARGIN_PCT', '25')),
   /** Какие платёжные провайдеры активны: 'cryptopay,lavatop'. */
   billingProviders: env('BILLING_PROVIDERS', 'cryptopay'),
   /** Crypto Pay (@CryptoBot): токен приложения + флаг тестовой сети. */
@@ -67,6 +69,8 @@ export const config = {
   userStorageCapBytes: Number(env('USER_STORAGE_CAP_GB', '3')) * 1024 ** 3,
   /** Очередь рендеров: максимум queued-задач на пользователя. */
   userQueueCap: Number(env('USER_QUEUE_CAP', '2')),
+  /** Одновременные удалённые рендеры разных проектов; остальные остаются FIFO. */
+  renderConcurrency: Math.max(1, Math.min(8, Number(env('RENDER_CONCURRENCY', '3')) || 3)),
   /** Дневные анти-абьюз капы (UTC-сутки). */
   limitProjectsPerDay: Number(env('LIMIT_PROJECTS_PER_DAY', '20')),
   limitClassifyPerDay: Number(env('LIMIT_CLASSIFY_PER_DAY', '60')),

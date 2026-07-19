@@ -240,6 +240,10 @@ export function applySchema(d: DatabaseSync): void {
   // удаление проекта). NOT NULL не навешиваем: легаси-строки добирает m001-backfill.
   ensureColumn(d, 'projects', 'user_id', `user_id TEXT`);
   ensureColumn(d, 'generations', 'user_id', `user_id TEXT`);
+  // Длинный рендер: чекпойнт плана/предиктов/локальных частей + прогресс для UI.
+  ensureColumn(d, 'generations', 'segments_json', `segments_json TEXT`);
+  ensureColumn(d, 'generations', 'segment_count', `segment_count INTEGER NOT NULL DEFAULT 1`);
+  ensureColumn(d, 'generations', 'segment_done', `segment_done INTEGER NOT NULL DEFAULT 0`);
   ensureColumn(d, 'usage_events', 'user_id', `user_id TEXT`);
   // email покупателя (Lava.top требует в инвойсе; спрашиваем при первой оплате картой)
   ensureColumn(d, 'users', 'email', `email TEXT`);

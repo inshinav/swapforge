@@ -121,6 +121,8 @@ interface DbGeneration {
   created_at: string;
   submitted_at: string | null;
   finished_at: string | null;
+  segment_count?: number;
+  segment_done?: number;
 }
 
 function toGeneration(g: DbGeneration): GenerationRow {
@@ -147,6 +149,8 @@ function toGeneration(g: DbGeneration): GenerationRow {
     uploadSec: secsBetween(g.created_at, g.submitted_at),
     renderSec: g.status === 'done' || g.status === 'failed' ? secsBetween(g.submitted_at, g.finished_at) : null,
     queuePosition: g.status === 'queued' ? queuePositionOf(g.id) : null,
+    segmentCount: g.segment_count ?? 1,
+    segmentDone: g.segment_done ?? 0,
   };
 }
 

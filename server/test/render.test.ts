@@ -8,6 +8,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-render-t
 process.env.WAVESPEED_API_KEY = 'test-key';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.AUTH_DEV_BYPASS = '1'; // роут-тесты логинятся dev-входом (см. helpers.makeAuthedApp)
+process.env.RENDER_CONCURRENCY = '1';
 
 const { getDb } = await import('../src/db');
 const {

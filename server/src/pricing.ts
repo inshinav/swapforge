@@ -7,6 +7,7 @@ import { getDb } from './db';
 import { config, modelChainFor } from './config';
 import { wavespeed, type WaveSpeed, type WsModelEntry } from './wavespeed';
 import { remainingStages, snapshotProject, type ProjectRowLike, type StageName } from './engine/orchestrator';
+import { segmentDurations } from './engine/segments';
 import type { EstimateInfo, EstimateTaskRow, VideoMeta } from '../../shared/api-types';
 
 export type UsageTask = 'video_analysis' | 'prompt_pair' | 'start_frame' | 'classify_ref' | 'describe_ref';
@@ -269,6 +270,28 @@ export async function estimateRender(durationSec: number, ws: WaveSpeed = wavesp
   }
 }
 
+/** Полная цена исходника любой длины: сумма реальных Seedance-задач по кускам <=15с. */
+export async function estimateVideoRender(
+  durationSec: number,
+  ws: WaveSpeed = wavespeed,
+): Promise<WsEstimatePart> {
+  const durations = segmentDurations(durationSec);
+  const parts: WsEstimatePart[] = [];
+  // Первый вызов прогревает live/LKG тариф; последовательность не создаёт N одинаковых
+  // запросов в каталог при холодном старте длинного ролика.
+  for (const duration of durations) parts.push(await estimateRender(duration, ws));
+  const unavailable = parts.find((p) => p.usd === null || p.unavailableReason);
+  const billedSeconds = parts.reduce((sum, p) => sum + p.billedSeconds, 0);
+  const usd = unavailable ? null : parts.reduce((sum, p) => sum + (p.usd ?? 0), 0);
+  return {
+    usd,
+    billedSeconds,
+    perSecondUsd: usd === null || billedSeconds === 0 ? null : usd / billedSeconds,
+    priceDate: parts.map((p) => p.priceDate).find(Boolean) ?? null,
+    unavailableReason: unavailable?.unavailableReason ?? null,
+  };
+}
+
 export async function getBalanceCached(ws: WaveSpeed = wavespeed, force = false): Promise<number | null> {
   if (!force && mem.balance && Date.now() - mem.balance.at < 60_000) return mem.balance.usd;
   try {
@@ -334,11 +357,25 @@ export async function buildEstimate(project: EstimateProjectRow, ws: WaveSpeed =
     if (!price) warnings.push(`нет тарифа для ${model} — цену этой задачи покажу после прогона`);
     perTask.push({ task, model, tokensIn: f.tokensIn, tokensOut: f.tokensOut, usd, basis: f.basis });
   }
+  const meta = project.meta_json ? (JSON.parse(project.meta_json) as VideoMeta) : null;
+  // Для каждого продолжения нужен свой GPT Image start-frame. Базовый кадр уже
+  // учтён стадией startframe; эти строки — только дополнительные границы сегментов.
+  if (meta && stages.includes('render')) {
+    const extraStartFrames = Math.max(0, segmentDurations(meta.durationSec).length - 1);
+    for (let i = 0; i < extraStartFrames; i++) {
+      const task: UsageTask = 'start_frame';
+      const f = forecastTokens(task);
+      const model = taskModel(task);
+      const price = priceForCached(model);
+      const usd = price ? (f.tokensIn * price.inPerM + f.tokensOut * price.outPerM) / 1e6 : null;
+      if (!price) warnings.push(`нет тарифа для ${model} — цену кадра склейки покажу после прогона`);
+      perTask.push({ task: `start_frame_segment_${i + 2}`, model, tokensIn: f.tokensIn, tokensOut: f.tokensOut, usd, basis: f.basis });
+    }
+  }
   const known = perTask.filter((r) => r.usd !== null);
   const openaiUsd =
     perTask.length === 0 ? 0 : known.length > 0 ? known.reduce((s, r) => s + (r.usd ?? 0), 0) : null;
 
-  const meta = project.meta_json ? (JSON.parse(project.meta_json) as VideoMeta) : null;
   let wsPart: WsEstimatePart;
   if (!meta) {
     wsPart = {
@@ -349,8 +386,9 @@ export async function buildEstimate(project: EstimateProjectRow, ws: WaveSpeed =
       unavailableReason: 'нет метаданных видео',
     };
   } else {
-    wsPart = await estimateRender(meta.durationSec, ws);
-    if (meta.durationSec > 15.5) warnings.push('исходник длиннее 15 с — WaveSpeed возьмёт первые 15 с');
+    wsPart = await estimateVideoRender(meta.durationSec, ws);
+    const count = segmentDurations(meta.durationSec).length;
+    if (count > 1) warnings.push(`длинный исходник будет бесшовно собран из ${count} частей`);
   }
   if (wsPart.unavailableReason) warnings.push(`оценка WaveSpeed недоступна: ${wsPart.unavailableReason}`);
   if (project.video_purged === 1) {

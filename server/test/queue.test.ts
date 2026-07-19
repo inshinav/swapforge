@@ -10,11 +10,13 @@ process.env.AUTH_DEV_BYPASS = '1';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.WAVESPEED_API_KEY = 'test-key';
 process.env.USER_QUEUE_CAP = '2';
+process.env.RENDER_CONCURRENCY = '1';
 
 const { getDb } = await import('../src/db');
 const {
   RenderGateError,
   activeGeneration,
+  activeGenerationCount,
   cancelQueued,
   promoteNext,
   queuePositionOf,
@@ -99,6 +101,22 @@ function genStatus(id: string): string | undefined {
 }
 
 describe('FIFO-очередь', () => {
+  it('до RENDER_CONCURRENCY проектов рендерятся одновременно, следующий остаётся FIFO', async () => {
+    const original = config.renderConcurrency;
+    (config as { renderConcurrency: number }).renderConcurrency = 3;
+    try {
+      const ws = fakeWs({ pollScript: [{ status: 'processing' }] });
+      const gens = Array.from({ length: 4 }, () => startRender(readyProject(OWNER_ID), 1, { ws, pollBaseMs: 5 }));
+      expect(gens.slice(0, 3).every((g) => genStatus(g) !== 'queued')).toBe(true);
+      expect(genStatus(gens[3]!)).toBe('queued');
+      expect(activeGenerationCount()).toBe(3);
+      getDb().prepare(`UPDATE generations SET status='failed' WHERE id IN (?, ?, ?, ?)`).run(...gens);
+      await new Promise((r) => setTimeout(r, 15));
+    } finally {
+      (config as { renderConcurrency: number }).renderConcurrency = original;
+    }
+  });
+
   it('занятый слот → queued с позицией; финал первого продвигает второй; порядок FIFO', async () => {
     const ws = fakeWs({ pollScript: [{ status: 'processing' }, { status: 'processing' }, { status: 'completed' }] });
     const p1 = readyProject(OWNER_ID);
