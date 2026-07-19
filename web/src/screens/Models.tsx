@@ -2,11 +2,14 @@
 // Качество кнопки = качество ноты: «Описать автоматически» даёт черновик по анатомии
 // фирменных пресетов, юзер правит руками. Всё приватно, шаринга нет.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ModelInfo, ModelRefInfo } from '@shared/api-types';
+import type { ModelInfo, ModelRefInfo, ModelVariantInfo } from '@shared/api-types';
 import { REF_ROLES, type RefRole } from '@shared/taxonomy';
 import { api } from '../api';
 
 const ROLE_OPTIONS = Object.entries(REF_ROLES) as Array<[RefRole, { ru: string; en: string }]>;
+const MODEL_ONLY_HINT = 'Модель в одном образе со всех ракурсов';
+const MODEL_OBJECT_HINT = 'Модель + объект или транспорт';
+type PresetKind = 'model' | 'model_object';
 import { Button, Card, Empty, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 export default function Models({ guided = false, onProgressChange }: { guided?: boolean; onProgressChange?: () => void }) {
@@ -34,7 +37,7 @@ export default function Models({ guided = false, onProgressChange }: { guided?: 
     setErr('');
     try {
       const { id } = await api.createModel(name);
-      await api.addModelVariant(id, 'Базовый', '');
+      await api.addModelVariant(id, 'Базовый образ', MODEL_ONLY_HINT);
       setNewName('');
       reload();
     } catch (e) {
@@ -92,8 +95,12 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
   const [sel, setSel] = useState<string | 'shared'>(model.variants[0]?.id ?? 'shared');
   const [err, setErr] = useState('');
   const [confirmDel, setConfirmDel] = useState(false);
+  const [addingPreset, setAddingPreset] = useState(false);
   const [newVariant, setNewVariant] = useState('');
+  const [newKind, setNewKind] = useState<PresetKind>('model');
+  const [creatingVariant, setCreatingVariant] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRoleRef = useRef<RefRole>('model');
   const [uploading, setUploading] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
 
@@ -114,16 +121,35 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
     }
   };
 
-  const refsShown = model.refs.filter((r) => (sel === 'shared' ? r.variantId === null : r.variantId === sel));
+  const selectedVariant = sel === 'shared' ? null : model.variants.find((v) => v.id === sel) ?? null;
+  const sharedRefs = model.refs.filter((r) => r.variantId === null);
+  const ownRefs = sel === 'shared' ? sharedRefs : model.refs.filter((r) => r.variantId === sel);
+  const includedRefs = sel === 'shared' ? sharedRefs : [...ownRefs, ...sharedRefs];
+  const presetKind = selectedVariant ? getPresetKind(selectedVariant, includedRefs) : null;
+  const modelRefCount = includedRefs.filter((r) => r.role === 'model').length;
+  const objectRefCount = includedRefs.filter((r) => r.role !== 'model').length;
 
-  const upload = async (file: File) => {
+  const openUpload = (role: RefRole) => {
+    uploadRoleRef.current = role;
+    fileRef.current?.click();
+  };
+
+  const upload = async (files: FileList) => {
     setUploading(true);
     setErr('');
     setWarnings([]);
     try {
-      const role = sel === 'shared' ? 'vehicle' : 'model';
-      const res = await api.addModelRef(model.id, file, role, sel === 'shared' ? null : sel);
-      setWarnings(res.warnings);
+      const nextWarnings: string[] = [];
+      for (const file of Array.from(files)) {
+        const res = await api.addModelRef(
+          model.id,
+          file,
+          uploadRoleRef.current,
+          sel === 'shared' ? null : sel,
+        );
+        nextWarnings.push(...res.warnings);
+      }
+      setWarnings(nextWarnings);
       onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -133,11 +159,26 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
     }
   };
 
-  const addVariant = () => {
+  const addVariant = async () => {
     const title = newVariant.trim();
     if (!title) return;
-    setNewVariant('');
-    void act(() => api.addModelVariant(model.id, title));
+    setCreatingVariant(true);
+    setErr('');
+    try {
+      await api.addModelVariant(
+        model.id,
+        title,
+        newKind === 'model_object' ? MODEL_OBJECT_HINT : MODEL_ONLY_HINT,
+      );
+      setNewVariant('');
+      setNewKind('model');
+      setAddingPreset(false);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreatingVariant(false);
+    }
   };
 
   return (
@@ -168,91 +209,282 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
         </div>
 
         {/* Пресеты (варианты модели / кнопки свапа) + общие рефы */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {model.variants.map((v) => (
-            <VariantChip
-              key={v.id}
-              active={sel === v.id}
-              title={v.title}
-              onSelect={() => setSel(v.id)}
-              onRename={(t) => void act(() => api.patchModelVariant(model.id, v.id, { title: t }))}
-              onDelete={
-                model.variants.length > 1
-                  ? () => void act(() => api.deleteModelVariant(model.id, v.id))
-                  : undefined
-              }
-            />
-          ))}
-          <button
-            type="button"
-            onClick={() => setSel('shared')}
-            className={`min-h-11 px-2.5 py-1 rounded-lg text-xs border transition-colors ${
-              sel === 'shared'
-                ? 'border-lime/60 bg-lime/10 text-ink'
-                : 'border-line text-mut hover:text-ink'
-            }`}
-            title="Техника и объекты, общие для всех кнопок модели (мотоцикл и т.п.)"
-          >
-            🏍 общее
-          </button>
-          <span className="flex items-center gap-1 w-full sm:w-auto">
-            <input
-              value={newVariant}
-              onChange={(e) => setNewVariant(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') addVariant();
-              }}
-              placeholder="+ пресет (реклама…)"
-              className="min-h-11 flex-1 sm:w-36 rounded-lg bg-panel2 border border-line px-2 py-1 text-xs outline-none focus:border-lime/50"
-            />
-            <Button
-              kind="ghost"
-              disabled={!newVariant.trim()}
-              className="min-h-11 !px-3 text-xs"
-              onClick={addVariant}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {model.variants.map((v) => (
+              <VariantChip
+                key={v.id}
+                active={sel === v.id}
+                title={v.title}
+                summary={variantSummary(v, model.refs)}
+                onSelect={() => setSel(v.id)}
+                onRename={(t) => void act(() => api.patchModelVariant(model.id, v.id, { title: t }))}
+                onDelete={
+                  model.variants.length > 1
+                    ? () => void act(() => api.deleteModelVariant(model.id, v.id))
+                    : undefined
+                }
+              />
+            ))}
+            <button
+              type="button"
+              onClick={() => setSel('shared')}
+              className={`min-h-11 px-3 py-1 rounded-lg text-xs border transition-colors ${
+                sel === 'shared'
+                  ? 'border-lime/60 bg-lime/10 text-ink'
+                  : 'border-line text-mut hover:text-ink'
+              }`}
+              title="Техника и объекты, которые попадут во все пресеты этой модели"
             >
-              Добавить
-            </Button>
-          </span>
+              Общее · {sharedRefs.length}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAddingPreset((value) => !value)}
+              className="min-h-11 px-3 py-1 rounded-lg text-xs border border-dashed border-line2 text-mut hover:border-lime/40 hover:text-ink"
+            >
+              ＋ Новый пресет
+            </button>
+          </div>
+
+          {addingPreset && (
+            <div className="rounded-xl border border-line bg-panel2 p-3 space-y-3">
+              <div className="text-sm font-semibold">Что будет в пресете?</div>
+              <div className="grid sm:grid-cols-2 gap-2">
+                <PresetKindButton
+                  active={newKind === 'model'}
+                  title="Только модель"
+                  sub="Один лук со всех ракурсов"
+                  onClick={() => setNewKind('model')}
+                />
+                <PresetKindButton
+                  active={newKind === 'model_object'}
+                  title="Модель + объект"
+                  sub="Например, модель и мотоцикл"
+                  onClick={() => setNewKind('model_object')}
+                />
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  value={newVariant}
+                  onChange={(e) => setNewVariant(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void addVariant();
+                  }}
+                  placeholder="Название: чёрный лук, реклама мотоцикла…"
+                  className="min-h-11 flex-1 min-w-0 rounded-lg bg-panel border border-line px-3 py-2 text-sm outline-none focus:border-lime/50"
+                />
+                <Button
+                  kind="primary"
+                  busy={creatingVariant}
+                  disabled={!newVariant.trim()}
+                  className="min-h-11 !px-4 text-sm"
+                  onClick={() => void addVariant()}
+                >
+                  Создать пресет
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {sel === 'shared' && (
-          <p className="text-xs text-dim">
-            Общие объекты используются со всеми пресетами, если они есть в исходном видео.
-          </p>
+        {selectedVariant && presetKind && (
+          <div className="rounded-xl border border-line bg-panel2/70 p-3 sm:p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-dim">Состав пресета «{selectedVariant.title}»</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  <Tag tone={modelRefCount >= 3 ? 'ok' : 'mut'}>Фото модели · {modelRefCount}</Tag>
+                  {presetKind === 'model_object' && (
+                    <Tag tone={objectRefCount >= 1 ? 'ok' : 'mut'}>Объект / транспорт · {objectRefCount}</Tag>
+                  )}
+                  {sharedRefs.length > 0 && <Tag tone="mut">Из них общих · {sharedRefs.length}</Tag>}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 w-full sm:w-auto">
+                <PresetKindButton
+                  compact
+                  active={presetKind === 'model'}
+                  title="Только модель"
+                  onClick={() => void act(() => api.patchModelVariant(model.id, selectedVariant.id, { hint: MODEL_ONLY_HINT }))}
+                />
+                <PresetKindButton
+                  compact
+                  active={presetKind === 'model_object'}
+                  title="+ объект"
+                  onClick={() => void act(() => api.patchModelVariant(model.id, selectedVariant.id, { hint: MODEL_OBJECT_HINT }))}
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-mut">
+              {modelRefCount >= 3 ? '✓ Модель заполнена' : `${modelRefCount}/3 · добавь лицо, полный рост и профиль или 3/4`}
+              {presetKind === 'model_object' && (
+                <span className="block mt-1">
+                  {objectRefCount >= 1 ? '✓ Объект добавлен' : '0/1 · добавь мотоцикл, товар или другой важный объект'}
+                </span>
+              )}
+              <span className="block mt-1 text-dim">Фото модели должны быть в одном образе. Лучше загрузить 3–5 чётких ракурсов.</span>
+            </div>
+
+            <div className={`grid gap-2 ${presetKind === 'model_object' ? 'sm:grid-cols-3' : 'sm:grid-cols-1'}`}>
+              <UploadButton
+                disabled={uploading}
+                title="Добавить фото модели"
+                sub="Можно выбрать несколько"
+                onClick={() => openUpload('model')}
+              />
+              {presetKind === 'model_object' && (
+                <>
+                  <UploadButton
+                    disabled={uploading}
+                    title="Добавить транспорт"
+                    sub="Мотоцикл, машина…"
+                    onClick={() => openUpload('vehicle')}
+                  />
+                  <UploadButton
+                    disabled={uploading}
+                    title="Добавить объект"
+                    sub="Товар, аксессуар…"
+                    onClick={() => openUpload('object')}
+                  />
+                </>
+              )}
+            </div>
+          </div>
         )}
 
-        {/* Реф-листы выбранного варианта */}
-        <div className="grid sm:grid-cols-2 gap-3">
-          {refsShown.map((r) => (
-            <RefTile key={r.id} modelId={model.id} r={r} onChanged={onChanged} onErr={setErr} />
-          ))}
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => fileRef.current?.click()}
-            className="rounded-xl border border-dashed border-line2 hover:border-lime/40 bg-panel2/50 min-h-28 flex flex-col items-center justify-center gap-1 text-sm text-mut transition-colors disabled:opacity-50"
-          >
-            {uploading ? <Spinner /> : <span className="text-xl">＋</span>}
-            {sel === 'shared' ? 'добавить технику/объект' : 'добавить реф-лист'}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void upload(f);
-            }}
-          />
-        </div>
+        {sel === 'shared' && (
+          <div className="rounded-xl border border-line bg-panel2/70 p-3 sm:p-4 space-y-3">
+            <div>
+              <div className="font-semibold text-sm">Общее для всех пресетов</div>
+              <p className="text-xs text-dim mt-1">Добавь сюда мотоцикл, машину или товар, если они должны быть доступны в каждом образе.</p>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-2">
+              <UploadButton
+                disabled={uploading}
+                title="Добавить транспорт"
+                sub="Мотоцикл, машина…"
+                onClick={() => openUpload('vehicle')}
+              />
+              <UploadButton
+                disabled={uploading}
+                title="Добавить объект"
+                sub="Товар, аксессуар…"
+                onClick={() => openUpload('object')}
+              />
+            </div>
+          </div>
+        )}
+
+        {uploading && (
+          <div className="flex items-center gap-2 text-sm text-mut">
+            <Spinner size={14} /> загружаю референсы…
+          </div>
+        )}
+
+        {/* Реф-листы выбранного варианта. Общие видны внутри каждого пресета. */}
+        {includedRefs.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-mut">
+              {sel === 'shared' ? 'Загруженные общие референсы' : 'Что войдёт в этот пресет'}
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {includedRefs.map((r) => (
+                <RefTile
+                  key={r.id}
+                  modelId={model.id}
+                  r={r}
+                  shared={sel !== 'shared' && r.variantId === null}
+                  onChanged={onChanged}
+                  onErr={setErr}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept="image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={(e) => {
+            const files = e.target.files;
+            if (files?.length) void upload(files);
+          }}
+        />
         {warnings.map((w) => (
           <p key={w} className="text-xs text-warn">⚠ {w}</p>
         ))}
         {err && <ErrorNote text={err} />}
       </div>
     </Card>
+  );
+}
+
+function getPresetKind(variant: ModelVariantInfo, refs: ModelRefInfo[]): PresetKind {
+  if (variant.hint === MODEL_ONLY_HINT) return 'model';
+  if (variant.hint === MODEL_OBJECT_HINT) return 'model_object';
+  return refs.some((r) => r.role !== 'model') ? 'model_object' : 'model';
+}
+
+function variantSummary(variant: ModelVariantInfo, refs: ModelRefInfo[]): string {
+  const included = refs.filter((r) => r.variantId === null || r.variantId === variant.id);
+  const models = included.filter((r) => r.role === 'model').length;
+  const objects = included.length - models;
+  if (included.length === 0) return 'пусто';
+  return objects > 0 ? `${models} фото модели · ${objects} объект/транспорт` : `${models} фото модели`;
+}
+
+function PresetKindButton({
+  active,
+  title,
+  sub,
+  compact = false,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  sub?: string;
+  compact?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border text-left transition-colors ${
+        compact ? 'min-h-11 px-2.5 py-1.5 text-xs' : 'min-h-16 px-3 py-2'
+      } ${active ? 'border-lime/60 bg-lime/10 text-ink' : 'border-line bg-panel text-mut hover:text-ink'}`}
+    >
+      <span className="block font-semibold">{active ? '✓ ' : ''}{title}</span>
+      {sub && <span className="block mt-0.5 text-xs text-dim">{sub}</span>}
+    </button>
+  );
+}
+
+function UploadButton({
+  disabled,
+  title,
+  sub,
+  onClick,
+}: {
+  disabled: boolean;
+  title: string;
+  sub: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="min-h-16 rounded-lg border border-dashed border-line2 bg-panel px-3 py-2 text-left hover:border-lime/40 transition-colors disabled:opacity-50"
+    >
+      <span className="block text-sm font-semibold">＋ {title}</span>
+      <span className="block mt-0.5 text-xs text-dim">{sub}</span>
+    </button>
   );
 }
 
@@ -304,12 +536,14 @@ function InlineName({ value, onSave }: { value: string; onSave: (v: string) => v
 function VariantChip({
   active,
   title,
+  summary,
   onSelect,
   onRename,
   onDelete,
 }: {
   active: boolean;
   title: string;
+  summary: string;
   onSelect: () => void;
   onRename: (t: string) => void;
   onDelete?: () => void;
@@ -364,7 +598,8 @@ function VariantChip({
       }`}
     >
       <button type="button" onClick={onSelect} className="min-h-11 px-2.5 py-1 text-left">
-        ⚡ {title}
+        <span className="block font-semibold">{title}</span>
+        <span className="block text-[10px] text-dim">{summary}</span>
       </button>
       <button
         type="button"
@@ -410,11 +645,13 @@ function VariantChip({
 function RefTile({
   modelId,
   r,
+  shared = false,
   onChanged,
   onErr,
 }: {
   modelId: string;
   r: ModelRefInfo;
+  shared?: boolean;
   onChanged: () => void;
   onErr: (e: string) => void;
 }) {
@@ -458,6 +695,9 @@ function RefTile({
         className="w-full h-32 object-cover object-top"
       />
       <div className="p-2.5 space-y-2">
+        {shared && (
+          <div className="text-[11px] text-lime">Общее · используется во всех пресетах</div>
+        )}
         <div className="flex items-center gap-2">
           <select
             value={r.role}
