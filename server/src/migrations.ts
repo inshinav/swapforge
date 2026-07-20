@@ -19,7 +19,7 @@ interface DataMigration {
   up(d: DatabaseSync, opts: DataMigrationOpts): boolean;
 }
 
-/** Владелец: единственная строка role='owner'; создаётся до первого TG-входа. */
+/** Владелец: ровно одна строка role='owner'; прежние owner-сессии отзываются при ротации. */
 export function ensureOwnerUser(d: DatabaseSync, ownerTelegramId: string): string {
   const tgId = Number(ownerTelegramId);
   if (!Number.isFinite(tgId) || tgId <= 0) {
@@ -28,14 +28,18 @@ export function ensureOwnerUser(d: DatabaseSync, ownerTelegramId: string): strin
   const existing = d.prepare(`SELECT id FROM users WHERE telegram_id = ?`).get(tgId) as
     | { id: string }
     | undefined;
-  if (existing) {
-    d.prepare(`UPDATE users SET role = 'owner' WHERE id = ?`).run(existing.id);
-    return existing.id;
+  const id = existing?.id ?? randomUUID();
+  if (!existing) {
+    d.prepare(
+      `INSERT INTO users (id, telegram_id, tg_first_name, role) VALUES (?, ?, 'Владелец', 'user')`,
+    ).run(id, tgId);
   }
-  const id = randomUUID();
-  d.prepare(
-    `INSERT INTO users (id, telegram_id, tg_first_name, role) VALUES (?, ?, 'Владелец', 'owner')`,
-  ).run(id, tgId);
+  const previous = d
+    .prepare(`SELECT id FROM users WHERE role='owner' AND id<>?`)
+    .all(id) as Array<{ id: string }>;
+  for (const row of previous) d.prepare(`DELETE FROM sessions WHERE user_id=?`).run(row.id);
+  d.prepare(`UPDATE users SET role='user' WHERE role='owner' AND id<>?`).run(id);
+  d.prepare(`UPDATE users SET role='owner' WHERE id=?`).run(id);
   return id;
 }
 

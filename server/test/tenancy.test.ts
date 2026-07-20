@@ -94,6 +94,21 @@ describe('тенантность роутов', () => {
     expect(forUser.provider).toBeUndefined();
   });
 
+  it('legacy-пресеты и их preview приватны для владельца', async () => {
+    const denied = await app.inject({ method: 'GET', url: '/api/presets', headers: { cookie: userA.cookie } });
+    expect(denied.statusCode).toBe(404);
+    const allowed = await app.inject({ method: 'GET', url: '/api/presets', headers: { cookie: owner.cookie } });
+    expect(allowed.statusCode).toBe(200);
+    const presets = allowed.json() as Array<{ id: string; refs: unknown[] }>;
+    expect(presets.length).toBeGreaterThan(0);
+    const previewDenied = await app.inject({
+      method: 'GET',
+      url: `/api/presets/${presets[0]!.id}/file/not-a-file.jpg`,
+      headers: { cookie: userA.cookie },
+    });
+    expect(previewDenied.statusCode).toBe(404);
+  });
+
   it('обычный пользователь не вызывает ручные платные AI-стадии', async () => {
     for (const suffix of ['analyze', 'generate', 'startframe']) {
       const res = await app.inject({

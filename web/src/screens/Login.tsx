@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { HealthInfo, TgWidgetPayload } from '@shared/api-types';
 import { api, appBase } from '../api';
 import { Card, ErrorNote, Spinner, Tag } from '../ui';
@@ -15,15 +15,20 @@ declare global {
  */
 export default function Login({ onAuthed }: { onAuthed: () => void }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [healthError, setHealthError] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [widgetState, setWidgetState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [widgetAttempt, setWidgetAttempt] = useState(0);
   const widgetRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    api.health().then(setHealth).catch(() => setHealth(null));
+  const loadHealth = useCallback(() => {
+    setHealth(null);
+    setHealthError(false);
+    api.health().then(setHealth).catch(() => setHealthError(true));
   }, []);
+
+  useEffect(loadHealth, [loadHealth]);
 
   useEffect(() => {
     const bot = health?.tgBot;
@@ -82,7 +87,19 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
             <p className="text-mut text-sm mt-2">Замени персонажа в видео за несколько шагов.</p>
           </div>
 
-          {health === null && <Spinner />}
+          {health === null && !healthError && <Spinner />}
+          {healthError && (
+            <div className="w-full space-y-2" aria-live="polite">
+              <ErrorNote text="Не удалось связаться с сервисом. Проверь интернет и попробуй снова." />
+              <button
+                type="button"
+                onClick={loadHealth}
+                className="min-h-11 rounded-lg border border-line2 bg-panel2 px-4 py-2 text-sm font-semibold hover:border-lime/50 hover:text-lime"
+              >
+                Повторить
+              </button>
+            </div>
+          )}
 
           {health && !health.tgBot && !health.devAuth && (
             <p className="text-warn text-sm">

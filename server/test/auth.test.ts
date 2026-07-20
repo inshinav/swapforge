@@ -276,6 +276,25 @@ describe('runDataMigrations (m001 backfill)', () => {
     expect(row.role).toBe('owner');
   });
 
+  it('ротация оставляет ровно одного owner и отзывает сессии прежнего', () => {
+    const d = freshDb();
+    d.prepare(`INSERT INTO users (id, telegram_id, role) VALUES ('old', 111, 'owner')`).run();
+    d.prepare(`INSERT INTO users (id, telegram_id, role) VALUES ('next', 777, 'user')`).run();
+    d.prepare(
+      `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('old-session', 'old', datetime('now','+1 day'))`,
+    ).run();
+    d.prepare(
+      `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('next-session', 'next', datetime('now','+1 day'))`,
+    ).run();
+
+    expect(ensureOwnerUser(d, '777')).toBe('next');
+    expect(d.prepare(`SELECT id FROM users WHERE role='owner'`).all()).toEqual([{ id: 'next' }]);
+    expect(d.prepare(`SELECT role FROM users WHERE id='old'`).get()).toEqual({ role: 'user' });
+    expect(d.prepare(`SELECT token_hash FROM sessions ORDER BY token_hash`).all()).toEqual([
+      { token_hash: 'next-session' },
+    ]);
+  });
+
   it('кривой OWNER_TELEGRAM_ID = громкая ошибка, не тихий мусор', () => {
     const d = freshDb();
     expect(() => runDataMigrations(d, { ownerTelegramId: 'не-число' })).toThrow(/OWNER_TELEGRAM_ID/);

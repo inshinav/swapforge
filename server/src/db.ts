@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { config } from './config';
-import { runDataMigrations } from './migrations';
+import { ensureOwnerUser, runDataMigrations } from './migrations';
 
 let db: DatabaseSync | null = null;
 
@@ -342,6 +342,18 @@ export function getDb(): DatabaseSync {
   `);
   applySchema(db);
   runDataMigrations(db, { ownerTelegramId: config.ownerTelegramId || null });
+  // OWNER_TELEGRAM_ID — текущая конфигурация, а не одноразовая миграция. На каждом
+  // boot атомарно ротируем роль и отзываем сессии прежнего владельца.
+  if (config.ownerTelegramId) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      ensureOwnerUser(db, config.ownerTelegramId);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   return db;
 }
 

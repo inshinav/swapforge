@@ -36,8 +36,10 @@ function journeyStorageKey(userId: string): string {
   return `sf-onboarding:${userId}`;
 }
 
-function buildJourneyStatus(data: JourneyData, prefs: JourneyPrefs): JourneyStatus {
-  const current = !data.hasBalance && !prefs.balanceDeferred
+export function buildJourneyStatus(data: JourneyData, prefs: JourneyPrefs): JourneyStatus {
+  const current = data.hasResult
+    ? 'done'
+    : !data.hasBalance && !prefs.balanceDeferred
     ? 'balance'
     : !prefs.guideSeen
       ? 'guide'

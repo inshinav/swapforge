@@ -473,6 +473,7 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showTips, setShowTips] = useState(false);
+  const [newRole, setNewRole] = useState<RefRole>('model');
 
   const run = async (fn: () => Promise<unknown>) => {
     setErr(null);
@@ -497,7 +498,7 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
     setBusy(true);
     // роль определяет сервер: vision-классификатор, при сбое — позиционная эвристика
     await run(async () => {
-      for (const f of Array.from(files)) await api.addRef(proj.id, f, 'auto', '');
+      for (const f of Array.from(files)) await api.addRef(proj.id, f, newRole, '');
     });
     setBusy(false);
   };
@@ -542,6 +543,22 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
           <div>• <b className="text-ink">Транспорт:</b> чистый вид 3/4, чтобы читались силуэт и линии дизайна; профиль помогает цвету и наклейкам.</div>
           <div>• <b className="text-ink">Свет:</b> чем ближе свет/ракурс рефа к ролику, тем чище блендинг. Студийный реф в ночной клип — худший кейс.</div>
           <div>• Если одежда на фото не та, что нужна в кадре — напиши нужную в заметке к референсу.</div>
+        </div>
+      )}
+      {proj.refs.length < MAX_PROJECT_REFS && (
+        <div className="px-5 pt-4 flex flex-wrap items-center gap-2 text-sm">
+          <label htmlFor={`new-ref-role-${proj.id}`} className="text-mut">Что на новых фото?</label>
+          <select
+            id={`new-ref-role-${proj.id}`}
+            value={newRole}
+            onChange={(event) => setNewRole(event.target.value as RefRole)}
+            className="min-h-10 rounded-lg border border-line2 bg-panel2 px-3 text-sm font-semibold"
+          >
+            <option value="model">Модель</option>
+            <option value="vehicle">Транспорт</option>
+            <option value="object">Важный объект</option>
+          </select>
+          <span className="text-xs text-dim">роль можно изменить после загрузки</span>
         </div>
       )}
       <div className="p-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

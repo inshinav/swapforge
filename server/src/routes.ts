@@ -428,7 +428,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Пресеты референсов ───────────────────────────────────────────────────
 
-  app.get('/api/presets', async () => {
+  app.get('/api/presets', async (req, reply) => {
+    if (req.user?.role !== 'owner') return bad(reply, 404, 'Не найдено');
     return PRESETS.map((p) => ({
       id: p.id,
       title: p.title,
@@ -439,6 +440,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/presets/:id/file/:file', async (req, reply) => {
+    if (req.user?.role !== 'owner') return bad(reply, 404, 'Файл пресета не найден');
     const { id, file } = req.params as { id: string; file: string };
     const preset = getPreset(id);
     const full = preset ? presetFilePath(preset, file) : null;
@@ -512,6 +514,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         return bad(reply, msg.includes('не найдена') ? 404 : 409, msg);
       }
     } else if (body.preset) {
+      if (req.user!.role !== 'owner') return bad(reply, 404, 'Неизвестный пресет');
       const preset = getPreset(body.preset);
       if (!preset) return bad(reply, 404, 'Неизвестный пресет');
       try {
