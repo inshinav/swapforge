@@ -133,15 +133,23 @@ export async function storyboard(
     path.join(framesDir, 'first.jpg')]);
 
   // 2) Кадры смен сцен + таймстемпы из showinfo
-  const sceneOut = await run('ffmpeg', [
-    '-y', '-i', videoFile,
-    '-vf', `select='gt(scene,${SCENE_THRESHOLD})',showinfo,${SCALE_ANALYSIS}`,
-    '-fps_mode', 'vfr', '-q:v', '3',
-    path.join(framesDir, 'scene_%03d.jpg'),
-  ]);
   const sceneTimes: number[] = [];
-  for (const m of sceneOut.stderr.matchAll(/pts_time:([0-9.]+)/g)) {
-    sceneTimes.push(Number(m[1]));
+  try {
+    const sceneOut = await run('ffmpeg', [
+      '-y', '-i', videoFile,
+      '-vf', `select='gt(scene,${SCENE_THRESHOLD})',showinfo,${SCALE_ANALYSIS}`,
+      '-fps_mode', 'vfr', '-q:v', '3',
+      path.join(framesDir, 'scene_%03d.jpg'),
+    ]);
+    for (const m of sceneOut.stderr.matchAll(/pts_time:([0-9.]+)/g)) {
+      sceneTimes.push(Number(m[1]));
+    }
+  } catch {
+    // Scene detection is best-effort. The first frame + time grid below are sufficient
+    // for analysis when a clip has no cuts or this optional filter cannot emit a frame.
+    for (const file of fs.readdirSync(framesDir)) {
+      if (file.startsWith('scene_')) fs.rmSync(path.join(framesDir, file), { force: true });
+    }
   }
   let scenes: FrameInfo[] = sceneTimes.map((t, i) => ({
     file: `scene_${String(i + 1).padStart(3, '0')}.jpg`,
@@ -248,6 +256,88 @@ async function mediaShape(file: string): Promise<{ duration: number; hasAudio: b
   return {
     duration: Number(j.format?.duration ?? video?.duration ?? 0),
     hasAudio: !!j.streams?.some((s) => s.codec_type === 'audio'),
+  };
+}
+
+export interface ContinuityValidationPoint {
+  atSec: number;
+  frameFile: string;
+}
+
+export interface FinalMediaValidation {
+  ok: true;
+  durationSec: number;
+  width: number;
+  height: number;
+  hasAudio: boolean;
+  decoded: true;
+  continuity: Array<{ atSec: number; ssim: number }>;
+  warnings: string[];
+}
+
+async function frameSsim(videoFile: string, point: ContinuityValidationPoint, tempDir: string): Promise<number> {
+  const actual = path.join(tempDir, `seam-${point.atSec.toFixed(3).replace('.', '-')}.png`);
+  await extractFrameAt(videoFile, point.atSec, actual);
+  const normalize = 'scale=320:320:force_original_aspect_ratio=decrease,pad=320:320:(ow-iw)/2:(oh-ih)/2:black';
+  const { stderr } = await run('ffmpeg', [
+    '-v', 'info', '-i', actual, '-i', point.frameFile,
+    '-lavfi', `[0:v]${normalize}[a];[1:v]${normalize}[b];[a][b]ssim`,
+    '-f', 'null', '-',
+  ]);
+  const match = /All:([0-9.]+)/.exec(stderr);
+  const value = match ? Number(match[1]) : NaN;
+  if (!Number.isFinite(value)) throw new Error(`Не удалось проверить continuity-кадр на ${point.atSec.toFixed(2)}с`);
+  return Math.round(value * 10_000) / 10_000;
+}
+
+/** Technical gate before a generation can become done and settle its hold. */
+export async function validateRenderedVideo(
+  file: string,
+  options: {
+    expectedDurationSec: number;
+    expectAudio: boolean;
+    continuity?: ContinuityValidationPoint[];
+  },
+): Promise<FinalMediaValidation> {
+  const meta = await probe(file);
+  const shape = await mediaShape(file);
+  const durationTolerance = Math.max(0.75, options.expectedDurationSec * 0.05);
+  if (
+    !Number.isFinite(meta.durationSec) ||
+    meta.durationSec < Math.max(0.1, options.expectedDurationSec - durationTolerance) ||
+    meta.durationSec > options.expectedDurationSec + Math.max(2, options.expectedDurationSec * 0.1)
+  ) {
+    throw new Error(
+      `Результат имеет неверную длительность: ${meta.durationSec.toFixed(2)}с вместо ≈${options.expectedDurationSec.toFixed(2)}с`,
+    );
+  }
+  if (options.expectAudio && !shape.hasAudio) {
+    throw new Error('В результате нет аудиодорожки, хотя звук был включён');
+  }
+  await run('ffmpeg', ['-v', 'error', '-i', file, '-map', '0:v:0', '-f', 'null', '-'], 20 * 60_000);
+
+  const continuity: FinalMediaValidation['continuity'] = [];
+  const warnings: string[] = [];
+  const tempDir = fs.mkdtempSync(path.join(path.dirname(file), '.validate-'));
+  try {
+    for (const point of options.continuity ?? []) {
+      if (!fs.existsSync(point.frameFile)) throw new Error('Continuity-кадр исчез до финальной проверки');
+      const ssim = await frameSsim(file, point, tempDir);
+      continuity.push({ atSec: Math.round(point.atSec * 1000) / 1000, ssim });
+      if (ssim < 0.9) warnings.push(`Возможный визуальный шов на ${point.atSec.toFixed(2)}с (SSIM ${ssim})`);
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+  return {
+    ok: true,
+    durationSec: meta.durationSec,
+    width: meta.width,
+    height: meta.height,
+    hasAudio: shape.hasAudio,
+    decoded: true,
+    continuity,
+    warnings,
   };
 }
 

@@ -10,7 +10,7 @@ process.env.OPENAI_API_KEY = 'test-key';
 process.env.RENDER_CONCURRENCY = '1';
 
 const { getDb } = await import('../src/db');
-const { startRender } = await import('../src/engine/render');
+const { startRender, waitLongPrediction } = await import('../src/engine/render');
 const { config } = await import('../src/config');
 const { projectDir, refsDir, rendersDir, startDir } = await import('../src/storage');
 import type { WaveSpeed, WsPrediction } from '../src/wavespeed';
@@ -27,6 +27,21 @@ async function until(fn: () => boolean, ms = 4000): Promise<void> {
 }
 
 describe('длинный render pipeline', () => {
+  it('recheck polls an old long prediction at least once and gets a fresh poll budget', async () => {
+    let polls = 0;
+    const ws = {
+      pollResult: async (): Promise<WsPrediction> => {
+        polls++;
+        return polls === 1
+          ? { id: 'old', status: 'processing', outputs: [], error: '', raw: {} }
+          : { id: 'old', status: 'completed', outputs: ['https://cdn/result.mp4'], error: '', raw: {} };
+      },
+    } as unknown as WaveSpeed;
+    const result = await waitLongPrediction('old', '2000-01-01T00:00:00.000Z', ws, 1, true);
+    expect(result.status).toBe('completed');
+    expect(polls).toBe(2);
+  });
+
   it('чекпойнтит две части, делает continuity anchor из предыдущего render и один итог', async () => {
     const project = randomUUID();
     const meta = { durationSec: 18, width: 1080, height: 1920, fps: 30, aspect: '9:16', sizeBytes: 10 };

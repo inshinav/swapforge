@@ -21,6 +21,7 @@ const {
   parseGenerateAudio,
   RenderGateError,
   _setPollBaseMs,
+  _setRenderValidator,
 } = await import('../src/engine/render');
 _setPollBaseMs(5);
 const { advanceFlow } = await import('../src/engine/pipeline');
@@ -213,6 +214,36 @@ describe('рендер: happy path', () => {
 });
 
 describe('рендер: ошибки и ретраи', () => {
+  it('битый финальный MP4 не становится done и не получает фактическое списание', async () => {
+    _setRenderValidator(async () => {
+      throw new Error('decode failed');
+    });
+    try {
+      const pid = readyProject();
+      const genId = startRender(pid, 1, { ws: fakeWs(), pollBaseMs: 5 });
+      await until(() => genRow(genId)?.status === 'failed');
+      const row = genRow(genId)!;
+      expect(String(row.error)).toContain('техническую проверку');
+      expect(row.cost_actual_usd).toBeNull();
+      expect(JSON.parse(String(row.validation_json))).toMatchObject({ ok: false, error: 'decode failed' });
+    } finally {
+      _setRenderValidator(null);
+      finishActive();
+    }
+  });
+
+  it('cancelled и timeout от провайдера — явные terminal failures', async () => {
+    for (const [status, message] of [
+      ['cancelled', 'отменил'],
+      ['timeout', 'таймауту'],
+    ] as const) {
+      const pid = readyProject();
+      const genId = startRender(pid, 1, { ws: fakeWs({ pollScript: [{ status }] }), pollBaseMs: 5 });
+      await until(() => genRow(genId)?.status === 'failed');
+      expect(String(genRow(genId)!.error)).toContain(message);
+    }
+  });
+
   it('WS failed → человеческая причина; retry переиспользует свежие URL и несёт их на своей строке', async () => {
     const uploadLog: string[] = [];
     const ws = fakeWs({ uploadLog, pollScript: [{ status: 'failed', error: 'nsfw content detected' }] });

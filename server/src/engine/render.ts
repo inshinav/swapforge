@@ -9,7 +9,14 @@ import { config } from '../config';
 import { wavespeed, type WaveSpeed, type WsPrediction } from '../wavespeed';
 import { buildEstimate, estimateRender, estimateVideoRender } from '../pricing';
 import { enforceStorageCap, projectDir, refsDir, rendersDir, startDir } from '../storage';
-import { cutVideoSegment, extractFrameAt, stitchVideoSegments } from '../ffmpeg';
+import {
+  cutVideoSegment,
+  extractFrameAt,
+  stitchVideoSegments,
+  validateRenderedVideo,
+  type ContinuityValidationPoint,
+  type FinalMediaValidation,
+} from '../ffmpeg';
 import { parseFlags, type FlowFlags } from './orchestrator';
 import { planVideoSegments, SEAM_OVERLAP_SECONDS, type VideoSegmentPlan } from './segments';
 import { attachHoldGeneration, openHoldForProject, placeHold, priceCredits } from '../billing/credits';
@@ -31,6 +38,31 @@ export class RenderGateError extends Error {
     this.name = 'RenderGateError';
     this.httpStatus = httpStatus;
   }
+}
+
+class MediaValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MediaValidationError';
+  }
+}
+
+type RenderValidator = typeof validateRenderedVideo;
+const testValidator: RenderValidator = async (_file, options) => ({
+  ok: true,
+  durationSec: options.expectedDurationSec,
+  width: 720,
+  height: 1280,
+  hasAudio: options.expectAudio,
+  decoded: true,
+  continuity: [],
+  warnings: [],
+});
+let renderValidator: RenderValidator = process.env.NODE_ENV === 'test' ? testValidator : validateRenderedVideo;
+
+/** Test-only fault injection for the done/settle boundary. */
+export function _setRenderValidator(validator: RenderValidator | null): void {
+  renderValidator = validator ?? (process.env.NODE_ENV === 'test' ? testValidator : validateRenderedVideo);
 }
 
 export const ACTIVE_GEN_STATUSES = ['uploading_assets', 'submitted', 'rendering', 'downloading'];
@@ -171,7 +203,7 @@ function saveLongState(genId: string, state: LongRenderState): void {
     .run(JSON.stringify(state), state.segments.length, done, genId);
 }
 
-function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean } = {}): void {
+function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean; releaseHold?: boolean } = {}): void {
   stopPoller(genId);
   db()
     .prepare(
@@ -185,7 +217,9 @@ function markFailed(genId: string, msg: string, opts: { wsTerminal?: boolean } =
   // готовый ролик, и списание обязано состояться (гвард внутри release-функции).
   const gen = loadGen(genId);
   if (!gen) return;
-  if (!gen.ws_prediction_id) {
+  if (opts.releaseHold) {
+    forceReleaseProjectHold(gen.project_id, genId, 'технически невалидный результат');
+  } else if (!gen.ws_prediction_id) {
     releaseFlowHoldOnFailure(gen.project_id, genId, 'рендер не стартовал у WaveSpeed');
   } else if (opts.wsTerminal) {
     // WS сам сказал failed — задача мертва, recoverable-гвард не применим: форс-релиз
@@ -201,6 +235,25 @@ function ruWsFailure(raw: string): string {
   if (/nsfw|content policy|moderation/i.test(s)) return `WaveSpeed отклонил контент модерацией: ${s}`;
   if (/balance|insufficient|credit/i.test(s)) return `Не хватило баланса WaveSpeed: ${s}`;
   return s ? `WaveSpeed: ${s}` : 'WaveSpeed сообщил об ошибке без деталей';
+}
+
+type NormalizedWsState = 'completed' | 'failed' | 'cancelled' | 'timeout' | 'pending';
+
+function wsState(status: string): NormalizedWsState {
+  const value = status.trim().toLowerCase();
+  if (value === 'completed' || value === 'succeeded' || value === 'success') return 'completed';
+  if (value === 'failed' || value === 'error') return 'failed';
+  if (value === 'cancelled' || value === 'canceled') return 'cancelled';
+  if (value === 'timeout' || value === 'timed_out' || value === 'expired') return 'timeout';
+  return 'pending';
+}
+
+function terminalWsMessage(result: WsPrediction): string | null {
+  const state = wsState(result.status);
+  if (state === 'failed') return ruWsFailure(result.error);
+  if (state === 'cancelled') return 'WaveSpeed отменил задачу';
+  if (state === 'timeout') return 'WaveSpeed завершил задачу по таймауту';
+  return null;
 }
 
 /** Последний старт-кадр нужной версии (файл с самым свежим таймстампом в имени). */
@@ -468,6 +521,24 @@ export function parseGenerateAudio(flagsJson: string | null | undefined): boolea
   }
 }
 
+async function validateAndPersistResult(
+  genId: string,
+  file: string,
+  options: Parameters<RenderValidator>[1],
+): Promise<FinalMediaValidation> {
+  try {
+    const validation = await renderValidator(file, options);
+    db().prepare(`UPDATE generations SET validation_json=? WHERE id=?`).run(JSON.stringify(validation), genId);
+    return validation;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    db()
+      .prepare(`UPDATE generations SET validation_json=? WHERE id=?`)
+      .run(JSON.stringify({ ok: false, error: message.slice(0, 500) }), genId);
+    throw new MediaValidationError(`Результат не прошёл техническую проверку: ${message}`);
+  }
+}
+
 async function runUploadAndSubmit(
   genId: string,
   ws: WaveSpeed,
@@ -586,7 +657,10 @@ async function runUploadAndSubmit(
       );
     } catch (e) {
       const terminal = e instanceof LongWsFailure && e.terminal;
-      markFailed(genId, e instanceof Error ? e.message : String(e), { wsTerminal: terminal });
+      markFailed(genId, e instanceof Error ? e.message : String(e), {
+        wsTerminal: terminal,
+        releaseHold: e instanceof MediaValidationError,
+      });
     }
     return;
   }
@@ -691,16 +765,19 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitLongPrediction(
+export async function waitLongPrediction(
   predictionId: string,
   submittedAt: string,
   ws: WaveSpeed,
   baseMs: number,
+  resetBudget = false,
 ): Promise<WsPrediction> {
   let errors = 0;
-  const started = Date.parse(submittedAt);
+  const parsedStarted = Date.parse(submittedAt);
+  const started = resetBudget || !Number.isFinite(parsedStarted) ? Date.now() : parsedStarted;
+  let polled = false;
   for (;;) {
-    if (Date.now() - started > config.renderPollBudgetMs) {
+    if (polled && Date.now() - started > config.renderPollBudgetMs) {
       throw new LongWsFailure(
         `Рендер части идёт дольше ${Math.round(config.renderPollBudgetMs / 60000)} мин — нажми «Проверить ещё раз»`,
       );
@@ -708,6 +785,7 @@ async function waitLongPrediction(
     let result: WsPrediction;
     try {
       result = await ws.pollResult(predictionId);
+      polled = true;
       errors = 0;
     } catch (e) {
       errors++;
@@ -719,8 +797,9 @@ async function waitLongPrediction(
       await delay(baseMs * 2);
       continue;
     }
-    if (result.status === 'completed') return result;
-    if (result.status === 'failed') throw new LongWsFailure(ruWsFailure(result.error), true);
+    if (wsState(result.status) === 'completed') return result;
+    const terminal = terminalWsMessage(result);
+    if (terminal) throw new LongWsFailure(terminal, true);
     await delay(Date.now() - started > 120_000 ? baseMs * 2 : baseMs);
   }
 }
@@ -760,6 +839,7 @@ async function runLongVideo(
   refs: RefInfo[],
   pollBaseMs?: number,
   hooks: LongRenderHooks = {},
+  resetPollBudget = false,
 ): Promise<void> {
   if (longRunners.has(genId)) return;
   longRunners.add(genId);
@@ -850,6 +930,7 @@ async function runLongVideo(
           segment.submittedAt ?? new Date().toISOString(),
           ws,
           pollBaseMs ?? DEFAULT_POLL_BASE_MS,
+          resetPollBudget,
         );
       } else {
         // URL сегментных ассетов намеренно обновляются перед каждым новым сабмитом:
@@ -882,6 +963,7 @@ async function runLongVideo(
           segment.submittedAt,
           ws,
           pollBaseMs ?? DEFAULT_POLL_BASE_MS,
+          resetPollBudget,
         );
       }
 
@@ -919,6 +1001,19 @@ async function runLongVideo(
       continuityFrames,
       continuityCutSeconds,
     );
+    const continuity: ContinuityValidationPoint[] = [];
+    let seamAt = 0;
+    for (let index = 1; index < state.segments.length; index++) {
+      const previous = state.segments[index - 1]!;
+      seamAt += continuityCutSeconds[index] ?? Math.max(0.1, previous.endSec - previous.startSec - state.overlapSec);
+      const frameFile = continuityFrames[index];
+      if (frameFile) continuity.push({ atSec: seamAt, frameFile });
+    }
+    await validateAndPersistResult(genId, dest, {
+      expectedDurationSec: project.meta.durationSec,
+      expectAudio: parseGenerateAudio(project.flags_json),
+      continuity,
+    });
     const knownCosts = state.segments.map((s) => s.costUsd).filter((n): n is number => typeof n === 'number');
     const costUsd = knownCosts.length === state.segments.length
       ? Math.round(knownCosts.reduce((sum, n) => sum + n, 0) * 10000) / 10000
@@ -950,7 +1045,12 @@ async function runLongVideo(
   }
 }
 
-async function resumeLongVideo(genId: string, ws: WaveSpeed, pollBaseMs?: number): Promise<void> {
+async function resumeLongVideo(
+  genId: string,
+  ws: WaveSpeed,
+  pollBaseMs?: number,
+  resetPollBudget = false,
+): Promise<void> {
   const gen = loadGen(genId);
   if (!gen) return;
   const p = db()
@@ -982,6 +1082,8 @@ async function resumeLongVideo(genId: string, ws: WaveSpeed, pollBaseMs?: number
     },
     refs,
     pollBaseMs,
+    {},
+    resetPollBudget,
   );
 }
 
@@ -1057,18 +1159,16 @@ export function attachPoller(genId: string, ws: WaveSpeed = wavespeed, baseMs?: 
       return;
     }
 
-    if (r.status === 'failed') {
-      markFailed(genId, ruWsFailure(r.error), { wsTerminal: true });
+    const terminalMessage = terminalWsMessage(r);
+    if (terminalMessage) {
+      markFailed(genId, terminalMessage, { wsTerminal: true });
       return;
     }
-    if (r.status === 'completed') {
+    if (wsState(r.status) === 'completed') {
       try {
         await completeFromResult(gen, r, ws);
-      } catch (e) {
-        markFailed(
-          genId,
-          `Скачивание результата сорвалось: ${e instanceof Error ? e.message.slice(0, 200) : e} — нажми «Проверить ещё раз»`,
-        );
+      } catch {
+        // completeFromResult already persisted the precise failure and hold policy.
       }
       return;
     }
@@ -1103,6 +1203,16 @@ async function completeFromResult(gen: GenRow, r: WsPrediction, ws: WaveSpeed): 
     const dest = path.join(rendersDir(gen.project_id), file);
     const bytes = await ws.downloadOutput(output, dest, config.renderMaxBytes);
 
+    const project = d
+      .prepare(`SELECT meta_json,flags_json FROM projects WHERE id=?`)
+      .get(gen.project_id) as { meta_json: string | null; flags_json: string | null } | undefined;
+    if (!project?.meta_json) throw new MediaValidationError('У проекта исчезли метаданные исходного видео');
+    const meta = JSON.parse(project.meta_json) as VideoMeta;
+    await validateAndPersistResult(gen.id, dest, {
+      expectedDurationSec: meta.durationSec,
+      expectAudio: parseGenerateAudio(project.flags_json),
+    });
+
     const cost = await captureCost(gen, r, ws);
     const nsfw = extractNsfw(r.raw);
     d.prepare(
@@ -1123,7 +1233,10 @@ async function completeFromResult(gen: GenRow, r: WsPrediction, ws: WaveSpeed): 
     // финал сорвался → failed, задача у WaveSpeed жива — recheck доберёт
     markFailed(
       gen.id,
-      `Скачивание результата сорвалось: ${e instanceof Error ? e.message.slice(0, 200) : e} — нажми «Проверить ещё раз»`,
+      e instanceof MediaValidationError
+        ? e.message
+        : `Скачивание результата сорвалось: ${e instanceof Error ? e.message.slice(0, 200) : e} — нажми «Проверить ещё раз»`,
+      { releaseHold: e instanceof MediaValidationError },
     );
     throw e;
   }
@@ -1218,6 +1331,7 @@ export function resumeGenerations(ws: WaveSpeed = wavespeed): { failed: number; 
       void resumeLongVideo(row.id, ws).catch((e) => {
         markFailed(row.id, e instanceof Error ? e.message : String(e), {
           wsTerminal: e instanceof LongWsFailure && e.terminal,
+          releaseHold: e instanceof MediaValidationError,
         });
       });
     } else {
@@ -1251,9 +1365,10 @@ export async function retryGeneration(genId: string, ws: WaveSpeed = wavespeed):
     (!!gen.ws_prediction_id || !!openHoldForProject(gen.project_id))
   ) {
     db().prepare(`UPDATE generations SET status = 'rendering', error = NULL, finished_at = NULL WHERE id = ?`).run(genId);
-    void resumeLongVideo(genId, ws).catch((e) => {
+    void resumeLongVideo(genId, ws, undefined, true).catch((e) => {
       markFailed(genId, e instanceof Error ? e.message : String(e), {
         wsTerminal: e instanceof LongWsFailure && e.terminal,
+        releaseHold: e instanceof MediaValidationError,
       });
     });
     return genId;
@@ -1268,11 +1383,12 @@ export async function retryGeneration(genId: string, ws: WaveSpeed = wavespeed):
         'Не удалось проверить статус прежней задачи у WaveSpeed — повторный сабмит вслепую рискует двойным списанием, попробуй через минуту',
       );
     }
-    if (r.status === 'completed') {
+    const state = wsState(r.status);
+    if (state === 'completed') {
       await completeFromResult(gen, r, ws); // деньги спасены: результат уже оплачен
       return gen.id;
     }
-    if (r.status !== 'failed') {
+    if (state === 'pending') {
       throw new RenderGateError(
         409,
         'Задача ещё рендерится у WaveSpeed — жми «Проверить ещё раз», повторный запуск списал бы деньги дважды',
@@ -1302,21 +1418,23 @@ export async function recheckGeneration(genId: string, ws: WaveSpeed = wavespeed
     db().prepare(
       `UPDATE generations SET status = 'rendering', error = NULL, finished_at = NULL WHERE id = ?`,
     ).run(genId);
-    void resumeLongVideo(genId, ws).catch((e) => {
+    void resumeLongVideo(genId, ws, undefined, true).catch((e) => {
       markFailed(genId, e instanceof Error ? e.message : String(e), {
         wsTerminal: e instanceof LongWsFailure && e.terminal,
+        releaseHold: e instanceof MediaValidationError,
       });
     });
     return 'rendering';
   }
   if (!gen.ws_prediction_id) throw new RenderGateError(409, 'У этой генерации нет id задачи WaveSpeed');
   const r = await ws.pollResult(gen.ws_prediction_id);
-  if (r.status === 'completed') {
+  if (wsState(r.status) === 'completed') {
     await completeFromResult(gen, r, ws);
     return 'done';
   }
-  if (r.status === 'failed') {
-    markFailed(genId, ruWsFailure(r.error), { wsTerminal: true });
+  const terminalMessage = terminalWsMessage(r);
+  if (terminalMessage) {
+    markFailed(genId, terminalMessage, { wsTerminal: true });
     return 'failed';
   }
   // всё ещё в работе на стороне WaveSpeed

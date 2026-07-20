@@ -320,6 +320,7 @@ export function applySchema(d: DatabaseSync): void {
   ensureColumn(d, 'generations', 'segments_json', `segments_json TEXT`);
   ensureColumn(d, 'generations', 'segment_count', `segment_count INTEGER NOT NULL DEFAULT 1`);
   ensureColumn(d, 'generations', 'segment_done', `segment_done INTEGER NOT NULL DEFAULT 0`);
+  ensureColumn(d, 'generations', 'validation_json', `validation_json TEXT`);
   ensureColumn(d, 'usage_events', 'user_id', `user_id TEXT`);
   // email покупателя (Lava.top требует в инвойсе; спрашиваем при первой оплате картой)
   ensureColumn(d, 'users', 'email', `email TEXT`);

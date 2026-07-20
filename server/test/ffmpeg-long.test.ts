@@ -3,7 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { cutVideoSegment, extractFrameAt, probe, stitchVideoSegments } from '../src/ffmpeg';
+import {
+  cutVideoSegment,
+  extractFrameAt,
+  probe,
+  stitchVideoSegments,
+  storyboard,
+  validateRenderedVideo,
+} from '../src/ffmpeg';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-long-ffmpeg-'));
 
@@ -57,5 +64,32 @@ describe('ffmpeg длинного ролика', () => {
     const seamPixel = centerRgbAt(stitched, 1.5);
     expect(seamPixel[0]).toBeGreaterThan(150);
     expect(seamPixel[2]).toBeLessThan(100);
+
+    const validation = await validateRenderedVideo(stitched, {
+      expectedDurationSec: 3.5,
+      expectAudio: true,
+      continuity: [{ atSec: 1.5, frameFile: anchor }],
+    });
+    expect(validation.decoded).toBe(true);
+    expect(validation.continuity).toHaveLength(1);
+    expect(validation.continuity[0]!.ssim).toBeGreaterThan(0.9);
   }, 60_000);
+
+  it('uniform video without scene cuts still produces first + grid storyboard', async () => {
+    const source = path.join(dir, 'uniform.mp4');
+    const frames = path.join(dir, 'uniform-frames');
+    makeVideo(source, 'green', 440, 2);
+    const result = await storyboard(source, frames, 2, 12);
+    expect(result[0]).toMatchObject({ file: 'first.jpg', kind: 'first' });
+    expect(result.some((frame) => frame.kind === 'grid')).toBe(true);
+    expect(result.some((frame) => frame.kind === 'scene')).toBe(false);
+  }, 60_000);
+
+  it('rejects a corrupt or truncated result before done', async () => {
+    const broken = path.join(dir, 'broken.mp4');
+    fs.writeFileSync(broken, Buffer.from('not-an-mp4'));
+    await expect(
+      validateRenderedVideo(broken, { expectedDurationSec: 5, expectAudio: false }),
+    ).rejects.toThrow();
+  });
 });
