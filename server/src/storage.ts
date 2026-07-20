@@ -167,6 +167,133 @@ export function sweepOrphanRefFiles(): number {
   return removed;
 }
 
+export interface StorageCleanupResult {
+  purgedResults: string[];
+  deletedProjects: string[];
+  transientFiles: number;
+}
+
+/** Физически оставляет только последние 20 готовых роликов пользователя. */
+export function enforceLatestResultLimit(userId?: string, keep = 20): string[] {
+  const db = getDb();
+  const users = userId
+    ? [{ id: userId }]
+    : (db.prepare(`SELECT id FROM users`).all() as Array<{ id: string }>);
+  const purged: string[] = [];
+  for (const user of users) {
+    const results = db
+      .prepare(
+        `SELECT g.id, g.project_id, g.file
+           FROM generations g JOIN projects p ON p.id=g.project_id
+          WHERE p.user_id=? AND g.status='done' AND g.render_purged=0 AND g.file IS NOT NULL
+          ORDER BY COALESCE(g.finished_at, g.created_at) DESC, g.rowid DESC`,
+      )
+      .all(user.id) as Array<{ id: string; project_id: string; file: string }>;
+    for (const result of results.slice(Math.max(0, keep))) {
+      fs.rmSync(path.join(rendersDir(result.project_id), result.file), { force: true });
+      db.prepare(`UPDATE generations SET render_purged=1 WHERE id=?`).run(result.id);
+      purged.push(result.id);
+    }
+  }
+  if (purged.length) usageCache = null;
+  return purged;
+}
+
+/** Удаляет проекты, которые уже не попадают в библиотеку (20 последних) и ничем не заняты. */
+export function cleanupInvisibleProjects(userId?: string, keep = 20): string[] {
+  const db = getDb();
+  const users = userId
+    ? [{ id: userId }]
+    : (db.prepare(`SELECT id FROM users`).all() as Array<{ id: string }>);
+  const deleted: string[] = [];
+  for (const user of users) {
+    const projects = db
+      .prepare(`SELECT id FROM projects WHERE user_id=? ORDER BY created_at DESC, rowid DESC`)
+      .all(user.id) as Array<{ id: string }>;
+    for (const project of projects.slice(Math.max(0, keep))) {
+      const protectedRow = db
+        .prepare(
+          `SELECT 1 WHERE EXISTS (
+             SELECT 1 FROM jobs WHERE project_id=? AND status IN ('queued','running')
+           ) OR EXISTS (
+             SELECT 1 FROM generations WHERE project_id=?
+              AND status IN ('queued','uploading_assets','submitted','rendering','downloading')
+           ) OR EXISTS (
+             SELECT 1 FROM credit_holds WHERE project_id=? AND status='open'
+           )`,
+        )
+        .get(project.id, project.id, project.id);
+      if (protectedRow) continue;
+      db.prepare(`DELETE FROM projects WHERE id=?`).run(project.id);
+      deleteProjectFiles(project.id);
+      deleted.push(project.id);
+    }
+    if (deleted.length) invalidateUserUsage(user.id);
+  }
+  return deleted;
+}
+
+/** .part, orphan renders и старые terminal render-work не переживают уборку. */
+export function sweepTransientProjectFiles(nowMs = Date.now()): number {
+  const db = getDb();
+  const root = path.join(config.dataDir, 'projects');
+  if (!fs.existsSync(root)) return 0;
+  let removed = 0;
+  const removeParts = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) removeParts(full);
+      else if (entry.name.endsWith('.part')) {
+        fs.rmSync(full, { force: true });
+        removed++;
+      }
+    }
+  };
+  removeParts(root);
+
+  for (const projectId of fs.readdirSync(root)) {
+    const renderRoot = rendersDir(projectId);
+    if (fs.existsSync(renderRoot)) {
+      const known = new Set(
+        (db.prepare(`SELECT file FROM generations WHERE project_id=? AND file IS NOT NULL`).all(projectId) as Array<{ file: string }>).map(
+          (row) => row.file,
+        ),
+      );
+      for (const file of fs.readdirSync(renderRoot)) {
+        if (!known.has(file)) {
+          fs.rmSync(path.join(renderRoot, file), { force: true });
+          removed++;
+        }
+      }
+    }
+    const workRoot = path.join(projectDir(projectId), 'render-work');
+    if (!fs.existsSync(workRoot)) continue;
+    for (const genId of fs.readdirSync(workRoot)) {
+      const work = path.join(workRoot, genId);
+      const row = db.prepare(`SELECT status, finished_at FROM generations WHERE id=? AND project_id=?`).get(genId, projectId) as
+        | { status: string; finished_at: string | null }
+        | undefined;
+      const finishedMs = row?.finished_at ? Date.parse(`${row.finished_at.replace(' ', 'T')}Z`) : fs.statSync(work).mtimeMs;
+      const removable = !row || row.status === 'done' || (row.status === 'failed' && nowMs - finishedMs >= 24 * 3_600_000);
+      if (removable) {
+        fs.rmSync(work, { recursive: true, force: true });
+        removed++;
+      }
+    }
+  }
+  if (removed) usageCache = null;
+  return removed;
+}
+
+export function cleanupStorageLifecycle(userId?: string): StorageCleanupResult {
+  const purgedResults = enforceLatestResultLimit(userId);
+  const deletedProjects = cleanupInvisibleProjects(userId);
+  const transientFiles = sweepTransientProjectFiles();
+  enforceStorageCap();
+  return { purgedResults, deletedProjects, transientFiles };
+}
+
 export function deleteProjectFiles(id: string): void {
   fs.rmSync(projectDir(id), { recursive: true, force: true });
   usageCache = null;

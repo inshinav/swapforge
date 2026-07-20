@@ -7,10 +7,11 @@ import { getDb, resetInterruptedJobs } from './db';
 import { buildApp } from './app';
 import { warmPricing } from './pricing';
 import { resumeGenerations } from './engine/render';
-import { enforceStorageCap, sweepOrphanRefFiles } from './storage';
+import { cleanupStorageLifecycle, enforceStorageCap, sweepOrphanRefFiles } from './storage';
 import { purgeExpiredSessions } from './auth/sessions';
 import { reconcileOrphanHolds } from './billing/flow';
 import { reconcileDuePaymentIntents } from './billing/payments';
+import { resumeDurableJobs } from './jobs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -38,12 +39,21 @@ async function main(): Promise<void> {
   if (swept) console.log(`[sweep] удалено файлов-сирот от оборванных загрузок: ${swept}`);
   const { purged } = enforceStorageCap();
   if (purged.length) console.log(`[rotation] на старте очищены исходники: ${purged.join(', ')}`);
+  const cleaned = cleanupStorageLifecycle();
+  if (cleaned.purgedResults.length || cleaned.deletedProjects.length || cleaned.transientFiles) {
+    console.log(
+      `[cleanup] results=${cleaned.purgedResults.length} projects=${cleaned.deletedProjects.length} transient=${cleaned.transientFiles}`,
+    );
+  }
+  setInterval(() => cleanupStorageLifecycle(), 60 * 60_000).unref();
   // Прогрев живых тарифов (litellm + каталог WaveSpeed + баланс) — не блокирует старт
   void warmPricing().catch((e) =>
     console.warn(`[pricing] прогрев не удался: ${e instanceof Error ? e.message : e}`),
   );
 
   const app = await buildApp();
+  const recoveredJobs = resumeDurableJobs();
+  if (recoveredJobs) console.log(`[jobs] после рестарта восстановлено: ${recoveredJobs}`);
 
   // Статика фронта (prod): web/dist рядом с server/dist
   const webDist = config.webDist || path.resolve(here, '../../web/dist');

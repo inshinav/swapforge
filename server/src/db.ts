@@ -281,6 +281,23 @@ export function applySchema(d: DatabaseSync): void {
       processed_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued','running','done','failed','cancelled')),
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      heartbeat_at TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      finished_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_telegram_login_replays_expiry ON telegram_login_replays(expires_at);
     CREATE INDEX IF NOT EXISTS idx_models_user ON models(user_id);
@@ -298,6 +315,9 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_payment_intents_reconcile
       ON payment_intents(status, reconcile_after) WHERE status IN ('creating','pending','paid');
     CREATE INDEX IF NOT EXISTS idx_payment_events_intent ON payment_events(intent_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_project
+      ON jobs(project_id) WHERE status IN ('queued','running');
   `);
 
   // Микромиграции v1 → v2
@@ -368,7 +388,10 @@ export function resetInterruptedJobs(): void {
   };
   for (const [busy, fallback] of Object.entries(interrupted)) {
     d.prepare(
-      `UPDATE projects SET status = ?, error = 'Задача прервана перезапуском сервиса — запусти шаг ещё раз' WHERE status = ?`,
+      `UPDATE projects SET status = ?, error = 'Задача прервана перезапуском сервиса — запусти шаг ещё раз'
+        WHERE status = ? AND id NOT IN (
+          SELECT project_id FROM jobs WHERE status IN ('queued','running')
+        )`,
     ).run(fallback, busy);
   }
 }

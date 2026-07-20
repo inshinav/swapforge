@@ -1,37 +1,68 @@
-// Простая последовательная очередь: ffmpeg и LLM-джобы не должны толкаться на 2 vCPU.
-// Удалённые ожидания (загрузка на WaveSpeed, поллинг рендера) сюда НЕ ставятся — см. engine/render.ts.
+// Durable последовательная очередь локальных CPU/LLM-стадий. Удалённые рендеры
+// живут отдельно: generations сохраняет concurrency=3 и собственное восстановление.
+import { randomUUID } from 'node:crypto';
 import { getDb } from './db';
+import { tx } from './billing/credits';
 
-/** Busy-статусы проекта (локальные стадии). Рендер живёт в generations.status. */
 export const BUSY_STATUSES = new Set(['storyboarding', 'analyzing', 'generating', 'startframing']);
+const LEASE_MS = 60_000;
+const HEARTBEAT_MS = 15_000;
+const workerId = randomUUID();
 
-interface Job {
+export interface ProjectJobOptions {
   projectId: string;
   label: string;
-  run: () => Promise<void>;
+  busyStatus: string;
+  doneStatus: string;
+  errorFallbackStatus: string;
+  payload?: Record<string, unknown>;
+  fn: () => Promise<void>;
+  onSuccess?: () => void;
+  onError?: (msg: string) => void;
 }
 
-const queue: Job[] = [];
+type DurableFactory = (projectId: string, payload: Record<string, unknown>) => ProjectJobOptions;
+
+interface JobRow {
+  id: string;
+  project_id: string;
+  kind: string;
+  payload_json: string;
+}
+
+const factories = new Map<string, DurableFactory>();
+const runtimeJobs = new Map<string, ProjectJobOptions>();
 let running = false;
 let pausedForTests = false;
 const idleWaiters = new Set<() => void>();
 
+function sqliteTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+export function registerDurableJobKind(kind: string, factory: DurableFactory): void {
+  factories.set(kind, factory);
+}
+
+function activeCount(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS c FROM jobs WHERE status IN ('queued','running')`)
+    .get() as { c: number };
+  return row.c;
+}
+
 function notifyIdle(): void {
-  if (running || queue.length > 0) return;
+  if (running || activeCount() > 0) return;
   for (const resolve of idleWaiters) resolve();
   idleWaiters.clear();
 }
 
-export function enqueue(job: Job): void {
-  queue.push(job);
-  void pump();
-}
-
 export function isQueued(projectId: string): boolean {
-  return queue.some((j) => j.projectId === projectId);
+  return !!getDb()
+    .prepare(`SELECT 1 FROM jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1`)
+    .get(projectId);
 }
 
-/** Фактическая длительность стадии — в projects.stage_times_json (кормит степпер UI). */
 function recordStageTime(projectId: string, label: string, seconds: number): void {
   try {
     const db = getDb();
@@ -43,12 +74,108 @@ function recordStageTime(projectId: string, label: string, seconds: number): voi
     try {
       times = row.stage_times_json ? (JSON.parse(row.stage_times_json) as Record<string, number>) : {};
     } catch {
-      /* кривой JSON перезапишем */
+      /* повреждённый JSON заменяется */
     }
     times[label] = Math.round(seconds * 10) / 10;
     db.prepare(`UPDATE projects SET stage_times_json = ? WHERE id = ?`).run(JSON.stringify(times), projectId);
-  } catch (e) {
-    console.warn(`[jobs] stage-time не записан (${label}):`, e instanceof Error ? e.message : e);
+  } catch (error) {
+    console.warn(`[jobs] stage-time не записан (${label}):`, error instanceof Error ? error.message : error);
+  }
+}
+
+function claimNext(): JobRow | null {
+  const db = getDb();
+  return tx(db, () => {
+    const row = db
+      .prepare(
+        `SELECT id, project_id, kind, payload_json FROM jobs
+          WHERE status='queued' OR (status='running' AND lease_expires_at <= ?)
+          ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+      )
+      .get(sqliteTime(Date.now())) as JobRow | undefined;
+    if (!row) return null;
+    const claimed = db
+      .prepare(
+        `UPDATE jobs SET status='running', lease_owner=?, lease_expires_at=?, heartbeat_at=datetime('now'),
+                         started_at=COALESCE(started_at, datetime('now')), attempts=attempts+1
+          WHERE id=? AND (status='queued' OR lease_expires_at <= ?)`,
+      )
+      .run(workerId, sqliteTime(Date.now() + LEASE_MS), row.id, sqliteTime(Date.now()));
+    return Number(claimed.changes) === 1 ? row : null;
+  });
+}
+
+function resolveJob(row: JobRow): ProjectJobOptions | null {
+  const live = runtimeJobs.get(row.id);
+  if (live) return live;
+  const factory = factories.get(row.kind);
+  if (!factory) return null;
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+  } catch {
+    /* handler validates the empty payload */
+  }
+  return factory(row.project_id, payload);
+}
+
+async function execute(row: JobRow): Promise<void> {
+  const db = getDb();
+  const job = resolveJob(row);
+  if (!job) {
+    db.prepare(
+      `UPDATE jobs SET status='failed', error='Нет обработчика durable job', finished_at=datetime('now'),
+                       lease_owner=NULL, lease_expires_at=NULL WHERE id=?`,
+    ).run(row.id);
+    return;
+  }
+  db.prepare(`UPDATE projects SET status=?, error=NULL WHERE id=?`).run(job.busyStatus, row.project_id);
+  const heartbeat = setInterval(() => {
+    db.prepare(
+      `UPDATE jobs SET heartbeat_at=datetime('now'), lease_expires_at=?
+        WHERE id=? AND status='running' AND lease_owner=?`,
+    ).run(sqliteTime(Date.now() + LEASE_MS), row.id, workerId);
+  }, HEARTBEAT_MS);
+  heartbeat.unref();
+  const started = Date.now();
+  try {
+    await job.fn();
+    tx(db, () => {
+      db.prepare(`UPDATE projects SET status=?, error=NULL WHERE id=?`).run(job.doneStatus, row.project_id);
+      db.prepare(
+        `UPDATE jobs SET status='done', finished_at=datetime('now'), lease_owner=NULL, lease_expires_at=NULL
+          WHERE id=? AND lease_owner=?`,
+      ).run(row.id, workerId);
+    });
+    recordStageTime(row.project_id, job.label, (Date.now() - started) / 1000);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[jobs] ${job.label} (${row.project_id}):`, message);
+    tx(db, () => {
+      db.prepare(`UPDATE projects SET status=?, error=? WHERE id=?`).run(
+        job.errorFallbackStatus,
+        message.slice(0, 500),
+        row.project_id,
+      );
+      db.prepare(
+        `UPDATE jobs SET status='failed', error=?, finished_at=datetime('now'), lease_owner=NULL, lease_expires_at=NULL
+          WHERE id=? AND lease_owner=?`,
+      ).run(message.slice(0, 500), row.id, workerId);
+    });
+    try {
+      job.onError?.(message);
+    } catch (hookError) {
+      console.error(`[jobs] onError ${job.label} (${row.project_id}):`, hookError);
+    }
+    return;
+  } finally {
+    clearInterval(heartbeat);
+    runtimeJobs.delete(row.id);
+  }
+  try {
+    job.onSuccess?.();
+  } catch (error) {
+    console.error(`[jobs] onSuccess ${job.label} (${row.project_id}):`, error);
   }
 }
 
@@ -56,15 +183,10 @@ async function pump(): Promise<void> {
   if (running || pausedForTests) return;
   running = true;
   try {
-    while (queue.length > 0) {
-      const job = queue.shift();
-      if (!job) break;
-      try {
-        await job.run();
-      } catch (e) {
-        // Ошибки конкретной джобы фиксируются внутри runProjectJob; сюда попадают только неожиданные
-        console.error(`[jobs] ${job.label} (${job.projectId}) упала вне обработчика:`, e);
-      }
+    for (;;) {
+      const row = claimNext();
+      if (!row) break;
+      await execute(row);
     }
   } finally {
     running = false;
@@ -72,83 +194,55 @@ async function pump(): Promise<void> {
   }
 }
 
-/** Resolve only when all local detached jobs have completed. Intended for deterministic shutdown/tests. */
+export function enqueueProjectJob(opts: ProjectJobOptions): void {
+  const db = getDb();
+  const id = randomUUID();
+  tx(db, () => {
+    db.prepare(
+      `INSERT INTO jobs (id, project_id, kind, payload_json) VALUES (?, ?, ?, ?)`,
+    ).run(id, opts.projectId, opts.label, JSON.stringify(opts.payload ?? {}));
+    db.prepare(`UPDATE projects SET status=?, error=NULL WHERE id=?`).run(opts.busyStatus, opts.projectId);
+  });
+  runtimeJobs.set(id, opts);
+  void pump();
+}
+
+/** Boot recovery: this process is the sole local worker, so old leases can be reclaimed now. */
+export function resumeDurableJobs(): number {
+  const recovered = Number(
+    getDb()
+      .prepare(
+        `UPDATE jobs SET status='queued', lease_owner=NULL, lease_expires_at=NULL
+          WHERE status='running'`,
+      )
+      .run().changes,
+  );
+  void pump();
+  return recovered;
+}
+
 export function waitForJobsIdle(): Promise<void> {
-  if (!running && queue.length === 0) return Promise.resolve();
+  if (!running && activeCount() === 0) return Promise.resolve();
   return new Promise((resolve) => idleWaiters.add(resolve));
 }
 
-/**
- * Test harness for route assertions that intentionally stop before paid/provider work starts.
- * Production code never calls this. Pausing before enqueue keeps the job fully deterministic.
- */
 export function _pauseJobsForTests(paused: boolean): void {
   pausedForTests = paused;
   if (!paused) void pump();
 }
 
 export function _discardQueuedJobsForTests(): void {
-  queue.length = 0;
+  getDb()
+    .prepare(
+      `UPDATE jobs SET status='cancelled', finished_at=datetime('now'), lease_owner=NULL, lease_expires_at=NULL
+        WHERE status='queued'`,
+    )
+    .run();
+  runtimeJobs.clear();
   notifyIdle();
 }
 
-/**
- * Обёртка джобы над проектом: выставляет busy-статус, по завершении — done,
- * при ошибке — status='error' с человекочитаемым сообщением (+ статус для повтора).
- */
-export function enqueueProjectJob(opts: {
-  projectId: string;
-  label: string;
-  busyStatus: string;
-  doneStatus: string;
-  errorFallbackStatus: string;
-  fn: () => Promise<void>;
-  /** Хук авто-флоу: зовётся ПОСЛЕ записи doneStatus; его ошибки не роняют джобу. */
-  onSuccess?: () => void;
-  /** Хук падения стадии (после записи error-статуса); ошибки хука не роняют очередь. */
-  onError?: (msg: string) => void;
-}): void {
-  const db = getDb();
-  db.prepare(`UPDATE projects SET status = ?, error = NULL WHERE id = ?`).run(
-    opts.busyStatus,
-    opts.projectId,
-  );
-  enqueue({
-    projectId: opts.projectId,
-    label: opts.label,
-    run: async () => {
-      const t0 = Date.now();
-      try {
-        await opts.fn();
-        db.prepare(`UPDATE projects SET status = ?, error = NULL WHERE id = ?`).run(
-          opts.doneStatus,
-          opts.projectId,
-        );
-        recordStageTime(opts.projectId, opts.label, (Date.now() - t0) / 1000);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error(`[jobs] ${opts.label} (${opts.projectId}):`, msg);
-        db.prepare(`UPDATE projects SET status = ?, error = ? WHERE id = ?`).run(
-          opts.errorFallbackStatus,
-          msg.slice(0, 500),
-          opts.projectId,
-        );
-        if (opts.onError) {
-          try {
-            opts.onError(msg);
-          } catch (hookErr) {
-            console.error(`[jobs] onError ${opts.label} (${opts.projectId}):`, hookErr);
-          }
-        }
-        return;
-      }
-      if (opts.onSuccess) {
-        try {
-          opts.onSuccess();
-        } catch (e) {
-          console.error(`[jobs] onSuccess ${opts.label} (${opts.projectId}):`, e);
-        }
-      }
-    },
-  });
+/** Emulates process memory loss while leaving SQLite rows intact. */
+export function _dropRuntimeJobsForTests(): void {
+  runtimeJobs.clear();
 }

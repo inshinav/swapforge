@@ -8,7 +8,7 @@ import { getDb } from '../db';
 import { config } from '../config';
 import { wavespeed, type WaveSpeed, type WsPrediction } from '../wavespeed';
 import { buildEstimate, estimateRender, estimateVideoRender } from '../pricing';
-import { enforceStorageCap, projectDir, refsDir, rendersDir, startDir } from '../storage';
+import { cleanupStorageLifecycle, projectDir, refsDir, rendersDir, startDir } from '../storage';
 import {
   cutVideoSegment,
   extractFrameAt,
@@ -1040,7 +1040,7 @@ async function runLongVideo(
     ).run(file, bytes, costUsd, costSource, nsfw, nsfw, genId);
     settleProjectHold(projectId, genId, costUsd);
     fs.rmSync(work, { recursive: true, force: true });
-    enforceStorageCap();
+    cleanupStorageLifecycle(project.user_id ?? undefined);
     console.log(`[render-long] done gen=${genId} segments=${state.segments.length} bytes=${bytes} cost=$${costUsd ?? '?'}`);
     promoteNext(ws);
   } catch (e) {
@@ -1232,7 +1232,10 @@ async function completeFromResult(gen: GenRow, r: WsPrediction, ws: WaveSpeed): 
     ).run(file, bytes, cost.usd, cost.source, nsfw, nsfw, gen.id);
     // Кредиты: единый финал → честный settle по факту (cap = hold); владельцу — no-op
     settleProjectHold(gen.project_id, gen.id, cost.usd);
-    enforceStorageCap();
+    const owner = d.prepare(`SELECT user_id FROM projects WHERE id=?`).get(gen.project_id) as
+      | { user_id: string | null }
+      | undefined;
+    cleanupStorageLifecycle(owner?.user_id ?? undefined);
     console.log(
       `[render] done gen=${gen.id} bytes=${bytes} cost=$${cost.usd ?? '?'} source=${cost.source ?? '-'}`,
     );

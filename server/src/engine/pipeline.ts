@@ -1,6 +1,12 @@
 import path from 'node:path';
 import { getDb } from '../db';
-import { BUSY_STATUSES, enqueueProjectJob, isQueued } from '../jobs';
+import {
+  BUSY_STATUSES,
+  enqueueProjectJob,
+  isQueued,
+  registerDurableJobKind,
+  type ProjectJobOptions,
+} from '../jobs';
 import { storyboard } from '../ffmpeg';
 import { framesDir, projectDir } from '../storage';
 import { config } from '../config';
@@ -46,8 +52,8 @@ function loadRefs(projectId: string): RefInfo[] {
   return loadReferenceManifest(projectId).refs;
 }
 
-export function startStoryboard(projectId: string): void {
-  enqueueProjectJob({
+function storyboardJob(projectId: string): ProjectJobOptions {
+  return {
     projectId,
     label: 'storyboard',
     busyStatus: 'storyboarding',
@@ -70,11 +76,15 @@ export function startStoryboard(projectId: string): void {
     },
     onSuccess: () => advanceFlow(projectId),
     onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
-  });
+  };
 }
 
-export function startAnalysis(projectId: string): void {
-  enqueueProjectJob({
+export function startStoryboard(projectId: string): void {
+  enqueueProjectJob(storyboardJob(projectId));
+}
+
+function analysisJob(projectId: string): ProjectJobOptions {
+  return {
     projectId,
     label: 'analyze',
     busyStatus: 'analyzing',
@@ -97,7 +107,11 @@ export function startAnalysis(projectId: string): void {
     },
     onSuccess: () => advanceFlow(projectId),
     onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
-  });
+  };
+}
+
+export function startAnalysis(projectId: string): void {
+  enqueueProjectJob(analysisJob(projectId));
 }
 
 export interface StartGenerationOpts {
@@ -107,13 +121,14 @@ export interface StartGenerationOpts {
   flagsOverride?: FlowFlags | null;
 }
 
-export function startGeneration(projectId: string, opts: StartGenerationOpts): void {
-  enqueueProjectJob({
+function generationJob(projectId: string, opts: StartGenerationOpts): ProjectJobOptions {
+  return {
     projectId,
     label: 'generate',
     busyStatus: 'generating',
     doneStatus: 'complete',
     errorFallbackStatus: 'analyzed',
+    payload: opts as unknown as Record<string, unknown>,
     fn: async () => {
       const db = getDb();
       const p = loadProject(projectId);
@@ -168,20 +183,25 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
     },
     onSuccess: () => advanceFlow(projectId),
     onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
-  });
+  };
+}
+
+export function startGeneration(projectId: string, opts: StartGenerationOpts): void {
+  enqueueProjectJob(generationJob(projectId, opts));
 }
 
 /**
  * Старт-кадр в очереди (для one-click). В авто-флоу кадр всегда 9:16 (1152x2048):
  * выход рендера фиксирован 9:16, и «reference image 1 = точный первый кадр» обязан совпадать.
  */
-export function startStartframe(projectId: string, version: number): void {
-  enqueueProjectJob({
+function startframeJob(projectId: string, version: number): ProjectJobOptions {
+  return {
     projectId,
     label: 'startframe',
     busyStatus: 'startframing',
     doneStatus: 'complete',
     errorFallbackStatus: 'complete',
+    payload: { version },
     fn: async () => {
       const db = getDb();
       const p = loadProject(projectId);
@@ -200,8 +220,27 @@ export function startStartframe(projectId: string, version: number): void {
     },
     onSuccess: () => advanceFlow(projectId),
     onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),
-  });
+  };
 }
+
+export function startStartframe(projectId: string, version: number): void {
+  enqueueProjectJob(startframeJob(projectId, version));
+}
+
+registerDurableJobKind('storyboard', (projectId) => storyboardJob(projectId));
+registerDurableJobKind('analyze', (projectId) => analysisJob(projectId));
+registerDurableJobKind('generate', (projectId, payload) =>
+  generationJob(projectId, {
+    lang: payload.lang === 'ru' ? 'ru' : 'en',
+    iteration: (payload.iteration ?? null) as IterationCtx | null,
+    flagsOverride: (payload.flagsOverride ?? undefined) as FlowFlags | null | undefined,
+  }),
+);
+registerDurableJobKind('startframe', (projectId, payload) => {
+  const version = Number(payload.version);
+  if (!Number.isInteger(version) || version <= 0) throw new Error('Некорректная версия durable startframe job');
+  return startframeJob(projectId, version);
+});
 
 /**
  * Двигатель one-click: после каждой успешной стадии решает следующий шаг по чистой таблице
