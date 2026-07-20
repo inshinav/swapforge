@@ -4,6 +4,7 @@ import type {
   BillingProviderId,
   DollarBalanceInfo,
   DollarLedgerEntry,
+  PaymentIntentInfo,
 } from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
@@ -23,16 +24,8 @@ const KIND_LABEL: Record<
   adjust: { label: 'корректировка', tone: 'warn' },
 };
 
-const PENDING_PAYMENT_KEY = 'sf-pending-payment';
 const PENDING_POLL_MAX_MS = 10 * 60_000;
 const PENDING_POLL_DELAYS_MS = [3_000, 5_000, 8_000, 13_000, 21_000, 30_000] as const;
-
-interface PendingPayment {
-  amountUsd: number;
-  provider: BillingProviderId;
-  balanceBeforeUsd: number;
-  startedAt: number;
-}
 
 function money(value: number): string {
   return `${value < 0 ? '-$' : '$'}${Math.abs(value).toFixed(2)}`;
@@ -42,32 +35,51 @@ function rubles(value: number): string {
   return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)} ₽`;
 }
 
-function readPendingPayment(): PendingPayment | null {
+const ACTIVE_PAYMENT = new Set<PaymentIntentInfo['status']>(['creating', 'pending', 'paid']);
+
+interface PendingPaymentHint {
+  intentId: string;
+  provider: BillingProviderId;
+  amountUsd: number;
+  startedAt: number;
+}
+
+function pendingPaymentKey(userId: string): string {
+  return `sf-pending-payment:${userId}`;
+}
+
+function readPendingPaymentHint(userId: string): PendingPaymentHint | null {
   try {
-    const raw = localStorage.getItem(PENDING_PAYMENT_KEY);
-    if (!raw) return null;
-    const p = JSON.parse(raw) as Partial<PendingPayment>;
+    const parsed = JSON.parse(localStorage.getItem(pendingPaymentKey(userId)) ?? 'null') as Partial<PendingPaymentHint> | null;
     if (
-      typeof p.amountUsd === 'number' &&
-      (p.provider === 'cryptopay' || p.provider === 'lavatop') &&
-      typeof p.balanceBeforeUsd === 'number' &&
-      typeof p.startedAt === 'number' &&
-      Date.now() - p.startedAt < PENDING_POLL_MAX_MS
+      parsed &&
+      typeof parsed.intentId === 'string' &&
+      (parsed.provider === 'cryptopay' || parsed.provider === 'lavatop') &&
+      typeof parsed.amountUsd === 'number' &&
+      typeof parsed.startedAt === 'number' &&
+      Date.now() - parsed.startedAt < PENDING_POLL_MAX_MS
     ) {
-      return p as PendingPayment;
+      return parsed as PendingPaymentHint;
     }
   } catch {
-    // Повреждённое локальное состояние просто сбрасываем.
+    // The server remains the source of truth; a damaged local hint is disposable.
   }
-  localStorage.removeItem(PENDING_PAYMENT_KEY);
+  localStorage.removeItem(pendingPaymentKey(userId));
   return null;
 }
 
+function intentStartedAt(intent: PaymentIntentInfo): number {
+  const parsed = Date.parse(intent.createdAt.includes('T') ? intent.createdAt : `${intent.createdAt.replace(' ', 'T')}Z`);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
 export default function Billing({
+  userId,
   neededUsd,
   onBackToSwap,
   onBalanceChange,
 }: {
+  userId: string;
   neededUsd: number | null;
   onBackToSwap: () => void;
   onBalanceChange: (balance: DollarBalanceInfo) => void;
@@ -80,20 +92,27 @@ export default function Billing({
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState<BillingProviderId | null>(null);
   const [err, setErr] = useState('');
-  const [pending, setPending] = useState<PendingPayment | null>(readPendingPayment);
+  const [pending, setPending] = useState<PaymentIntentInfo | null>(null);
   const [paymentDone, setPaymentDone] = useState<number | null>(null);
   const [paymentTimedOut, setPaymentTimedOut] = useState(false);
 
   const reload = useCallback(async (): Promise<DollarBalanceInfo | null> => {
     try {
-      const [b, l, m] = await Promise.all([
+      const [b, l, m, payments] = await Promise.all([
         api.billingBalance(),
         api.billingLedger(),
         api.billingMethods(),
+        api.billingPaymentIntents(),
       ]);
       setBalance(b);
       setLedger(l.entries);
       setMethods(m);
+      const hint = readPendingPaymentHint(userId);
+      setPending(
+        payments.intents.find((intent) => ACTIVE_PAYMENT.has(intent.status) && intent.id === hint?.intentId) ??
+          payments.intents.find((intent) => ACTIVE_PAYMENT.has(intent.status)) ??
+          null,
+      );
       onBalanceChange(b);
       setErr('');
       return b;
@@ -101,7 +120,7 @@ export default function Billing({
       setErr(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [onBalanceChange]);
+  }, [onBalanceChange, userId]);
 
   useEffect(() => {
     void reload();
@@ -113,23 +132,45 @@ export default function Billing({
     setAmount(suggested.toFixed(2));
   }, [methods, neededUsd]);
 
-  const checkPendingBalance = useCallback(async (): Promise<boolean> => {
+  const checkPendingPayment = useCallback(async (): Promise<boolean> => {
     if (!pending) return false;
     try {
-      const b = await api.billingBalance();
-      setBalance(b);
-      onBalanceChange(b);
-      if (b.balanceUsd <= pending.balanceBeforeUsd) return false;
-      setPaymentDone(b.balanceUsd - pending.balanceBeforeUsd);
-      setPending(null);
-      setPaymentTimedOut(false);
-      localStorage.removeItem(PENDING_PAYMENT_KEY);
-      void reload();
-      return true;
+      const { intents } = await api.billingPaymentIntents();
+      const current = pending.id
+        ? intents.find((intent) => intent.id === pending.id)
+        : intents.find(
+            (intent) =>
+              ACTIVE_PAYMENT.has(intent.status) &&
+              intent.provider === pending.provider &&
+              Math.abs(intent.amountUsd - pending.amountUsd) < 0.001,
+          );
+      if (!current) return false;
+      setPending((previous) =>
+        previous?.id === current.id &&
+        previous.status === current.status &&
+        previous.updatedAt === current.updatedAt
+          ? previous
+          : current,
+      );
+      if (current.status === 'credited') {
+        localStorage.removeItem(pendingPaymentKey(userId));
+        setPaymentDone(current.amountUsd);
+        setPending(null);
+        setPaymentTimedOut(false);
+        void reload();
+        return true;
+      }
+      if (!ACTIVE_PAYMENT.has(current.status)) {
+        localStorage.removeItem(pendingPaymentKey(userId));
+        setPending(null);
+        setPaymentTimedOut(true);
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
-  }, [onBalanceChange, pending, reload]);
+  }, [pending, reload, userId]);
 
   useEffect(() => {
     if (!pending) return;
@@ -140,26 +181,26 @@ export default function Billing({
 
     const expire = () => {
       if (!alive) return;
-      localStorage.removeItem(PENDING_PAYMENT_KEY);
+      localStorage.removeItem(pendingPaymentKey(userId));
       setPending(null);
       setPaymentTimedOut(true);
     };
     const check = async () => {
       if (!alive || checking) return false;
-      if (Date.now() - pending.startedAt >= PENDING_POLL_MAX_MS) {
+      if (Date.now() - intentStartedAt(pending) >= PENDING_POLL_MAX_MS) {
         expire();
         return true;
       }
       checking = true;
       try {
-        return await checkPendingBalance();
+        return await checkPendingPayment();
       } finally {
         checking = false;
       }
     };
     const schedule = () => {
       if (!alive) return;
-      const remaining = PENDING_POLL_MAX_MS - (Date.now() - pending.startedAt);
+      const remaining = PENDING_POLL_MAX_MS - (Date.now() - intentStartedAt(pending));
       if (remaining <= 0) return expire();
       const delay = PENDING_POLL_DELAYS_MS[Math.min(attempt++, PENDING_POLL_DELAYS_MS.length - 1)]!;
       timer = window.setTimeout(() => void check().then((done) => !done && schedule()), Math.min(delay, remaining));
@@ -175,7 +216,7 @@ export default function Billing({
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [checkPendingBalance, pending]);
+  }, [checkPendingPayment, pending, userId]);
 
   const amountUsd = Number(amount.replace(',', '.'));
   const amountError = useMemo(() => {
@@ -209,13 +250,32 @@ export default function Billing({
     setErr('');
     try {
       const { payUrl } = await api.checkout(amountUsd, provider, email.trim() || undefined);
-      const next: PendingPayment = {
+      const now = new Date();
+      const hint: PaymentIntentInfo = {
+        id: '',
         amountUsd,
         provider,
-        balanceBeforeUsd: balance?.balanceUsd ?? 0,
-        startedAt: Date.now(),
+        status: 'pending',
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        expiresAt: null,
+        creditedAt: null,
       };
-      localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(next));
+      const next = await api
+        .billingPaymentIntents()
+        .then(({ intents }) =>
+          intents.find(
+            (intent) =>
+              ACTIVE_PAYMENT.has(intent.status) &&
+              intent.provider === provider &&
+              Math.abs(intent.amountUsd - amountUsd) < 0.001,
+          ) ?? hint,
+        )
+        .catch(() => hint);
+      localStorage.setItem(
+        pendingPaymentKey(userId),
+        JSON.stringify({ intentId: next.id, provider, amountUsd, startedAt: Date.now() } satisfies PendingPaymentHint),
+      );
       setPending(next);
       setPaymentDone(null);
       setPaymentTimedOut(false);
@@ -254,7 +314,7 @@ export default function Billing({
             <div className="rounded-xl border border-warn/35 bg-warn/5 px-4 py-3 flex items-center gap-3">
               <Spinner size={16} />
               <span className="text-sm flex-1">Ждём зачисление {money(pending.amountUsd)}</span>
-              <button type="button" onClick={() => void checkPendingBalance()} className="min-h-11 px-2 text-xs text-mut hover:text-lime">Проверить</button>
+              <button type="button" onClick={() => void checkPendingPayment()} className="min-h-11 px-2 text-xs text-mut hover:text-lime">Проверить</button>
             </div>
           )}
 

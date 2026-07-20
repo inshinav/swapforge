@@ -245,6 +245,42 @@ export function applySchema(d: DatabaseSync): void {
       error TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS payment_intents (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider IN ('cryptopay','lavatop')),
+      external_id TEXT,
+      credits_cents INTEGER NOT NULL CHECK (credits_cents > 0),
+      paid_currency TEXT NOT NULL,
+      expected_paid_minor INTEGER NOT NULL CHECK (expected_paid_minor > 0),
+      status TEXT NOT NULL DEFAULT 'creating'
+        CHECK (status IN ('creating','pending','paid','credited','expired','cancelled','failed','quarantined')),
+      pay_url TEXT,
+      expires_at TEXT,
+      reconcile_after TEXT NOT NULL DEFAULT (datetime('now')),
+      reconcile_attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_at TEXT,
+      credited_at TEXT,
+      UNIQUE (provider, external_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_events (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      event_hash TEXT NOT NULL UNIQUE,
+      external_ref TEXT,
+      intent_id TEXT REFERENCES payment_intents(id) ON DELETE SET NULL,
+      source TEXT NOT NULL CHECK (source IN ('webhook','reconcile')),
+      verified INTEGER NOT NULL DEFAULT 0,
+      outcome TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      processed_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_telegram_login_replays_expiry ON telegram_login_replays(expires_at);
     CREATE INDEX IF NOT EXISTS idx_models_user ON models(user_id);
@@ -258,6 +294,10 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_flow_attempts_project ON flow_attempts(project_id, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_flow_attempts_active_project
       ON flow_attempts(project_id) WHERE status IN ('held','running');
+    CREATE INDEX IF NOT EXISTS idx_payment_intents_user ON payment_intents(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_payment_intents_reconcile
+      ON payment_intents(status, reconcile_after) WHERE status IN ('creating','pending','paid');
+    CREATE INDEX IF NOT EXISTS idx_payment_events_intent ON payment_events(intent_id, created_at);
   `);
 
   // Микромиграции v1 → v2

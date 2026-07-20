@@ -14,10 +14,54 @@ import {
   type CheckoutInput,
   type CheckoutResult,
   type PaymentEvent,
+  type ProviderPaymentStatus,
   type PaymentProvider,
 } from './provider';
 
 const API_BASE = 'https://gate.lava.top';
+
+interface LavaInvoice {
+  id?: string;
+  status?: string;
+  paymentUrl?: string;
+  amountTotal?: number | string;
+  receipt?: { amount?: number | string; currency?: string };
+  clientUtm?: { utm_content?: string; utm_term?: string };
+}
+
+function finiteAmount(value: unknown): number | null {
+  const amount = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+function normalizeInvoice(invoice: LavaInvoice): ProviderPaymentStatus | null {
+  if (!invoice.id) return null;
+  const ref = decodeRef(invoice.clientUtm?.utm_content);
+  const amount = finiteAmount(invoice.receipt?.amount ?? invoice.amountTotal);
+  const rawStatus = String(invoice.status ?? '').toUpperCase();
+  const state = rawStatus === 'COMPLETED' ? 'paid' : rawStatus === 'FAILED' ? 'failed' : 'pending';
+  return {
+    externalId: invoice.id,
+    intentId: ref?.intentId ?? null,
+    userId: ref?.userId ?? null,
+    amountCents: ref?.amountCents ?? null,
+    state,
+    paidCurrency: typeof invoice.receipt?.currency === 'string' ? invoice.receipt.currency.toUpperCase() : 'RUB',
+    paidAmountMinor: amount === null ? null : Math.round(amount * 100),
+    expiresAt: null,
+  };
+}
+
+async function lavaRequest(path: string): Promise<unknown> {
+  if (!config.lavaApiKey) throw new Error('Lava.top не настроен на сервере');
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { 'X-Api-Key': config.lavaApiKey },
+    signal: AbortSignal.timeout(15000),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Lava.top отклонил запрос: ${JSON.stringify(json)}`);
+  return json;
+}
 
 export function parseLavaEvent(rawBody: Buffer): PaymentEvent {
   let body: Record<string, unknown>;
@@ -29,7 +73,9 @@ export function parseLavaEvent(rawBody: Buffer): PaymentEvent {
   const eventType = String(body.eventType ?? '');
   // нас интересует только успешная разовая покупка продукта
   if (eventType !== 'payment.success') return { kind: 'ignored', reason: eventType || 'no_event' };
-  if (body.status !== 'completed') return { kind: 'ignored', reason: `status=${String(body.status)}` };
+  if (String(body.status ?? '').toLowerCase() !== 'completed') {
+    return { kind: 'ignored', reason: `status=${String(body.status)}` };
+  }
 
   const contractId = body.contractId;
   const utm = (body.clientUtm ?? {}) as Record<string, unknown>;
@@ -49,6 +95,8 @@ export function parseLavaEvent(rawBody: Buffer): PaymentEvent {
   return {
     kind: 'purchase',
     paymentRef: `lavatop:${contractId}`,
+    externalId: String(contractId),
+    intentId: ref.intentId,
     userId: ref.userId,
     amountCents: ref.amountCents,
     packId: ref.packId,
@@ -91,17 +139,39 @@ export class LavaTopProvider implements PaymentProvider {
         amount: amountRub,
         // round-trip маппинг: userId+сумма переживут поход на оплату
         clientUtm: {
-          utm_content: encodeRef(input.userId, amountCents),
+          utm_content: encodeRef(input.userId, amountCents, input.intentId),
           utm_term: `rub-${Math.round(amountRub * 100)}`,
         },
       }),
       signal: AbortSignal.timeout(15000),
     });
-    const json = (await res.json().catch(() => ({}))) as { paymentUrl?: string; error?: unknown };
-    if (!res.ok || !json.paymentUrl) {
+    const json = (await res.json().catch(() => ({}))) as LavaInvoice & { error?: unknown };
+    if (!res.ok || !json.paymentUrl || !json.id) {
       throw new Error(`Lava.top отклонил создание счёта: ${JSON.stringify(json.error ?? res.status)}`);
     }
-    return { payUrl: json.paymentUrl };
+    return {
+      payUrl: json.paymentUrl,
+      externalId: json.id,
+      paidCurrency: 'RUB',
+      expectedPaidAmountMinor: Math.round(amountRub * 100),
+      expiresAt: null,
+    };
+  }
+
+  async getPayment(externalId: string): Promise<ProviderPaymentStatus | null> {
+    const invoice = (await lavaRequest(`/api/v1/invoices/${encodeURIComponent(externalId)}`)) as LavaInvoice;
+    return normalizeInvoice(invoice);
+  }
+
+  async findRecentPayment(intentId: string): Promise<ProviderPaymentStatus | null> {
+    const beginDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const query = new URLSearchParams({ beginDate, page: '0', size: '100' });
+    for (const status of ['NEW', 'IN_PROGRESS', 'COMPLETED', 'FAILED']) query.append('invoiceStatuses', status);
+    const result = (await lavaRequest(`/api/v1/invoices?${query}`)) as { items?: LavaInvoice[] };
+    const invoice = (result.items ?? []).find(
+      (item) => decodeRef(item.clientUtm?.utm_content)?.intentId === intentId,
+    );
+    return invoice ? normalizeInvoice(invoice) : null;
   }
 
   verifyWebhook(_rawBody: Buffer, headers: Record<string, string | string[] | undefined>): boolean {

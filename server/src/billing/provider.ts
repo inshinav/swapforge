@@ -9,6 +9,8 @@ import { LavaTopProvider } from './lavatop';
 export type ProviderId = 'cryptopay' | 'lavatop';
 
 export interface CheckoutInput {
+  /** Internal durable intent, created before the remote invoice. */
+  intentId: string;
   userId: string;
   /** Сумма пользовательского баланса в USD; до входа в провайдер нормализована до центов. */
   amountUsd: number;
@@ -19,6 +21,23 @@ export interface CheckoutInput {
 export interface CheckoutResult {
   /** Ссылка/URL виджета оплаты для редиректа юзера. */
   payUrl: string;
+  externalId: string;
+  paidCurrency: string;
+  expectedPaidAmountMinor: number;
+  expiresAt: string | null;
+}
+
+export type ProviderPaymentState = 'pending' | 'paid' | 'expired' | 'cancelled' | 'failed';
+
+export interface ProviderPaymentStatus {
+  externalId: string;
+  intentId: string | null;
+  userId: string | null;
+  amountCents: number | null;
+  state: ProviderPaymentState;
+  paidCurrency: string | null;
+  paidAmountMinor: number | null;
+  expiresAt: string | null;
 }
 
 const CHECKOUT_HOSTS: Record<ProviderId, readonly string[]> = {
@@ -49,6 +68,8 @@ export type PaymentEvent =
       kind: 'purchase';
       /** UNIQUE-ключ идемпотентности леджера (провайдер:контракт). */
       paymentRef: string;
+      externalId: string;
+      intentId?: string;
       /** НАШ user_id (мы сами положили его в инвойс). */
       userId: string;
       /** Новые инвойсы содержат точную сумму пополнения; packId нужен для старых незакрытых счетов. */
@@ -73,31 +94,34 @@ export interface PaymentProvider {
   /** Нужен ли email от покупателя перед checkout. */
   readonly needsEmail: boolean;
   createCheckout(input: CheckoutInput): Promise<CheckoutResult>;
+  getPayment(externalId: string): Promise<ProviderPaymentStatus | null>;
+  findRecentPayment(intentId: string): Promise<ProviderPaymentStatus | null>;
   /** Подпись/секрет вебхука по СЫРОМУ телу + заголовкам. */
   verifyWebhook(rawBody: Buffer, headers: Record<string, string | string[] | undefined>): boolean;
   parseWebhook(rawBody: Buffer): PaymentEvent;
 }
 
 /** Единая упаковка userId+суммы в round-trip строку провайдера. */
-export function encodeRef(userId: string, amountCents: number | string): string {
+export function encodeRef(userId: string, amountCents: number | string, intentId?: string): string {
   // string — только для тестов/обработки старых пакетных счетов.
   return typeof amountCents === 'number'
-    ? JSON.stringify({ u: userId, c: amountCents })
-    : JSON.stringify({ u: userId, p: amountCents });
+    ? JSON.stringify({ u: userId, c: amountCents, ...(intentId ? { i: intentId } : {}) })
+    : JSON.stringify({ u: userId, p: amountCents, ...(intentId ? { i: intentId } : {}) });
 }
 
 export function decodeRef(
   raw: string | undefined | null,
-): { userId: string; amountCents?: number; packId?: string } | null {
+): { userId: string; amountCents?: number; packId?: string; intentId?: string } | null {
   if (!raw) return null;
   try {
-    const o = JSON.parse(raw) as { u?: unknown; c?: unknown; p?: unknown };
+    const o = JSON.parse(raw) as { u?: unknown; c?: unknown; p?: unknown; i?: unknown };
     if (typeof o.u !== 'string') return null;
+    const intentId = typeof o.i === 'string' ? o.i : undefined;
     if (typeof o.c === 'number' && Number.isSafeInteger(o.c) && o.c > 0) {
-      return { userId: o.u, amountCents: o.c };
+      return { userId: o.u, amountCents: o.c, intentId };
     }
     // Совместимость с уже выпущенными пакетными инвойсами.
-    if (typeof o.p === 'string') return { userId: o.u, packId: o.p };
+    if (typeof o.p === 'string') return { userId: o.u, packId: o.p, intentId };
   } catch {
     /* не наш payload */
   }

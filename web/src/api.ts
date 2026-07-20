@@ -12,6 +12,7 @@ import type {
   ModelInfo,
   OwnerBillingUser,
   OwnerManualTopupResult,
+  PaymentIntentInfo,
   PresetInfo,
   PricingInfo,
   ProjectFull,
@@ -225,6 +226,8 @@ export const api = {
   billingLedger: () =>
     fetch(u('api/billing/ledger')).then((r) => j<{ entries: DollarLedgerEntry[] }>(r)),
   billingMethods: () => fetch(u('api/billing/packs')).then((r) => j<BillingMethodsInfo>(r)),
+  billingPaymentIntents: () =>
+    fetch(u('api/billing/payment-intents')).then((r) => j<{ intents: PaymentIntentInfo[] }>(r)),
   checkout: (amountUsd: number, provider: BillingProviderId, email?: string) =>
     post(u('api/billing/checkout'), { amountUsd, provider, email }).then((r) => j<{ payUrl: string }>(r)),
   ownerBillingUser: (username: string) =>

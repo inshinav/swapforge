@@ -10,6 +10,7 @@ import { resumeGenerations } from './engine/render';
 import { enforceStorageCap, sweepOrphanRefFiles } from './storage';
 import { purgeExpiredSessions } from './auth/sessions';
 import { reconcileOrphanHolds } from './billing/flow';
+import { reconcileDuePaymentIntents } from './billing/payments';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +26,14 @@ async function main(): Promise<void> {
   // прерванные аплоады помечаются failed (ретрай дёшев — URL переиспользуются)
   resumeGenerations();
   reconcileOrphanHolds(); // осиротевшие open-холды (краш между done и settle) — закрыть
+  void reconcileDuePaymentIntents().catch((e) =>
+    console.warn(`[billing] сверка платежей не удалась: ${e instanceof Error ? e.message : e}`),
+  );
+  setInterval(() => {
+    void reconcileDuePaymentIntents().catch((e) =>
+      console.warn(`[billing] фоновая сверка не удалась: ${e instanceof Error ? e.message : e}`),
+    );
+  }, 60_000).unref();
   const swept = sweepOrphanRefFiles();
   if (swept) console.log(`[sweep] удалено файлов-сирот от оборванных загрузок: ${swept}`);
   const { purged } = enforceStorageCap();

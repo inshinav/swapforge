@@ -363,6 +363,7 @@ export default function App() {
           <Models guided={journeyStatus?.current === 'model'} onProgressChange={loadJourney} />
         ) : activeView === 'billing' ? (
           <Billing
+            userId={userId!}
             neededUsd={billingNeed}
             onBackToSwap={() => go(journeyActive ? 'start' : 'swap')}
             onBalanceChange={(next) => {

@@ -286,22 +286,22 @@ describe('Crypto Pay адаптер', () => {
 
   it('createCheckout создаёт точный fiat-USD инвойс с оплатой криптовалютой', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, result: { bot_invoice_url: 'https://pay.test/i' } }), {
+      new Response(JSON.stringify({ ok: true, result: { invoice_id: 99, bot_invoice_url: 'https://pay.test/i' } }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
     );
     try {
-      await expect(new CryptoPayProvider().createCheckout({ userId: 'u-1', amountUsd: 7.25 })).resolves.toEqual({
-        payUrl: 'https://pay.test/i',
-      });
+      await expect(
+        new CryptoPayProvider().createCheckout({ intentId: 'intent-1', userId: 'u-1', amountUsd: 7.25 }),
+      ).resolves.toMatchObject({ payUrl: 'https://pay.test/i', externalId: '99' });
       const init = fetchMock.mock.calls[0]![1]!;
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body).toMatchObject({
         currency_type: 'fiat',
         fiat: 'USD',
         amount: '7.25',
-        payload: encodeRef('u-1', 725),
+        payload: encodeRef('u-1', 725, 'intent-1'),
       });
       expect(String(body.accepted_assets)).toContain('USDT');
     } finally {
@@ -324,9 +324,10 @@ describe('Lava.top адаптер', () => {
 
   it('parseLavaEvent: purchase (utm round-trip) / ignored / invalid', () => {
     const ev = parseLavaEvent(Buffer.from(JSON.stringify(ok('user-7', 1200, 'ctr-9'))));
-    expect(ev).toEqual({
+    expect(ev).toMatchObject({
       kind: 'purchase',
       paymentRef: 'lavatop:ctr-9',
+      externalId: 'ctr-9',
       userId: 'user-7',
       amountCents: 1200,
       packId: undefined,
@@ -348,20 +349,25 @@ describe('Lava.top адаптер', () => {
 
   it('createCheckout передаёт сумму динамическому RUB-офферу по фиксированному курсу', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ paymentUrl: 'https://lava.test/pay' }), {
+      new Response(JSON.stringify({ id: 'lava-99', paymentUrl: 'https://lava.test/pay' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
     );
     try {
-      await new LavaTopProvider().createCheckout({ userId: 'u-2', amountUsd: 9.99, email: 'x@y.z' });
+      await new LavaTopProvider().createCheckout({
+        intentId: 'intent-2',
+        userId: 'u-2',
+        amountUsd: 9.99,
+        email: 'x@y.z',
+      });
       const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body)) as Record<string, unknown>;
       expect(body).toMatchObject({
         offerId: 'dynamic-rub-offer',
         currency: 'RUB',
         amount: 999,
         clientUtm: {
-          utm_content: encodeRef('u-2', 999),
+          utm_content: encodeRef('u-2', 999, 'intent-2'),
           utm_term: 'rub-99900',
         },
       });
@@ -547,6 +553,48 @@ describe('вебхук-роут /api/billing/webhook/:provider (реальное
       payload: { amountUsd: 5.001, provider: 'cryptopay' },
     });
     expect(tooPrecise.statusCode).toBe(400);
+  });
+
+  it('checkout сохраняет creating-intent до удалённого createInvoice и не меняет публичный контракт', async () => {
+    let creatingAtProviderCall = false;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { payload: string };
+      const ref = JSON.parse(body.payload) as { i: string };
+      const row = getDb().prepare(`SELECT status FROM payment_intents WHERE id=?`).get(ref.i) as
+        | { status: string }
+        | undefined;
+      creatingAtProviderCall = row?.status === 'creating';
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          result: {
+            invoice_id: 91000,
+            status: 'active',
+            fiat: 'USD',
+            amount: '5.00',
+            payload: body.payload,
+            bot_invoice_url: 'https://t.me/CryptoBot?start=invoice-91000',
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    try {
+      const result = await app.app.inject({
+        method: 'POST',
+        url: '/api/billing/checkout',
+        payload: { amountUsd: 5, provider: 'cryptopay' },
+      });
+      expect(result.statusCode).toBe(200);
+      expect(result.json()).toEqual({ payUrl: 'https://t.me/CryptoBot?start=invoice-91000' });
+      expect(creatingAtProviderCall).toBe(true);
+      const intent = getDb()
+        .prepare(`SELECT status,external_id,credits_cents FROM payment_intents WHERE external_id='91000'`)
+        .get();
+      expect(intent).toMatchObject({ status: 'pending', external_id: '91000', credits_cents: 500 });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('валидный крипто-платёж пополняет точную USD-сумму один раз; replay — ноль', async () => {

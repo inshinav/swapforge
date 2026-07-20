@@ -264,6 +264,27 @@ export interface DollarLedgerEntry {
 
 export type BillingProviderId = 'cryptopay' | 'lavatop';
 
+export type PaymentIntentStatus =
+  | 'creating'
+  | 'pending'
+  | 'paid'
+  | 'credited'
+  | 'expired'
+  | 'cancelled'
+  | 'failed'
+  | 'quarantined';
+
+export interface PaymentIntentInfo {
+  id: string;
+  provider: BillingProviderId;
+  amountUsd: number;
+  status: PaymentIntentStatus;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string | null;
+  creditedAt: string | null;
+}
+
 export interface BillingMethodsInfo {
   minTopupUsd: number;
   maxTopupUsd: number;

@@ -7,10 +7,20 @@ import { getDb } from '../db';
 import { requireOwner } from '../auth/middleware';
 import { byUserOrIp, rateLimit } from '../rateLimit';
 import { config } from '../config';
-import { adjustCredits, creditBalance, grantPurchase, listLedger } from './credits';
+import { adjustCredits, creditBalance, listLedger } from './credits';
 import { cryptoPayAvailableToRole } from './cryptopay';
-import { getPack } from './packs';
 import { getProvider, readyProviders, validateCheckoutUrl } from './provider';
+import {
+  createPaymentIntent,
+  listPaymentIntents,
+  listRecoverablePaymentIntents,
+  markPaymentIntentCreationUncertain,
+  markPaymentIntentPending,
+  processPaidEvent,
+  reconcilePaymentIntent,
+  recordPaymentEventReceipt,
+  webhookEventHash,
+} from './payments';
 
 function bad(reply: FastifyReply, code: number, msg: string) {
   return reply.code(code).send({ error: msg });
@@ -77,6 +87,10 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     };
   });
 
+  app.get('/api/billing/payment-intents', async (req) => ({
+    intents: listPaymentIntents(req.user!.id),
+  }));
+
   // Оставляем URL /packs для совместимости клиента, но пакетов в продукте больше нет.
   app.get('/api/billing/packs', async (req) => {
     return {
@@ -121,10 +135,19 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       getDb().prepare(`UPDATE users SET email = ? WHERE id = ?`).run(email.slice(0, 200), req.user!.id);
     }
 
+    const intent = createPaymentIntent(req.user!.id, provider.id, amountCents);
     try {
-      const result = await provider.createCheckout({ userId: req.user!.id, amountUsd: usd(amountCents), email });
-      return { payUrl: validateCheckoutUrl(provider.id, result.payUrl) };
+      const result = await provider.createCheckout({
+        intentId: intent.id,
+        userId: req.user!.id,
+        amountUsd: usd(amountCents),
+        email,
+      });
+      const payUrl = validateCheckoutUrl(provider.id, result.payUrl);
+      markPaymentIntentPending(intent.id, result, payUrl);
+      return { payUrl };
     } catch (e) {
+      markPaymentIntentCreationUncertain(intent.id, e);
       req.log.error({ err: e instanceof Error ? e.message : e }, 'checkout не удался');
       return bad(reply, 502, 'Не удалось создать счёт — попробуй позже');
     }
@@ -198,6 +221,23 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     };
   });
 
+  app.get('/api/admin/payment-intents', { preHandler: requireOwner }, async (req, reply) => {
+    const status = String((req.query as { status?: unknown }).status ?? 'pending');
+    if (!['creating', 'pending', 'paid', 'quarantined'].includes(status)) {
+      return bad(reply, 400, 'Некорректный статус');
+    }
+    return { intents: listRecoverablePaymentIntents(status as 'creating' | 'pending' | 'paid' | 'quarantined') };
+  });
+
+  app.post('/api/admin/payment-intents/:id/reconcile', { preHandler: requireOwner }, async (req, reply) => {
+    const id = String((req.params as { id?: unknown }).id ?? '');
+    const row = getDb().prepare(`SELECT id FROM payment_intents WHERE id=?`).get(id);
+    if (!row) return bad(reply, 404, 'Платёж не найден');
+    await reconcilePaymentIntent(id);
+    const intent = getDb().prepare(`SELECT * FROM payment_intents WHERE id=?`).get(id);
+    return { intent };
+  });
+
   // Вебхуки провайдеров — свой scope с raw-buffer парсером (подпись по сырому телу)
   app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
@@ -208,89 +248,52 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       const provider = getProvider(providerId);
       if (!provider || !provider.ready) return bad(reply, 404, 'unknown provider');
       const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
+      const eventHash = webhookEventHash(raw);
 
       if (!provider.verifyWebhook(raw, req.headers)) {
+        recordPaymentEventReceipt({
+          provider: provider.id,
+          eventHash,
+          verified: false,
+          outcome: 'rejected',
+          reason: 'bad_signature',
+        });
         req.log.warn({ provider: providerId }, 'webhook: подпись/секрет не сошлись');
         return bad(reply, 403, 'bad signature');
       }
 
       const ev = provider.parseWebhook(raw);
       if (ev.kind === 'invalid') {
+        recordPaymentEventReceipt({
+          provider: provider.id,
+          eventHash,
+          verified: true,
+          outcome: 'invalid',
+          reason: ev.reason,
+        });
         req.log.warn({ provider: providerId, reason: ev.reason }, 'webhook: невалидное событие');
         return bad(reply, 400, 'bad payload');
       }
-      if (ev.kind === 'ignored') return { ok: true, ignored: ev.reason };
-
-      // userId мы сами положили в инвойс — проверяем, что он жив
-      const user = getDb().prepare(`SELECT id, role FROM users WHERE id = ?`).get(ev.userId) as
-        | { id: string; role: string }
-        | undefined;
-      const legacyPack = ev.packId ? getPack(ev.packId) : null;
-      const expectedCents = ev.amountCents ?? legacyPack?.credits ?? null;
-      const amountValid = ev.amountCents === undefined || topupCents(ev.amountCents / 100) === ev.amountCents;
-      if (!user || expectedCents === null || !amountValid) {
-        // деньги не теряем молча: 200 (провайдер не ретраит вечно) + громкий лог
-        console.error(
-          `[billing:${providerId}] платёж ${ev.paymentRef} без юзера/суммы (user=${ev.userId} amount=${ev.amountCents} pack=${ev.packId}) — проверь в админке`,
-        );
-        return { ok: true, unmatched: true };
-      }
-      if (providerId === 'cryptopay' && !cryptoPayAvailableToRole(user.role)) {
-        console.error(
-          `[billing:cryptopay] testnet-платёж ${ev.paymentRef} для не-владельца ${user.id} отклонён`,
-        );
-        return { ok: true, testnetRestricted: true };
+      if (ev.kind === 'ignored') {
+        recordPaymentEventReceipt({
+          provider: provider.id,
+          eventHash,
+          verified: true,
+          outcome: 'ignored',
+          reason: ev.reason,
+        });
+        return { ok: true, ignored: ev.reason };
       }
 
-      // Defense-in-depth: если провайдер сообщил сумму — сверяем с ценой пакета
-      // (защита от рассинхрона SWAPFORGE_PACKS_JSON при «висящем» старом инвойсе).
-      // Актив тоже должен совпасть, иначе 3 USDT != 3 TON. Недоплата → не начисляем.
-      if (legacyPack && providerId === 'cryptopay' && typeof ev.paidAmount === 'number' && legacyPack.cryptoAmount) {
-        const assetOk = !ev.paidAsset || ev.paidAsset === (legacyPack.cryptoAsset ?? 'USDT');
-        if (!assetOk || ev.paidAmount + 1e-9 < legacyPack.cryptoAmount) {
-          console.error(
-            `[billing:${providerId}] сумма/актив не совпали для ${ev.paymentRef}: оплачено ${ev.paidAmount} ${ev.paidAsset}, ожидалось ${legacyPack.cryptoAmount} ${legacyPack.cryptoAsset ?? 'USDT'} — не начисляю, разберись руками`,
-          );
-          adjustCredits(user.id, 0, `недоплата/несовпадение ${ev.paymentRef} (${ev.paidAmount} ${ev.paidAsset})`);
-          return { ok: true, unmatched: true };
-        }
-      }
-
-      if (!legacyPack) {
-        const isLavaRub = providerId === 'lavatop';
-        const paidMinor = isLavaRub
-          ? typeof ev.paidAmount === 'number' && Number.isFinite(ev.paidAmount)
-            ? Math.round(ev.paidAmount * 100)
-            : null
-          : typeof ev.paidAmountUsd === 'number' && Number.isFinite(ev.paidAmountUsd)
-            ? Math.round(ev.paidAmountUsd * 100)
-            : null;
-        const expectedMinor = isLavaRub ? ev.expectedPaidAmountMinor ?? null : expectedCents;
-        const expectedCurrency = isLavaRub ? 'RUB' : 'USD';
-        const currencyOk = ev.paidCurrency === expectedCurrency;
-        if (expectedMinor === null || !currencyOk || paidMinor === null || paidMinor < expectedMinor) {
-          const expectedLabel = expectedMinor === null
-            ? `неизвестная сумма ${expectedCurrency}`
-            : isLavaRub
-              ? `${(expectedMinor / 100).toFixed(2)} RUB`
-              : `$${usd(expectedCents).toFixed(2)}`;
-          console.error(
-            `[billing:${providerId}] сумма не совпала для ${ev.paymentRef}: оплачено ${isLavaRub ? ev.paidAmount : ev.paidAmountUsd} ${ev.paidCurrency}, ожидалось ${expectedLabel} — не начисляю`,
-          );
-          return { ok: true, unmatched: true };
-        }
-      }
-
-      const res = grantPurchase(
-        user.id,
-        expectedCents,
-        ev.paymentRef,
-        legacyPack
-          ? `пакет «${legacyPack.title}» через ${providerId} (${ev.paymentRef})`
-          : `пополнение $${usd(expectedCents).toFixed(2)} через ${providerId}`,
-      );
-      req.log.info({ provider: providerId, user: user.id, amountUsd: usd(expectedCents), res }, 'webhook: пополнение');
-      return { ok: true, result: res };
+      const result = processPaidEvent(provider.id, ev, { source: 'webhook', eventHash });
+      req.log.info({ provider: providerId, result }, 'webhook: платёж обработан');
+      return {
+        ok: true,
+        result: result.outcome,
+        ...(result.outcome === 'quarantined'
+          ? { quarantined: true, unmatched: true, reason: result.reason }
+          : {}),
+      };
     });
   });
 }
