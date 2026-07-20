@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProjectFull, RefInfo } from '@shared/api-types';
+import { MAX_PROJECT_REFS, type ProjectFull, type RefInfo } from '@shared/api-types';
 import { REF_ROLES, type RefRole } from '@shared/taxonomy';
 import { api, csrfToken } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
@@ -487,6 +487,13 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
+    const available = MAX_PROJECT_REFS - proj.refs.length;
+    if (available <= 0 || files.length > available) {
+      setErr(
+        `Можно добавить максимум ${MAX_PROJECT_REFS} фото. Удали лишнее или выбери не больше ${Math.max(0, available)}.`,
+      );
+      return;
+    }
     setBusy(true);
     // роль определяет сервер: vision-классификатор, при сбое — позиционная эвристика
     await run(async () => {
@@ -515,13 +522,18 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
         title="Референсы"
         hint="порядок = нумерация reference image (старт-кадр всегда №1)"
         right={
-          <button
-            type="button"
-            className="text-xs text-mut hover:text-lime transition-colors"
-            onClick={() => setShowTips((v) => !v)}
-          >
-            {showTips ? 'скрыть подсказки' : 'как снять хорошие рефы?'}
-          </button>
+          <div className="flex items-center gap-3">
+            <span className={proj.refs.length >= MAX_PROJECT_REFS ? 'text-xs text-warn' : 'text-xs text-dim'}>
+              {proj.refs.length}/{MAX_PROJECT_REFS}
+            </span>
+            <button
+              type="button"
+              className="text-xs text-mut hover:text-lime transition-colors"
+              onClick={() => setShowTips((v) => !v)}
+            >
+              {showTips ? 'скрыть подсказки' : 'как снять хорошие рефы?'}
+            </button>
+          </div>
         }
       />
       {showTips && (
@@ -583,15 +595,17 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
               </div>
             </div>
           ))}
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          disabled={busy}
-          className="rounded-xl border-2 border-dashed border-line2 hover:border-lime/50 min-h-40 flex flex-col items-center justify-center gap-2 text-mut hover:text-lime transition-colors aspect-square"
-        >
-          {busy ? <Spinner /> : <span className="text-2xl">+</span>}
-          <span className="text-xs">добавить фото</span>
-        </button>
+        {proj.refs.length < MAX_PROJECT_REFS && (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            disabled={busy}
+            className="rounded-xl border-2 border-dashed border-line2 hover:border-lime/50 min-h-40 flex flex-col items-center justify-center gap-2 text-mut hover:text-lime transition-colors aspect-square"
+          >
+            {busy ? <Spinner /> : <span className="text-2xl">+</span>}
+            <span className="text-xs">добавить фото</span>
+          </button>
+        )}
         <input
           ref={inputRef}
           type="file"

@@ -29,6 +29,7 @@ import {
 } from '../billing/flow';
 import type { FrameInfo, RefInfo, VideoMeta } from '../../../shared/api-types';
 import type { Analysis } from '../../../shared/analysis';
+import { buildReferenceManifest, loadReferenceManifest } from './reference-manifest';
 
 /** Ошибка с HTTP-статусом для роутов (409 = гейт, 404 = нет объекта). */
 export class RenderGateError extends Error {
@@ -322,19 +323,31 @@ export function startRender(projectId: string, version: number, opts: StartRende
     throw new RenderGateError(409, 'Исходник очищен ротацией — залей ролик заново');
   }
   if (!p.meta_json) throw new RenderGateError(409, 'Нет метаданных видео');
+  const manifest = loadReferenceManifest(projectId);
   const promptRow = d
     .prepare(
-      `SELECT text FROM prompts WHERE project_id = ? AND version = ? AND kind = 'video' LIMIT 1`,
+      `SELECT text, params_json FROM prompts WHERE project_id = ? AND version = ? AND kind = 'video' LIMIT 1`,
     )
-    .get(projectId, version) as { text: string } | undefined;
+    .get(projectId, version) as { text: string; params_json: string | null } | undefined;
   if (!promptRow) throw new RenderGateError(409, 'Нет промтов этой версии — сгенерируй промты');
+  if (p.user_id && isMeteredUserId(p.user_id)) {
+    let promptFingerprint = '';
+    try {
+      promptFingerprint = String(JSON.parse(promptRow.params_json ?? '{}').refFingerprint ?? '');
+    } catch {
+      /* invalid legacy params are stale for a metered user */
+    }
+    if (!promptFingerprint || promptFingerprint !== manifest.fingerprint) {
+      throw new RenderGateError(409, 'Референсы изменились — обнови проверку, промты и цену');
+    }
+  }
   if (!latestStartFrame(projectId, version)) {
     throw new RenderGateError(409, 'Нет стартового кадра этой версии — сгенерируй кадр');
   }
   if (!config.wavespeedApiKey) {
     throw new RenderGateError(503, 'WAVESPEED_API_KEY не настроен на сервере');
   }
-  requireActiveAttempt({ projectId });
+  requireActiveAttempt({ projectId, refFingerprint: manifest.fingerprint });
 
   // Кап очереди не-владельца: не даём одному юзеру забить FIFO
   if (p.user_id && isMeteredUserId(p.user_id)) {
@@ -569,9 +582,7 @@ async function runUploadAndSubmit(
   // Не-владелец платит кредитами; тексты денежных отказов для него — без USD оператора
   const metered = isMeteredUserId(p.user_id);
 
-  const refs = d
-    .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
-    .all(projectId) as Array<{ id: string; idx: number; role: string; file: string; note: string }>;
+  const refs = loadReferenceManifest(projectId).refs;
 
   // Гвард по деньгам ЗДЕСЬ, а не только в /swap: авто-ре-рендер после iterate и ручной
   // POST /generations обходят роут свапа. Один и тот же замер баланса идёт и в гвард,
@@ -683,7 +694,7 @@ async function runUploadAndSubmit(
     saveAssets(genId, assets);
   }
   // максимум 9 reference_images с учётом старт-кадра → рефов не больше 8
-  const usableRefs = refs.slice(0, 8);
+  const usableRefs = buildReferenceManifest(refs).refs;
   for (const r of usableRefs) {
     if (assets.refs[r.id]) continue;
     const url = await ws.uploadBinary(path.join(refsDir(projectId), r.file));
@@ -876,7 +887,7 @@ async function runLongVideo(
 
     const assets: Assets = { refs: {}, ...freshAssets(gen.ws_assets_json) };
     assets.refs ??= {};
-    const usableRefs = refs.slice(0, 8);
+    const usableRefs = buildReferenceManifest(refs).refs;
     for (const ref of usableRefs) {
       if (!assets.refs[ref.id]) {
         const url = await ws.uploadBinary(path.join(refsDir(projectId), ref.file));
@@ -1066,9 +1077,7 @@ async function resumeLongVideo(
       }
     | undefined;
   if (!p?.video_file || !p.meta_json) throw new LongWsFailure('Исходник длинного ролика недоступен');
-  const refs = db()
-    .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
-    .all(gen.project_id) as unknown as RefInfo[];
+  const refs = loadReferenceManifest(gen.project_id).refs;
   await runLongVideo(
     genId,
     ws,

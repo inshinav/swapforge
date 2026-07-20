@@ -145,6 +145,18 @@ function finishActive(): void {
 }
 
 describe('рендер: happy path', () => {
+  it('rejects a ninth reference before any provider upload', () => {
+    const pid = readyProject();
+    for (let i = 3; i <= 9; i++) {
+      getDb()
+        .prepare(`INSERT INTO refs (id, project_id, idx, role, file) VALUES (?, ?, ?, 'object', ?)`)
+        .run(`${pid}-r${i}`, pid, i - 1, `ref_${i}.jpg`);
+    }
+    const uploadLog: string[] = [];
+    expect(() => startRender(pid, 1, { ws: fakeWs({ uploadLog }) })).toThrow(/не больше 8/);
+    expect(uploadLog).toEqual([]);
+  });
+
   it('upload → submit → poll → download → done; payload и стоимость по дельте баланса', async () => {
     const uploadLog: string[] = [];
     const submitLog: Record<string, unknown>[] = [];

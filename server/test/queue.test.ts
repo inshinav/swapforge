@@ -29,6 +29,7 @@ const { forceReleaseProjectHold, settleProjectHold } = await import('../src/bill
 const { consumeDailyLimit, dayKey } = await import('../src/limits');
 const { enforceStorageCap, projectDir, refsDir, startDir } = await import('../src/storage');
 const { config } = await import('../src/config');
+const { loadReferenceManifest } = await import('../src/engine/reference-manifest');
 import type { WaveSpeed, WsPrediction } from '../src/wavespeed';
 
 const LIVE_FORMULA =
@@ -85,12 +86,13 @@ function readyProject(userId: string, id = randomUUID()): string {
   fs.writeFileSync(path.join(projectDir(id), 'source.mp4'), Buffer.alloc(3000, 2));
   db.prepare(`INSERT INTO refs (id, project_id, idx, role, file) VALUES (?, ?, 0, 'model', 'ref_a.jpg')`).run(`${id}-r1`, id);
   fs.writeFileSync(path.join(refsDir(id), 'ref_a.jpg'), 'a');
+  const paramsJson = JSON.stringify({ refFingerprint: loadReferenceManifest(id).fingerprint });
   db.prepare(
-    `INSERT INTO prompts (id, project_id, version, kind, text, flags_json) VALUES (?, ?, 1, 'video', 'VP', '{}')`,
-  ).run(randomUUID(), id);
+    `INSERT INTO prompts (id, project_id, version, kind, text, flags_json, params_json) VALUES (?, ?, 1, 'video', 'VP', '{}', ?)`,
+  ).run(randomUUID(), id, paramsJson);
   db.prepare(
-    `INSERT INTO prompts (id, project_id, version, kind, text, flags_json) VALUES (?, ?, 1, 'image', 'IP', '{}')`,
-  ).run(randomUUID(), id);
+    `INSERT INTO prompts (id, project_id, version, kind, text, flags_json, params_json) VALUES (?, ?, 1, 'image', 'IP', '{}', ?)`,
+  ).run(randomUUID(), id, paramsJson);
   fs.writeFileSync(path.join(startDir(id), 'start_v1_2026-07-19T00-00-00.png'), 'png');
   return id;
 }
@@ -100,12 +102,13 @@ function authorizePaidProject(userId: string, projectId: string, credits = 500):
   const attemptId = randomUUID();
   const existing = openHoldForProject(projectId);
   const holdId = existing?.id ?? randomUUID();
+  const refFingerprint = loadReferenceManifest(projectId).fingerprint;
   db.prepare(
     `INSERT INTO flow_attempts
       (id, user_id, project_id, action, final_price_cents, pricing_snapshot_json,
        ref_fingerprint, context_fingerprint, status, expires_at, hold_id, started_at)
-     VALUES (?, ?, ?, 'rerun', ?, '{}', 'test', 'test', 'running', datetime('now','+5 minutes'), ?, datetime('now'))`,
-  ).run(attemptId, userId, projectId, credits, holdId);
+     VALUES (?, ?, ?, 'rerun', ?, '{}', ?, 'test', 'running', datetime('now','+5 minutes'), ?, datetime('now'))`,
+  ).run(attemptId, userId, projectId, credits, refFingerprint, holdId);
   if (existing) {
     db.prepare(`UPDATE credit_holds SET attempt_id=? WHERE id=?`).run(attemptId, holdId);
   } else {

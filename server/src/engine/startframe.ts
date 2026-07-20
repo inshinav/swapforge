@@ -9,6 +9,7 @@ import { recordUsage } from '../usage';
 import { FIGURE_TIER1, FIGURE_TIER2 } from './doctrine';
 import { requireActiveAttempt } from '../billing/attempts';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
+import { buildReferenceManifest } from './reference-manifest';
 
 export { startDir } from '../storage';
 
@@ -82,6 +83,7 @@ export async function generateStartFrame(
   meta: VideoMeta,
   opts: StartFrameOpts = {},
 ): Promise<string> {
+  refs = buildReferenceManifest(refs).refs;
   if (!config.openaiApiKey) {
     throw new Error('Для генерации стартового кадра нужен OpenAI-ключ (Images API)');
   }

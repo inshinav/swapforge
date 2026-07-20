@@ -14,7 +14,7 @@ import { config, modelChainFor } from '../config';
 import { buildDoctrineSystem, ITERATION_ADDENDUM } from './doctrine';
 import type { FlowFlags } from './orchestrator';
 import type { SimilarExample } from './similar';
-import { referenceFingerprint } from './reference-audit';
+import { buildReferenceManifest } from './reference-manifest';
 
 export interface IterationCtx {
   prevVideoPrompt: string;
@@ -56,6 +56,7 @@ export function buildGenerationRequest(
   refs: RefInfo[],
   opts: GenerateOpts,
 ): { system: string; parts: ContentPart[] } {
+  refs = buildReferenceManifest(refs).refs;
   const system = buildDoctrineSystem(opts.flags) + (opts.iteration ? ITERATION_ADDENDUM : '');
   const parts: ContentPart[] = [];
 
@@ -209,6 +210,8 @@ export async function runGeneration(
 
 /** Параметр-блок WaveSpeed: код, не LLM — имена полей точные. Эндпоинт зафиксирован (seedance-2.0). */
 export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[]): SeedanceParams {
+  const manifest = buildReferenceManifest(refs);
+  refs = manifest.refs;
   return {
     endpoint: config.seedanceEndpoint,
     video: 'исходный ролик (motion control + мир)',
@@ -224,6 +227,6 @@ export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[]): SeedanceP
     resolution: '720p для итераций → 1080p финал',
     enable_web_search: false,
     durationNote: `автодетект из входа (${meta.durationSec}с), кламп 4–15 с`,
-    refFingerprint: referenceFingerprint(refs),
+    refFingerprint: manifest.fingerprint,
   };
 }

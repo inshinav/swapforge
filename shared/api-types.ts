@@ -2,6 +2,9 @@
 import type { Analysis } from './analysis';
 import type { ArtifactType, RefRole } from './taxonomy';
 
+/** Seedance принимает 9 изображений; слот 1 всегда занимает continuity/start frame. */
+export const MAX_PROJECT_REFS = 8;
+
 export type ProjectStatus =
   | 'uploaded'
   | 'storyboarding'

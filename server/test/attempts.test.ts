@@ -133,6 +133,8 @@ describe('flow attempts and quotes', () => {
     const confirmed = confirm(q.quoteId!);
     expect(confirmed.ok).toBe(true);
     expect(requireActiveAttempt({ projectId })).toBe(q.quoteId);
+    getDb().prepare(`UPDATE refs SET note='новый ракурс' WHERE project_id=?`).run(projectId);
+    expect(() => requireActiveAttempt({ projectId })).toThrow(/Платный запуск не подтверждён/);
   });
 
   it('keeps the owner unmetered at the provider guard', () => {

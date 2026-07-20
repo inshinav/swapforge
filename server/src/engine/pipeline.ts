@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import type { Analysis } from '../../../shared/analysis';
 import type { FrameInfo, RefInfo, VideoMeta } from '../../../shared/api-types';
 import { referenceAuditMessage, referenceAuditPause } from './reference-audit';
+import { loadReferenceManifest } from './reference-manifest';
 
 interface ProjectRow {
   id: string;
@@ -42,9 +43,7 @@ function loadProject(id: string): ProjectRow {
 }
 
 function loadRefs(projectId: string): RefInfo[] {
-  return getDb()
-    .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
-    .all(projectId) as unknown as RefInfo[];
+  return loadReferenceManifest(projectId).refs;
 }
 
 export function startStoryboard(projectId: string): void {

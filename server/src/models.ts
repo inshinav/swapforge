@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from './db';
 import { deleteModelFiles, ensureModelDirs, ensureProjectDirs, modelRefsDir, refsDir } from './storage';
 import type { RefRole } from '../../shared/taxonomy';
+import { MAX_PROJECT_REFS, ReferenceLimitError } from './engine/reference-manifest';
 
 export interface ModelRow {
   id: string;
@@ -241,6 +242,7 @@ export function applyModelVariant(userId: string, projectId: string, variantId: 
   if (have.c > 0) throw new Error('У проекта уже есть референсы — кнопка модели применяется к чистому проекту');
 
   const refs = variantRefs(variant.model_id, variantId);
+  if (refs.length > MAX_PROJECT_REFS) throw new ReferenceLimitError(refs.length);
   if (!refs.some((r) => r.role === 'model')) {
     throw new Error('У этого варианта нет реф-листа модели — добавь фото в конструкторе');
   }

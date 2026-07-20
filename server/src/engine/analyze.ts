@@ -7,7 +7,8 @@ import { framesDir, refsDir } from '../storage';
 import { getLlm, type ContentPart } from '../llm/provider';
 import { modelChainFor } from '../config';
 import { ANALYST_SYSTEM } from './doctrine';
-import { REFERENCE_AUDIT_GUIDANCE, referenceFingerprint } from './reference-audit';
+import { REFERENCE_AUDIT_GUIDANCE } from './reference-audit';
+import { buildReferenceManifest } from './reference-manifest';
 
 export function frameToPart(projectId: string, file: string): { b64: string; mime: string } {
   const p = path.join(framesDir(projectId), file);
@@ -20,6 +21,8 @@ export async function runAnalysis(
   frames: FrameInfo[],
   refs: RefInfo[] = [],
 ): Promise<Analysis> {
+  const manifest = buildReferenceManifest(refs);
+  refs = manifest.refs;
   const parts: ContentPart[] = [
     {
       type: 'text',
@@ -41,7 +44,7 @@ export async function runAnalysis(
   parts.push({
     type: 'text',
     text: refs.length
-      ? `PROJECT REFERENCES (${refs.length}; only the first 8 can reach Seedance, in this exact order):`
+      ? `PROJECT REFERENCES (${refs.length}; this exact ordered manifest is used by every AI stage):`
       : 'PROJECT REFERENCES: none attached. Mark the missing model reference as a blocker.',
   });
   for (const [i, ref] of refs.entries()) {
@@ -51,7 +54,7 @@ export async function runAnalysis(
     const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
     parts.push({
       type: 'text',
-      text: `Project reference ${i + 1}: role=${ref.role}; user note=${ref.note || 'none'}; ${i >= 8 ? 'NOT SENT TO SEEDANCE because it exceeds the 8-reference cap' : 'sent to Seedance'}.`,
+      text: `Project reference ${i + 1}: role=${ref.role}; user note=${ref.note || 'none'}; sent to every AI stage in this position.`,
     });
     parts.push({ type: 'image', b64: fs.readFileSync(p).toString('base64'), mime, detail: 'high' });
   }
@@ -82,7 +85,7 @@ export async function runAnalysis(
     const hasWarning = analysis.referenceAudit.issues.some((i) => i.severity === 'warning');
     analysis.referenceAudit.verdict = hasBlocker ? 'blocked' : hasWarning ? 'review' : 'ready';
     analysis.referenceAudit.accepted = false;
-    analysis.referenceAudit.refFingerprint = referenceFingerprint(refs);
+    analysis.referenceAudit.refFingerprint = manifest.fingerprint;
   }
   return analysis;
 }

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import { config } from '../config';
-import { referenceFingerprint } from '../engine/reference-audit';
+import { loadReferenceManifest, referenceFingerprint } from '../engine/reference-manifest';
 import { creditBalance, priceCredits, tx } from './credits';
 import type { DatabaseSync } from 'node:sqlite';
 import type { EstimateForUser, EstimateInfo, FlowAction, RefInfo } from '../../../shared/api-types';
@@ -28,9 +28,7 @@ function sqliteTime(ms: number): string {
 }
 
 function refsFor(projectId: string): RefInfo[] {
-  return getDb()
-    .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
-    .all(projectId) as unknown as RefInfo[];
+  return loadReferenceManifest(projectId).refs;
 }
 
 export function quoteContextFingerprint(input: {
@@ -223,7 +221,11 @@ export class BillingAttemptRequiredError extends Error {
 }
 
 /** Fail-closed gate immediately before any paid AI/provider call. */
-export function requireActiveAttempt(input: { projectId?: string | null; userId?: string | null }): string | null {
+export function requireActiveAttempt(input: {
+  projectId?: string | null;
+  userId?: string | null;
+  refFingerprint?: string | null;
+}): string | null {
   const db = getDb();
   let userId = input.userId ?? null;
   if (input.projectId) {
@@ -240,13 +242,15 @@ export function requireActiveAttempt(input: { projectId?: string | null; userId?
   if (!input.projectId) throw new BillingAttemptRequiredError();
   const row = db
     .prepare(
-      `SELECT a.id
+      `SELECT a.id, a.ref_fingerprint
          FROM flow_attempts a
          JOIN credit_holds h ON h.id=a.hold_id AND h.status='open'
         WHERE a.project_id=? AND a.user_id=? AND a.status IN ('held','running')
         ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1`,
     )
-    .get(input.projectId, userId) as { id: string } | undefined;
+    .get(input.projectId, userId) as { id: string; ref_fingerprint: string } | undefined;
   if (!row) throw new BillingAttemptRequiredError();
+  const currentFingerprint = input.refFingerprint ?? loadReferenceManifest(input.projectId).fingerprint;
+  if (row.ref_fingerprint !== currentFingerprint) throw new BillingAttemptRequiredError();
   return row.id;
 }

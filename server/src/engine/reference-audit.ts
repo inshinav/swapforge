@@ -1,17 +1,5 @@
-import { createHash } from 'node:crypto';
 import type { Analysis, ReferenceAudit } from '../../../shared/analysis';
-import type { RefInfo } from '../../../shared/api-types';
-
-/**
- * Отпечаток именно смыслового пакета: порядок, роль, файл и заметка влияют на
- * нумерацию/промт. id не включаем — он не попадает в запрос провайдеру.
- */
-export function referenceFingerprint(refs: RefInfo[]): string {
-  const payload = [...refs]
-    .sort((a, b) => a.idx - b.idx)
-    .map((r) => [r.idx, r.role, r.file, r.note.trim()]);
-  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-}
+export { referenceFingerprint } from './reference-manifest';
 
 export type ReferenceAuditPause = 'blocked' | 'review';
 

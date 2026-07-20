@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from './db';
 import { refsDir, ensureProjectDirs } from './storage';
 import type { RefRole } from '../../shared/taxonomy';
+import { MAX_PROJECT_REFS, ReferenceLimitError } from './engine/reference-manifest';
 
 export interface PresetRefDef {
   file: string;
@@ -143,6 +144,7 @@ export function presetFilePath(preset: PresetDef, file: string): string | null {
  * Только для проекта без референсов — пресет не смешивается с ручными рефами.
  */
 export function applyPreset(projectId: string, preset: PresetDef): void {
+  if (preset.refs.length > MAX_PROJECT_REFS) throw new ReferenceLimitError(preset.refs.length);
   const db = getDb();
   const have = db
     .prepare(`SELECT COUNT(*) AS c FROM refs WHERE project_id = ?`)

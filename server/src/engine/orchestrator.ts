@@ -3,8 +3,7 @@
 import fs from 'node:fs';
 import { getDb } from '../db';
 import { startDir } from '../storage';
-import { referenceFingerprint } from './reference-audit';
-import type { RefInfo } from '../../../shared/api-types';
+import { loadReferenceManifest } from './reference-manifest';
 
 export interface FlowFlags {
   removeText: boolean;
@@ -118,11 +117,10 @@ export function snapshotProject(p: ProjectRowLike): StageSnapshot {
       const stored = row?.params_json
         ? (JSON.parse(row.params_json) as { refFingerprint?: unknown }).refFingerprint
         : null;
-      const refs = db
-        .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx`)
-        .all(p.id) as unknown as RefInfo[];
+      const manifest = loadReferenceManifest(p.id);
+      const refs = manifest.refs;
       if (typeof stored === 'string') {
-        latestPromptRefsMatch = stored === referenceFingerprint(refs);
+        latestPromptRefsMatch = stored === manifest.fingerprint;
       } else {
         // Легаси-проект без нового аудита продолжает работать как раньше. Если же
         // новый аудит уже есть, а отпечатка у промта нет — это первая безопасная

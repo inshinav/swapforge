@@ -9,7 +9,7 @@ import { registerAuthRoutes } from './auth/routes';
 import { registerModelRoutes } from './routes-models';
 import { registerBillingRoutes } from './billing/routes';
 import { registerAdminRoutes } from './admin/routes';
-import { openHoldForProject } from './billing/credits';
+import { openHoldForProject, tx } from './billing/credits';
 import { forceReleaseProjectHold, releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
 import { confirmFlowQuote, issueFlowQuote, markAttemptRunning } from './billing/attempts';
 import { requireOwner } from './auth/middleware';
@@ -25,6 +25,7 @@ import {
   projectDir,
   refsDir,
   safeMediaPath,
+  startDir,
   userUsageBytes,
 } from './storage';
 import { advanceFlow, startAnalysis, startGeneration, startStoryboard } from './engine/pipeline';
@@ -49,9 +50,10 @@ import { buildActionEstimate, buildEstimate, getBalanceCached, pricingDates } fr
 import { monthSummary } from './usage';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
-import type { HealthInfo, PricingInfo, RefInfo } from '../../shared/api-types';
+import type { HealthInfo, PricingInfo } from '../../shared/api-types';
 import type { Analysis } from '../../shared/analysis';
 import { referenceAuditMessage, referenceAuditPause } from './engine/reference-audit';
+import { MAX_PROJECT_REFS, ReferenceLimitError, loadReferenceManifest } from './engine/reference-manifest';
 
 const BUSY = BUSY_STATUSES;
 const VIDEO_MIME: Record<string, string> = {
@@ -97,16 +99,42 @@ function getOwnedProject(req: FastifyRequest, id: string): DbProject | undefined
     .get(id, req.user.id) as DbProject | undefined;
 }
 
-/** Любое изменение пакета референсов требует нового совместного vision-аудита. */
-function invalidateReferenceAnalysis(projectId: string): void {
-  getDb()
-    .prepare(
+/** Любое изменение пакета инвалидирует все производные артефакты и ещё не запущенную цену. */
+export function invalidateReferenceAnalysis(projectId: string): void {
+  const db = getDb();
+  tx(db, () => {
+    const held = db
+      .prepare(
+        `SELECT id, hold_id FROM flow_attempts
+          WHERE project_id=? AND status='held' AND generation_id IS NULL`,
+      )
+      .all(projectId) as Array<{ id: string; hold_id: string | null }>;
+    for (const attempt of held) {
+      if (attempt.hold_id) {
+        db.prepare(
+          `UPDATE credit_holds SET status='released', closed_at=datetime('now')
+            WHERE id=? AND status='open' AND generation_id IS NULL`,
+        ).run(attempt.hold_id);
+      }
+      db.prepare(
+        `UPDATE flow_attempts SET status='cancelled', finished_at=datetime('now'), error='references_changed'
+          WHERE id=? AND status='held' AND generation_id IS NULL`,
+      ).run(attempt.id);
+    }
+    db.prepare(
+      `UPDATE flow_attempts SET status='cancelled', finished_at=datetime('now'), error='references_changed'
+        WHERE project_id=? AND status='quoted'`,
+    ).run(projectId);
+    db.prepare(`DELETE FROM prompts WHERE project_id=?`).run(projectId);
+    db.prepare(
       `UPDATE projects
           SET analysis_json = NULL, tags_json = NULL, error = NULL,
               status = CASE WHEN frames_json IS NOT NULL THEN 'storyboarded' ELSE status END
         WHERE id = ?`,
-    )
-    .run(projectId);
+    ).run(projectId);
+  });
+  fs.rmSync(startDir(projectId), { recursive: true, force: true });
+  fs.mkdirSync(startDir(projectId), { recursive: true });
 }
 
 interface OwnedGen {
@@ -812,6 +840,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (req.user!.role !== 'owner' && userUsageBytes(req.user!.id) >= config.userStorageCapBytes) {
       return bad(reply, 413, 'Твоё хранилище заполнено — удали старые проекты в Библиотеке');
     }
+    const refCount = getDb()
+      .prepare(`SELECT COUNT(*) AS c FROM refs WHERE project_id=?`)
+      .get(id) as { c: number };
+    if (refCount.c >= MAX_PROJECT_REFS) {
+      return bad(reply, 409, new ReferenceLimitError(refCount.c + 1).message);
+    }
     const part = await req.file({ limits: { fileSize: config.maxImageBytes } });
     if (!part) return bad(reply, 400, 'Нет файла референса');
     const ext = IMAGE_MIME[part.mimetype];
@@ -896,6 +930,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     };
     const db = getDb();
     if (Array.isArray(body.order)) {
+      const current = db
+        .prepare(`SELECT id FROM refs WHERE project_id=? ORDER BY idx ASC, rowid ASC`)
+        .all(id) as Array<{ id: string }>;
+      const wanted = body.order;
+      const valid =
+        wanted.length === current.length &&
+        new Set(wanted).size === wanted.length &&
+        current.every((row) => wanted.includes(row.id));
+      if (!valid) return bad(reply, 400, 'Порядок должен содержать все референсы ровно по одному разу');
       const upd = db.prepare(`UPDATE refs SET idx = ? WHERE id = ? AND project_id = ?`);
       body.order.forEach((refId, i) => upd.run(i, refId, id));
     }
@@ -1135,9 +1178,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT text FROM prompts WHERE project_id = ? AND version = ? AND kind = 'image' LIMIT 1`)
       .get(id, version) as { text: string } | undefined;
     if (!promptRow) return bad(reply, 409, 'Сначала сгенерируй промты (нужен imagePrompt)');
-    const refs = db
-      .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
-      .all(id) as unknown as RefInfo[];
+    const refs = loadReferenceManifest(id).refs;
     if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
     try {
       const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json));
