@@ -9,7 +9,7 @@ process.env.USER_MARGIN_PCT = '25';
 
 const { getDb } = await import('../src/db');
 const { grantPurchase, creditBalance } = await import('../src/billing/credits');
-const { issueFlowQuote, confirmFlowQuote, markAttemptRunning, QUOTE_TTL_MS } = await import(
+const { issueFlowQuote, confirmFlowQuote, markAttemptRunning, requireActiveAttempt, QUOTE_TTL_MS } = await import(
   '../src/billing/attempts'
 );
 import type { EstimateInfo } from '../../shared/api-types';
@@ -125,5 +125,18 @@ describe('flow attempts and quotes', () => {
       needCredits: 500,
       availableCredits: 0,
     });
+  });
+
+  it('fails closed immediately before provider work without an active attempt', () => {
+    expect(() => requireActiveAttempt({ projectId })).toThrow(/Платный запуск не подтверждён/);
+    const q = quote();
+    const confirmed = confirm(q.quoteId!);
+    expect(confirmed.ok).toBe(true);
+    expect(requireActiveAttempt({ projectId })).toBe(q.quoteId);
+  });
+
+  it('keeps the owner unmetered at the provider guard', () => {
+    getDb().prepare(`UPDATE users SET role='owner' WHERE id=?`).run(userId);
+    expect(requireActiveAttempt({ projectId })).toBeNull();
   });
 });

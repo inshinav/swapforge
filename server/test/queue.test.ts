@@ -95,6 +95,26 @@ function readyProject(userId: string, id = randomUUID()): string {
   return id;
 }
 
+function authorizePaidProject(userId: string, projectId: string, credits = 500): void {
+  const db = getDb();
+  const attemptId = randomUUID();
+  const existing = openHoldForProject(projectId);
+  const holdId = existing?.id ?? randomUUID();
+  db.prepare(
+    `INSERT INTO flow_attempts
+      (id, user_id, project_id, action, final_price_cents, pricing_snapshot_json,
+       ref_fingerprint, context_fingerprint, status, expires_at, hold_id, started_at)
+     VALUES (?, ?, ?, 'rerun', ?, '{}', 'test', 'test', 'running', datetime('now','+5 minutes'), ?, datetime('now'))`,
+  ).run(attemptId, userId, projectId, credits, holdId);
+  if (existing) {
+    db.prepare(`UPDATE credit_holds SET attempt_id=? WHERE id=?`).run(attemptId, holdId);
+  } else {
+    db.prepare(
+      `INSERT INTO credit_holds (id, user_id, project_id, credits, attempt_id) VALUES (?, ?, ?, ?, ?)`,
+    ).run(holdId, userId, projectId, credits, attemptId);
+  }
+}
+
 function genStatus(id: string): string | undefined {
   return (getDb().prepare(`SELECT status FROM generations WHERE id = ?`).get(id) as { status: string } | undefined)
     ?.status;
@@ -158,11 +178,17 @@ describe('FIFO-очередь', () => {
     const ws = fakeWs({ pollScript: [{ status: 'processing' }] });
     const blocker = readyProject(OWNER_ID);
     startRender(blocker, 1, { ws, pollBaseMs: 5 }); // владелец занял слот
-    const q1 = startRender(readyProject(u), 1, { ws, pollBaseMs: 5 });
-    const q2 = startRender(readyProject(u), 1, { ws, pollBaseMs: 5 });
+    const p1 = readyProject(u);
+    const p2 = readyProject(u);
+    authorizePaidProject(u, p1);
+    authorizePaidProject(u, p2);
+    const q1 = startRender(p1, 1, { ws, pollBaseMs: 5 });
+    const q2 = startRender(p2, 1, { ws, pollBaseMs: 5 });
     expect(genStatus(q1)).toBe('queued');
     expect(genStatus(q2)).toBe('queued');
-    expect(() => startRender(readyProject(u), 1, { ws })).toThrow(/В очереди уже 2/);
+    const p3 = readyProject(u);
+    authorizePaidProject(u, p3);
+    expect(() => startRender(p3, 1, { ws })).toThrow(/В очереди уже 2/);
     // владельца кап не касается
     const o1 = startRender(readyProject(OWNER_ID), 1, { ws, pollBaseMs: 5 });
     const o2 = startRender(readyProject(OWNER_ID), 1, { ws, pollBaseMs: 5 });
@@ -181,6 +207,7 @@ describe('FIFO-очередь', () => {
     startRender(blocker, 1, { ws, pollBaseMs: 5 });
     const pu = readyProject(u);
     placeHold(u, pu, 400); // резерв как от /swap
+    authorizePaidProject(u, pu, 400);
     const gq = startRender(pu, 1, { ws, pollBaseMs: 5 });
     expect(genStatus(gq)).toBe('queued');
     expect(openHoldForProject(pu)?.status).toBe('open');
@@ -200,6 +227,7 @@ describe('FIFO-очередь', () => {
     // как /swap: резерв на весь флоу (generation_id пока null)
     const hold = placeHold(u, p, 500);
     expect(hold.ok).toBe(true);
+    authorizePaidProject(u, p, 500);
     const ws = fakeWs();
     const g = startRender(p, 1, { ws, pollBaseMs: 5 }); // привязывает hold к g
     expect(openHoldForProject(p)?.generation_id).toBe(g);

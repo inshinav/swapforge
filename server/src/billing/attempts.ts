@@ -70,14 +70,19 @@ export function issueFlowQuote(input: {
   const quoteId = finalPriceCents === null ? null : randomUUID();
   const expiresAt = quoteId ? sqliteTime(nowMs + QUOTE_TTL_MS) : null;
   if (quoteId && expiresAt) {
-    getDb()
-      .prepare(
+    const db = getDb();
+    tx(db, () => {
+      db.prepare(
+        `UPDATE flow_attempts
+            SET status='cancelled', finished_at=datetime('now'), error='superseded_quote'
+          WHERE user_id=? AND project_id=? AND action=? AND status='quoted'`,
+      ).run(input.userId, input.projectId, input.action);
+      db.prepare(
         `INSERT INTO flow_attempts
           (id, user_id, project_id, action, version, source_generation_id, final_price_cents,
            pricing_snapshot_json, ref_fingerprint, context_fingerprint, expires_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      ).run(
         quoteId,
         input.userId,
         input.projectId,
@@ -90,6 +95,7 @@ export function issueFlowQuote(input: {
         contextFingerprint,
         expiresAt,
       );
+    });
   }
 
   const { available } = creditBalance(input.userId);
@@ -207,4 +213,40 @@ export function markAttemptRunning(attemptId: string): void {
   getDb()
     .prepare(`UPDATE flow_attempts SET status='running' WHERE id=? AND status='held'`)
     .run(attemptId);
+}
+
+export class BillingAttemptRequiredError extends Error {
+  constructor() {
+    super('Платный запуск не подтверждён — обнови цену и нажми кнопку запуска ещё раз');
+    this.name = 'BillingAttemptRequiredError';
+  }
+}
+
+/** Fail-closed gate immediately before any paid AI/provider call. */
+export function requireActiveAttempt(input: { projectId?: string | null; userId?: string | null }): string | null {
+  const db = getDb();
+  let userId = input.userId ?? null;
+  if (input.projectId) {
+    const project = db
+      .prepare(`SELECT user_id FROM projects WHERE id=?`)
+      .get(input.projectId) as { user_id: string | null } | undefined;
+    if (!project) throw new BillingAttemptRequiredError();
+    userId = project.user_id;
+  }
+  // Legacy/system projects without a tenant predate paid accounts and remain an internal-only path.
+  if (!userId) return null;
+  const user = db.prepare(`SELECT role FROM users WHERE id=?`).get(userId) as { role: string } | undefined;
+  if (user?.role === 'owner') return null;
+  if (!input.projectId) throw new BillingAttemptRequiredError();
+  const row = db
+    .prepare(
+      `SELECT a.id
+         FROM flow_attempts a
+         JOIN credit_holds h ON h.id=a.hold_id AND h.status='open'
+        WHERE a.project_id=? AND a.user_id=? AND a.status IN ('held','running')
+        ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1`,
+    )
+    .get(input.projectId, userId) as { id: string } | undefined;
+  if (!row) throw new BillingAttemptRequiredError();
+  return row.id;
 }

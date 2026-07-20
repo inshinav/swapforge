@@ -45,7 +45,7 @@ import { renderLegalPage } from './legal';
 import { nextStageOf, parseFlags, snapshotProject } from './engine/orchestrator';
 import { PRESETS, applyPreset, getPreset, presetFilePath } from './presets';
 import { classifyRef } from './engine/classify';
-import { buildEstimate, getBalanceCached, pricingDates } from './pricing';
+import { buildActionEstimate, buildEstimate, getBalanceCached, pricingDates } from './pricing';
 import { monthSummary } from './usage';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
@@ -81,12 +81,6 @@ function bad(reply: FastifyReply, code: number, msg: string) {
 function crossSite(req: FastifyRequest): boolean {
   const s = req.headers['sec-fetch-site'];
   return typeof s === 'string' && s !== 'same-origin' && s !== 'same-site' && s !== 'none';
-}
-
-/** Кап ручных LLM-роутов «под капотом» (не-владелец): analyze/generate/iterate/startframe. */
-function manualLlmAllowed(req: FastifyRequest): boolean {
-  if (req.user!.role === 'owner') return true;
-  return consumeDailyLimit(req.user!.id, 'manual_llm', config.limitManualLlmPerDay).allowed;
 }
 
 function projectHasQueuedGeneration(projectId: string): boolean {
@@ -245,6 +239,57 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.post('/api/projects/:id/action-quotes', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = getOwnedProject(req, id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    const body = (req.body ?? {}) as {
+      action?: string;
+      version?: number;
+      sourceGenerationId?: string;
+    };
+    if (!['rerun', 'retry', 'iterate'].includes(body.action ?? '')) {
+      return bad(reply, 400, 'Неизвестное платное действие');
+    }
+    const action = body.action as 'rerun' | 'retry' | 'iterate';
+    const version = body.version ?? snapshotProject(p).latestVersion;
+    if (!version) return bad(reply, 409, 'Сначала создай промты');
+    let sourceGenerationId = body.sourceGenerationId ?? null;
+    if (sourceGenerationId) {
+      const source = getDb()
+        .prepare(`SELECT project_id, version FROM generations WHERE id=?`)
+        .get(sourceGenerationId) as { project_id: string; version: number } | undefined;
+      if (!source || source.project_id !== id || source.version !== version) {
+        return bad(reply, 404, 'Исходная генерация не найдена');
+      }
+    } else {
+      sourceGenerationId =
+        (getDb()
+          .prepare(
+            `SELECT id FROM generations WHERE project_id=? AND version=?
+              ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(id, version) as { id: string } | undefined)?.id ?? null;
+    }
+    try {
+      const estimate = await buildActionEstimate(p, action);
+      if (req.user!.role === 'owner') {
+        return { ...toUserEstimate(estimate, req.user!.id), action, quoteId: null, priceUsd: 0 };
+      }
+      return issueFlowQuote({
+        userId: req.user!.id,
+        projectId: id,
+        action,
+        estimate,
+        flagsJson: p.flags_json,
+        version,
+        sourceGenerationId,
+      });
+    } catch (error) {
+      return bad(reply, 502, `Смета недоступна: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
   // ── Проекты ──────────────────────────────────────────────────────────────
 
   app.post('/api/projects', async (req, reply) => {
@@ -373,6 +418,25 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     reply.header('Cache-Control', 'private, max-age=86400');
     reply.type(MEDIA_CT[path.extname(full).toLowerCase()] ?? 'application/octet-stream');
     return reply.send(fs.createReadStream(full));
+  });
+
+  app.post('/api/projects/:id/variant', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = getOwnedProject(req, id);
+    if (!p) return bad(reply, 404, 'Проект не найден');
+    if (BUSY.has(p.status) || isQueued(id) || projectHasActiveGeneration(id)) {
+      return bad(reply, 409, 'Дождись окончания текущей задачи');
+    }
+    const body = (req.body ?? {}) as { variantId?: string };
+    if (!body.variantId) return bad(reply, 400, 'Не выбран пресет');
+    try {
+      applyModelVariant(req.user!.id, id, body.variantId);
+      invalidateReferenceAnalysis(id);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return bad(reply, message.includes('не найдена') ? 404 : 409, message);
+    }
   });
 
   // ── One-click свап и рендеры ─────────────────────────────────────────────
@@ -589,13 +653,47 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
-    const body = (req.body ?? {}) as { version?: number };
+    const body = (req.body ?? {}) as { version?: number; quoteId?: string };
     const version = body.version ?? snapshotProject(p).latestVersion;
     if (!version) return bad(reply, 409, 'Сначала сгенерируй промты');
+    let attemptId: string | null = null;
+    if (req.user!.role !== 'owner') {
+      const sourceGenerationId =
+        (getDb()
+          .prepare(
+            `SELECT id FROM generations WHERE project_id=? AND version=?
+              ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(id, version) as { id: string } | undefined)?.id ?? null;
+      const confirmed = body.quoteId
+        ? confirmFlowQuote({
+            quoteId: body.quoteId,
+            userId: req.user!.id,
+            projectId: id,
+            action: 'rerun',
+            flagsJson: p.flags_json,
+            version,
+            sourceGenerationId,
+          })
+        : { ok: false as const, reason: 'missing' as const };
+      if (!confirmed.ok) {
+        if (confirmed.reason === 'insufficient') {
+          return bad(reply, 402, `Нужно $${((confirmed.needCredits ?? 0) / 100).toFixed(2)}, на балансе $${((confirmed.availableCredits ?? 0) / 100).toFixed(2)}`);
+        }
+        return reply.code(409).send({ error: 'Цена или референсы изменились — подтверди новую сумму', code: 'quote_stale' });
+      }
+      if (confirmed.replayed) {
+        const replay = getDb().prepare(`SELECT generation_id FROM flow_attempts WHERE id=?`).get(confirmed.attemptId) as { generation_id: string | null };
+        return { id: replay.generation_id, replayed: true };
+      }
+      attemptId = confirmed.attemptId;
+      markAttemptRunning(attemptId);
+    }
     try {
       const genId = startRender(id, version);
       return { id: genId };
     } catch (e) {
+      if (attemptId) forceReleaseProjectHold(id, undefined, 'повторный рендер отклонён');
       if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
       throw e;
     }
@@ -604,10 +702,40 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/generations/:genId/retry', async (req, reply) => {
     if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
     const { genId } = req.params as { genId: string };
-    if (!getOwnedGeneration(req, genId)) return bad(reply, 404, 'Генерация не найдена');
+    const generation = getOwnedGeneration(req, genId);
+    if (!generation) return bad(reply, 404, 'Генерация не найдена');
+    const project = getOwnedProject(req, generation.project_id)!;
+    const body = (req.body ?? {}) as { quoteId?: string };
+    let attemptId: string | null = null;
+    if (req.user!.role !== 'owner') {
+      const confirmed = body.quoteId
+        ? confirmFlowQuote({
+            quoteId: body.quoteId,
+            userId: req.user!.id,
+            projectId: generation.project_id,
+            action: 'retry',
+            flagsJson: project.flags_json,
+            version: generation.version,
+            sourceGenerationId: genId,
+          })
+        : { ok: false as const, reason: 'missing' as const };
+      if (!confirmed.ok) {
+        if (confirmed.reason === 'insufficient') {
+          return bad(reply, 402, `Нужно $${((confirmed.needCredits ?? 0) / 100).toFixed(2)}, на балансе $${((confirmed.availableCredits ?? 0) / 100).toFixed(2)}`);
+        }
+        return reply.code(409).send({ error: 'Подтверди актуальную цену повтора', code: 'quote_stale' });
+      }
+      if (confirmed.replayed) {
+        const replay = getDb().prepare(`SELECT generation_id FROM flow_attempts WHERE id=?`).get(confirmed.attemptId) as { generation_id: string | null };
+        return { id: replay.generation_id, replayed: true };
+      }
+      attemptId = confirmed.attemptId;
+      markAttemptRunning(attemptId);
+    }
     try {
       return { id: await retryGeneration(genId) };
     } catch (e) {
+      if (attemptId) forceReleaseProjectHold(generation.project_id, undefined, 'повтор после ошибки отклонён');
       if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
       throw e;
     }
@@ -695,6 +823,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!['auto', 'model', 'vehicle', 'object'].includes(roleField)) {
       part.file.resume();
       return bad(reply, 400, 'Неизвестная роль');
+    }
+    if (roleField === 'auto' && req.user!.role !== 'owner') {
+      part.file.resume();
+      return bad(reply, 400, 'Выбери роль фото: модель, транспорт или объект');
     }
     const note = fieldValue(part.fields, 'note').slice(0, 300);
 
@@ -829,10 +961,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
+    if (req.user!.role !== 'owner') return bad(reply, 403, 'Эта техническая стадия доступна только владельцу');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.frames_json) return bad(reply, 409, 'Сначала должна завершиться раскадровка');
     if (!llmKeyPresent()) return bad(reply, 503, 'LLM-ключ не настроен на сервере');
-    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     startAnalysis(id);
     return { ok: true };
   });
@@ -841,6 +973,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
+    if (req.user!.role !== 'owner') return bad(reply, 403, 'Эта техническая стадия доступна только владельцу');
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Уже идёт задача — подожди');
     if (!p.analysis_json) return bad(reply, 409, 'Сначала нужен анализ ролика');
     const analysis = JSON.parse(p.analysis_json) as Analysis;
@@ -852,7 +985,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT COUNT(*) AS c FROM refs WHERE project_id = ?`)
       .get(id) as { c: number };
     if (refCount.c === 0) return bad(reply, 409, 'Добавь хотя бы один референс (модель)');
-    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     const body = (req.body ?? {}) as { lang?: string };
     startGeneration(id, {
       lang: body.lang === 'ru' ? 'ru' : 'en',
@@ -905,6 +1037,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       artifacts?: string[];
       notes?: string;
       lang?: string;
+      quoteId?: string;
     };
     if (!body.version) return bad(reply, 400, 'Не указана версия промта');
     const db = getDb();
@@ -914,7 +1047,36 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const prevVideo = prev.find((r) => r.kind === 'video')?.text;
     const prevImage = prev.find((r) => r.kind === 'image')?.text;
     if (!prevVideo || !prevImage) return bad(reply, 404, 'Версия промта не найдена');
-    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
+    let attemptId: string | null = null;
+    if (req.user!.role !== 'owner') {
+      const sourceGenerationId =
+        (db
+          .prepare(
+            `SELECT id FROM generations WHERE project_id=? AND version=?
+              ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(id, body.version) as { id: string } | undefined)?.id ?? null;
+      const confirmed = body.quoteId
+        ? confirmFlowQuote({
+            quoteId: body.quoteId,
+            userId: req.user!.id,
+            projectId: id,
+            action: 'iterate',
+            flagsJson: p.flags_json,
+            version: body.version,
+            sourceGenerationId,
+          })
+        : { ok: false as const, reason: 'missing' as const };
+      if (!confirmed.ok) {
+        if (confirmed.reason === 'insufficient') {
+          return bad(reply, 402, `Нужно $${((confirmed.needCredits ?? 0) / 100).toFixed(2)}, на балансе $${((confirmed.availableCredits ?? 0) / 100).toFixed(2)}`);
+        }
+        return reply.code(409).send({ error: 'Подтверди актуальную цену улучшения', code: 'quote_stale' });
+      }
+      if (confirmed.replayed) return { ok: true, replayed: true };
+      attemptId = confirmed.attemptId;
+      markAttemptRunning(attemptId);
+    }
     const artifacts = (body.artifacts ?? []).filter((a): a is ArtifactType =>
       (ARTIFACT_TYPES as string[]).includes(a),
     );
@@ -944,11 +1106,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       }),
       id,
     );
-    startGeneration(id, {
-      lang: body.lang === 'ru' ? 'ru' : 'en',
-      iteration: { prevVideoPrompt: prevVideo, prevImagePrompt: prevImage, artifacts, notes },
-      flagsOverride: inherited,
-    });
+    try {
+      startGeneration(id, {
+        lang: body.lang === 'ru' ? 'ru' : 'en',
+        iteration: { prevVideoPrompt: prevVideo, prevImagePrompt: prevImage, artifacts, notes },
+        flagsOverride: inherited,
+      });
+    } catch (error) {
+      if (attemptId) forceReleaseProjectHold(id, undefined, 'итерация не стартовала');
+      throw error;
+    }
     return { ok: true };
   });
 
@@ -957,6 +1124,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
+    if (req.user!.role !== 'owner') return bad(reply, 403, 'Эта техническая стадия доступна только владельцу');
     if (!p.meta_json) return bad(reply, 409, 'Нет метаданных видео');
     const body = (req.body ?? {}) as { version?: number };
     const db = getDb();
@@ -971,7 +1139,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       .prepare(`SELECT id, idx, role, file, note FROM refs WHERE project_id = ? ORDER BY idx ASC`)
       .all(id) as unknown as RefInfo[];
     if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
-    if (!manualLlmAllowed(req)) return bad(reply, 429, LIMIT_MESSAGE);
     try {
       const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json));
       return { file, version };

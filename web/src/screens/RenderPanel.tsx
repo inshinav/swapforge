@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { GenerationRow, ProjectFull } from '@shared/api-types';
 import { ARTIFACTS, ARTIFACT_TYPES, type ArtifactType } from '@shared/taxonomy';
 import { api } from '../api';
+import { confirmPaidAction } from '../paid-actions';
 import { Button, Card, ErrorNote, SectionTitle, Tag } from '../ui';
 import { GEN_ACTIVE } from './SwapPanel';
 
@@ -21,12 +22,21 @@ export function RenderPanel({ proj, reload }: { proj: ProjectFull; reload: () =>
   const anyActive = proj.generations.some((g) => GEN_ACTIVE.includes(g.status));
   const history = proj.generations.filter((g) => g.id !== latest.id);
 
-  const rerun = () => {
+  const rerun = async () => {
     setRerunErr(null);
-    void api
-      .renderVersion(proj.id, { version: latest.version })
-      .catch((e) => setRerunErr(e instanceof Error ? e.message : String(e)))
-      .then(reload);
+    try {
+      const quoteId = await confirmPaidAction({
+        projectId: proj.id,
+        action: 'rerun',
+        version: latest.version,
+        sourceGenerationId: latest.id,
+      });
+      if (quoteId === null) return;
+      await api.renderVersion(proj.id, { version: latest.version, quoteId });
+      reload();
+    } catch (error) {
+      setRerunErr(error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
@@ -40,7 +50,7 @@ export function RenderPanel({ proj, reload }: { proj: ProjectFull; reload: () =>
             kind="ghost"
             className="!py-1 !px-2.5 text-xs"
             disabled={anyActive || proj.videoPurged}
-            onClick={rerun}
+            onClick={() => void rerun()}
             title={proj.videoPurged ? 'исходник очищен ротацией' : 'ещё один рендер той же версии промтов'}
           >
             ↻ Прогнать ещё раз
@@ -149,9 +159,20 @@ function RatingBlock({
     setBusy(true);
     setErr(null);
     try {
+      let quoteId: string | undefined;
+      if (regenerate) {
+        const confirmed = await confirmPaidAction({
+          projectId: proj.id,
+          action: 'iterate',
+          version: g.version,
+          sourceGenerationId: g.id,
+        });
+        if (confirmed === null) return;
+        quoteId = confirmed;
+      }
       await api.genRate(g.id, { rating, artifacts, notes: text });
       if (regenerate) {
-        await api.iterate(proj.id, { version: g.version, artifacts, notes: text, lang: 'en' });
+        await api.iterate(proj.id, { version: g.version, artifacts, notes: text, lang: 'en', quoteId });
       }
       setOpen(false);
       reload();
@@ -303,7 +324,16 @@ function HistoryRow({
               type="button"
               disabled={busy}
               className={`${g.wsPredictionId ? 'text-mut hover:text-lime' : 'text-lime hover:underline'} disabled:opacity-50`}
-              onClick={() => act(() => api.genRetry(g.id))}
+              onClick={() => act(async () => {
+                const quoteId = await confirmPaidAction({
+                  projectId: proj.id,
+                  action: 'retry',
+                  version: g.version,
+                  sourceGenerationId: g.id,
+                });
+                if (quoteId === null) return;
+                await api.genRetry(g.id, quoteId);
+              })}
             >
               повторить
             </button>

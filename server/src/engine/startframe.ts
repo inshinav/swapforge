@@ -7,6 +7,7 @@ import { config } from '../config';
 import { framesDir, refsDir, startDir } from '../storage';
 import { recordUsage } from '../usage';
 import { FIGURE_TIER1, FIGURE_TIER2 } from './doctrine';
+import { requireActiveAttempt } from '../billing/attempts';
 import type { RefInfo, VideoMeta } from '../../../shared/api-types';
 
 export { startDir } from '../storage';
@@ -84,6 +85,8 @@ export async function generateStartFrame(
   if (!config.openaiApiKey) {
     throw new Error('Для генерации стартового кадра нужен OpenAI-ключ (Images API)');
   }
+  // Test injections never reach a paid provider; every real Images API call is fail-closed.
+  if (!opts._editFn) requireActiveAttempt({ projectId });
   // Кадры всегда на последней модели в максимальном качестве — решение Alex
   const model = config.openaiImageModel;
   const quality = config.imageQuality;

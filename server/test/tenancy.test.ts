@@ -94,6 +94,18 @@ describe('тенантность роутов', () => {
     expect(forUser.provider).toBeUndefined();
   });
 
+  it('обычный пользователь не вызывает ручные платные AI-стадии', async () => {
+    for (const suffix of ['analyze', 'generate', 'startframe']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectA}/${suffix}`,
+        headers: authed(userA),
+        payload: {},
+      });
+      expect(res.statusCode, suffix).toBe(403);
+    }
+  });
+
   it('A видит свой проект, B получает 404 на каждый роут проекта A', async () => {
     const mine = await app.inject({ method: 'GET', url: `/api/projects/${projectA}`, headers: { cookie: userA.cookie } });
     expect(mine.statusCode).toBe(200);

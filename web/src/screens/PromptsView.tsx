@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { ProjectFull, PromptRow } from '@shared/api-types';
 import { ARTIFACTS, ARTIFACT_TYPES, type ArtifactType } from '@shared/taxonomy';
 import { api } from '../api';
+import { confirmPaidAction } from '../paid-actions';
 import { Button, Card, CopyBlock, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 import { prefs } from './AnalysisView';
 
@@ -248,11 +249,19 @@ function FeedbackPanel({
     setErr(null);
     try {
       if (regenerate) {
+        const quoteId = await confirmPaidAction({
+          projectId: proj.id,
+          action: 'iterate',
+          version,
+          sourceGenerationId: proj.generations.find((g) => g.version === version)?.id,
+        });
+        if (quoteId === null) return;
         await api.iterate(proj.id, {
           version,
           artifacts: [...picked],
           notes,
           lang: prefs.lang,
+          quoteId,
         });
       } else {
         await api.feedback(proj.id, { version, worked: false, artifacts: [...picked], notes });

@@ -8,7 +8,7 @@ import { config, modelChainFor } from './config';
 import { wavespeed, type WaveSpeed, type WsModelEntry } from './wavespeed';
 import { remainingStages, snapshotProject, type ProjectRowLike, type StageName } from './engine/orchestrator';
 import { planVideoSegments, type VideoSegmentPlan } from './engine/segments';
-import type { EstimateInfo, EstimateTaskRow, FrameInfo, VideoMeta } from '../../shared/api-types';
+import type { EstimateInfo, EstimateTaskRow, FlowAction, FrameInfo, VideoMeta } from '../../shared/api-types';
 import type { Analysis } from '../../shared/analysis';
 
 export type UsageTask = 'video_analysis' | 'prompt_pair' | 'start_frame' | 'classify_ref' | 'describe_ref';
@@ -336,6 +336,17 @@ export function forecastTokens(task: UsageTask): {
   return { tokensIn: seed.tin, tokensOut: seed.tout, basis: 'seed' };
 }
 
+function estimateTaskRows(tasks: UsageTask[], warnings: string[]): EstimateTaskRow[] {
+  return tasks.map((task) => {
+    const f = forecastTokens(task);
+    const model = taskModel(task);
+    const price = priceForCached(model);
+    const usd = price ? (f.tokensIn * price.inPerM + f.tokensOut * price.outPerM) / 1e6 : null;
+    if (!price) warnings.push(`нет тарифа для ${model} — цену этой задачи покажу после прогона`);
+    return { task, model, tokensIn: f.tokensIn, tokensOut: f.tokensOut, usd, basis: f.basis };
+  });
+}
+
 export interface EstimateProjectRow extends ProjectRowLike {
   meta_json: string | null;
   video_purged: number;
@@ -348,17 +359,10 @@ export async function buildEstimate(project: EstimateProjectRow, ws: WaveSpeed =
   const stages = remainingStages(snap);
   const warnings: string[] = [];
 
-  const perTask: EstimateTaskRow[] = [];
-  for (const s of stages) {
-    const task = STAGE_TASK[s];
-    if (!task) continue;
-    const f = forecastTokens(task);
-    const model = taskModel(task);
-    const price = priceForCached(model);
-    const usd = price ? (f.tokensIn * price.inPerM + f.tokensOut * price.outPerM) / 1e6 : null;
-    if (!price) warnings.push(`нет тарифа для ${model} — цену этой задачи покажу после прогона`);
-    perTask.push({ task, model, tokensIn: f.tokensIn, tokensOut: f.tokensOut, usd, basis: f.basis });
-  }
+  const perTask = estimateTaskRows(
+    stages.map((stage) => STAGE_TASK[stage]).filter((task): task is UsageTask => !!task),
+    warnings,
+  );
   const meta = project.meta_json ? (JSON.parse(project.meta_json) as VideoMeta) : null;
   const analysis = project.analysis_json ? (JSON.parse(project.analysis_json) as Analysis) : null;
   const frames = project.frames_json ? (JSON.parse(project.frames_json) as FrameInfo[]) : [];
@@ -409,6 +413,50 @@ export async function buildEstimate(project: EstimateProjectRow, ws: WaveSpeed =
     totalUsd,
     approximate: openaiUsd === null || perTask.some((r) => r.usd === null),
     balanceUsd,
+    warnings,
+  };
+}
+
+/** Explicit estimates for actions that intentionally restart only part of the pipeline. */
+export async function buildActionEstimate(
+  project: EstimateProjectRow,
+  action: FlowAction,
+  ws: WaveSpeed = wavespeed,
+): Promise<EstimateInfo> {
+  if (action === 'first') return buildEstimate(project, ws);
+  const base = await buildEstimate(project, ws);
+  const warnings = [...base.warnings];
+  const tasks: UsageTask[] =
+    action === 'iterate'
+      ? ['prompt_pair', 'start_frame']
+      : action === 'classify'
+        ? ['classify_ref']
+        : action === 'describe'
+          ? ['describe_ref']
+          : [];
+  const perTask = estimateTaskRows(tasks, warnings);
+  const allKnown = perTask.every((row) => row.usd !== null);
+  const openaiUsd = perTask.length === 0
+    ? 0
+    : allKnown
+      ? perTask.reduce((sum, row) => sum + (row.usd ?? 0), 0)
+      : null;
+  const includesRender = action === 'rerun' || action === 'retry' || action === 'iterate';
+  const wavespeedPart = includesRender
+    ? base.wavespeed
+    : { ...base.wavespeed, usd: 0, billedSeconds: 0, perSecondUsd: 0, unavailableReason: null };
+  return {
+    ...base,
+    stages:
+      action === 'iterate'
+        ? ['generate', 'startframe', 'render']
+        : includesRender
+          ? ['render']
+          : [],
+    openai: { perTask, usd: openaiUsd, priceDate: base.openai.priceDate },
+    wavespeed: wavespeedPart,
+    totalUsd: wavespeedPart.usd === null || openaiUsd === null ? null : wavespeedPart.usd + openaiUsd,
+    approximate: openaiUsd === null || perTask.some((row) => row.usd === null),
     warnings,
   };
 }

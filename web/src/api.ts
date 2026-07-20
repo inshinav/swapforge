@@ -95,6 +95,8 @@ export const api = {
       body: fd,
     }).then((r) => j<{ id: string }>(r));
   },
+  applyVariant: (projectId: string, variantId: string) =>
+    post(u(`api/projects/${projectId}/variant`), { variantId }).then((r) => j<{ ok: true }>(r)),
   patchRefs: (
     projectId: string,
     body: { order?: string[]; updates?: Array<{ id: string; role?: string; note?: string }> },
@@ -121,7 +123,7 @@ export const api = {
   ) => post(u(`api/projects/${id}/feedback`), body).then((r) => j<{ ok: true }>(r)),
   iterate: (
     id: string,
-    body: { version: number; artifacts: string[]; notes: string; lang: string },
+    body: { version: number; artifacts: string[]; notes: string; lang: string; quoteId?: string },
   ) => post(u(`api/projects/${id}/iterate`), body).then((r) => j<{ ok: true }>(r)),
   startFrame: (id: string, body: { version: number }) =>
     post(u(`api/projects/${id}/startframe`), body).then((r) =>
@@ -213,6 +215,10 @@ export const api = {
       j<EstimateInfo | EstimateForUser>(r),
     );
   },
+  actionQuote: (
+    id: string,
+    body: { action: 'rerun' | 'retry' | 'iterate'; version: number; sourceGenerationId?: string },
+  ) => post(u(`api/projects/${id}/action-quotes`), body).then((r) => j<EstimateForUser>(r)),
 
   // ── пользовательский баланс в USD ────────────────────────────────────────
   billingBalance: () => fetch(u('api/billing/balance')).then((r) => j<DollarBalanceInfo>(r)),
@@ -234,10 +240,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ generateAudio }),
     }).then((r) => j<{ ok: true }>(r)),
-  renderVersion: (id: string, body: { version?: number }) =>
+  renderVersion: (id: string, body: { version?: number; quoteId?: string }) =>
     post(u(`api/projects/${id}/generations`), body).then((r) => j<{ id: string }>(r)),
-  genRetry: (genId: string) =>
-    post(u(`api/generations/${genId}/retry`)).then((r) => j<{ id: string }>(r)),
+  genRetry: (genId: string, quoteId?: string) =>
+    post(u(`api/generations/${genId}/retry`), quoteId ? { quoteId } : undefined).then((r) => j<{ id: string }>(r)),
   genRecheck: (genId: string) =>
     post(u(`api/generations/${genId}/recheck`)).then((r) => j<{ status: string }>(r)),
   genCancelQueue: (genId: string) =>

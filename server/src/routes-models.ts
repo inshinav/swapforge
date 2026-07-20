@@ -22,7 +22,6 @@ import {
 import { describeRefSheet } from './engine/describe';
 import { getDb } from './db';
 import { invalidateUserUsage, modelRefsDir, safeModelRefPath, userUsageBytes } from './storage';
-import { LIMIT_MESSAGE, consumeDailyLimit } from './limits';
 import { probe } from './ffmpeg';
 import type { ModelInfo } from '../../shared/api-types';
 import type { RefRole } from '../../shared/taxonomy';
@@ -217,11 +216,8 @@ export function registerModelRoutes(app: FastifyInstance): void {
     const { id, refId } = req.params as { id: string; refId: string };
     const model = getOwnedModel(req.user!.id, id);
     if (!model) return bad(reply, 404, 'Модель не найдена');
-    if (
-      req.user!.role !== 'owner' &&
-      !consumeDailyLimit(req.user!.id, 'describe', config.limitDescribePerDay).allowed
-    ) {
-      return bad(reply, 429, LIMIT_MESSAGE);
+    if (req.user!.role !== 'owner') {
+      return bad(reply, 403, 'AI-описание пока доступно только владельцу; заполни заметку вручную');
     }
     const ref = getDb()
       .prepare(`SELECT file, role FROM model_refs WHERE id = ? AND model_id = ?`)

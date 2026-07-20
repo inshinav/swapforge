@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { requireActiveAttempt } from '../billing/attempts';
 
 export type ImageDetail = 'low' | 'high' | 'auto';
 
@@ -25,18 +26,27 @@ export interface LlmClient {
 }
 
 export async function getLlm(): Promise<LlmClient> {
+  let client: LlmClient;
   if (config.llmProvider === 'anthropic') {
     if (!config.anthropicApiKey) {
       throw new Error('ANTHROPIC_API_KEY не настроен — добавь его в /etc/swapforge.env');
     }
     const { anthropicClient } = await import('./anthropic');
-    return anthropicClient;
+    client = anthropicClient;
+  } else {
+    if (!config.openaiApiKey) {
+      throw new Error('OPENAI_API_KEY не настроен — добавь его в /etc/swapforge.env и перезапусти сервис');
+    }
+    const { openaiClient } = await import('./openai');
+    client = openaiClient;
   }
-  if (!config.openaiApiKey) {
-    throw new Error('OPENAI_API_KEY не настроен — добавь его в /etc/swapforge.env и перезапусти сервис');
-  }
-  const { openaiClient } = await import('./openai');
-  return openaiClient;
+  return {
+    name: () => client.name(),
+    async structured(req) {
+      requireActiveAttempt(req.meta ?? {});
+      return client.structured(req);
+    },
+  };
 }
 
 /** Ответ LLM бывает в ```json-заборах — счищаем и парсим. */

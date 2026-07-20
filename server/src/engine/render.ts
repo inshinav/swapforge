@@ -13,6 +13,7 @@ import { cutVideoSegment, extractFrameAt, stitchVideoSegments } from '../ffmpeg'
 import { parseFlags, type FlowFlags } from './orchestrator';
 import { planVideoSegments, SEAM_OVERLAP_SECONDS, type VideoSegmentPlan } from './segments';
 import { attachHoldGeneration, openHoldForProject, placeHold, priceCredits } from '../billing/credits';
+import { requireActiveAttempt } from '../billing/attempts';
 import {
   forceReleaseProjectHold,
   isMeteredUserId,
@@ -280,6 +281,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
   if (!config.wavespeedApiKey) {
     throw new RenderGateError(503, 'WAVESPEED_API_KEY не настроен на сервере');
   }
+  requireActiveAttempt({ projectId });
 
   // Кап очереди не-владельца: не даём одному юзеру забить FIFO
   if (p.user_id && isMeteredUserId(p.user_id)) {

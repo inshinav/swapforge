@@ -11,6 +11,7 @@ import type {
 } from '@shared/api-types';
 import type { ReferenceAudit } from '@shared/analysis';
 import { ApiError, api } from '../api';
+import { confirmPaidAction } from '../paid-actions';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
 type AnyEstimate = EstimateInfo | EstimateForUser;
@@ -117,6 +118,12 @@ export function SwapPanel({
     setLaunchErr(null);
     setLaunchShortfall(null);
     try {
+      let launchEstimate = est;
+      if (variantId) {
+        await api.applyVariant(proj.id, variantId);
+        launchEstimate = await api.estimate(proj.id, { removeText, enhanceFigure, wish });
+        setEst(launchEstimate);
+      }
       // звук НЕ шлём: сервер берёт сохранённую настройку проекта — проп proj.flags
       // между поллингами может быть протухшим, а платный рендер должен уйти с актуальной
       await api.swap(proj.id, {
@@ -124,8 +131,10 @@ export function SwapPanel({
         wish: wish.trim() || undefined,
         confirmUnknownCost: confirmUnknown || undefined,
         confirmReferenceRisks: confirmReferenceRisks || undefined,
-        variantId,
-        quoteId: est && isBalanceEst(est) ? est.quoteId ?? undefined : undefined,
+        quoteId:
+          launchEstimate && isBalanceEst(launchEstimate)
+            ? launchEstimate.quoteId ?? undefined
+            : undefined,
       });
       reload();
     } catch (e) {
@@ -201,7 +210,16 @@ export function SwapPanel({
                   <Button
                     kind={failedGen.wsPredictionId ? 'ghost' : 'primary'}
                     className="!py-1.5 !px-3 text-xs"
-                    onClick={() => void genAction(() => api.genRetry(failedGen.id))}
+                    onClick={() => void genAction(async () => {
+                      const quoteId = await confirmPaidAction({
+                        projectId: proj.id,
+                        action: 'retry',
+                        version: failedGen.version,
+                        sourceGenerationId: failedGen.id,
+                      });
+                      if (quoteId === null) return;
+                      await api.genRetry(failedGen.id, quoteId);
+                    })}
                     title={
                       failedGen.wsPredictionId
                         ? 'Новый сабмит той же версии. Если прежняя задача ещё жива — сервер откажет, чтобы не списать дважды'
