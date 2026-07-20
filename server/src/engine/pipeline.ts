@@ -127,7 +127,10 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
       const flags = opts.flagsOverride ?? parseFlags(p.flags_json);
       // few-shot строго из проектов ЭТОГО пользователя; проект без владельца
       // (легаси до m001) — пустой ретрив, не чужие примеры
-      const fewshot = p.user_id ? findSimilarWorked(p.user_id, projectId, analysis.tags) : [];
+      // Legacy/partially-written analysis rows may predate required tags. Retrieval is optional,
+      // so malformed tags must degrade to an empty set instead of crashing a detached flow job.
+      const tags = Array.isArray(analysis.tags) ? analysis.tags : [];
+      const fewshot = p.user_id ? findSimilarWorked(p.user_id, projectId, tags) : [];
       const pair = await runGeneration(projectId, analysis, meta, refs, {
         lang: opts.lang,
         fewshot,

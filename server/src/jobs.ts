@@ -13,6 +13,14 @@ interface Job {
 
 const queue: Job[] = [];
 let running = false;
+let pausedForTests = false;
+const idleWaiters = new Set<() => void>();
+
+function notifyIdle(): void {
+  if (running || queue.length > 0) return;
+  for (const resolve of idleWaiters) resolve();
+  idleWaiters.clear();
+}
 
 export function enqueue(job: Job): void {
   queue.push(job);
@@ -45,7 +53,7 @@ function recordStageTime(projectId: string, label: string, seconds: number): voi
 }
 
 async function pump(): Promise<void> {
-  if (running) return;
+  if (running || pausedForTests) return;
   running = true;
   try {
     while (queue.length > 0) {
@@ -60,7 +68,28 @@ async function pump(): Promise<void> {
     }
   } finally {
     running = false;
+    notifyIdle();
   }
+}
+
+/** Resolve only when all local detached jobs have completed. Intended for deterministic shutdown/tests. */
+export function waitForJobsIdle(): Promise<void> {
+  if (!running && queue.length === 0) return Promise.resolve();
+  return new Promise((resolve) => idleWaiters.add(resolve));
+}
+
+/**
+ * Test harness for route assertions that intentionally stop before paid/provider work starts.
+ * Production code never calls this. Pausing before enqueue keeps the job fully deterministic.
+ */
+export function _pauseJobsForTests(paused: boolean): void {
+  pausedForTests = paused;
+  if (!paused) void pump();
+}
+
+export function _discardQueuedJobsForTests(): void {
+  queue.length = 0;
+  notifyIdle();
 }
 
 /**

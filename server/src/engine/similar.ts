@@ -9,7 +9,8 @@ export interface SimilarExample {
   score: number;
 }
 
-function norm(tags: string[]): Set<string> {
+function norm(tags: unknown): Set<string> {
+  if (!Array.isArray(tags)) return new Set();
   return new Set(tags.map((t) => t.trim().toLowerCase()).filter(Boolean));
 }
 
@@ -61,7 +62,9 @@ export function findSimilarWorked(
     seen.add(r.id); // одна (свежайшая сработавшая) версия на проект
     let theirTags: string[] = [];
     try {
-      theirTags = JSON.parse(r.tags_json) as string[];
+      const parsed = JSON.parse(r.tags_json) as unknown;
+      if (!Array.isArray(parsed) || !parsed.every((tag) => typeof tag === 'string')) continue;
+      theirTags = parsed;
     } catch {
       continue;
     }

@@ -14,7 +14,7 @@ process.env.PRESETS_DIR = path.resolve('assets/presets');
 const { getDb } = await import('../src/db');
 const { PRESETS, getPreset, applyPreset, presetFilePath, presetsDir } = await import('../src/presets');
 const { makeAuthedApp } = await import('./helpers');
-const { enqueueProjectJob } = await import('../src/jobs');
+const { enqueueProjectJob, waitForJobsIdle, _pauseJobsForTests, _discardQueuedJobsForTests } = await import('../src/jobs');
 const { refsDir, projectDir } = await import('../src/storage');
 const { ensureLitellmFresh, estimateRender, getBalanceCached, _resetPricingMemory } = await import(
   '../src/pricing'
@@ -134,6 +134,7 @@ describe('пресеты: роуты', () => {
   it('POST /swap {preset} на чистом проекте подкладывает рефы и запускает флоу; на проекте с рефами — 409', async () => {
     await warmPricing();
     const { app, own } = await makeAuthedApp();
+    _pauseJobsForTests(true);
     const pid = project();
     own(pid);
     const res = await app.inject({
@@ -164,6 +165,9 @@ describe('пресеты: роуты', () => {
     });
     expect(unknown.statusCode).toBe(404);
     expect(JSON.parse(unknown.body).error).toContain('пресет');
+    _discardQueuedJobsForTests();
+    _pauseJobsForTests(false);
+    await waitForJobsIdle();
     await app.close();
   });
 });
@@ -181,7 +185,7 @@ describe('тайминги стадий', () => {
         await new Promise((r) => setTimeout(r, 150)); // >0.1с — иначе округление в 0.0
       },
     });
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobsIdle();
     const row = getDb().prepare(`SELECT stage_times_json, status FROM projects WHERE id = ?`).get(pid) as {
       stage_times_json: string | null;
       status: string;
