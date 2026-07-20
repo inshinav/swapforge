@@ -102,10 +102,10 @@ export function SwapPanel({
   const loadEstimate = useCallback(() => {
     setEstErr(null);
     api
-      .estimate(proj.id)
+      .estimate(proj.id, { removeText, enhanceFigure, wish })
       .then(setEst)
       .catch((e) => setEstErr(e instanceof Error ? e.message : String(e)));
-  }, [proj.id]);
+  }, [proj.id, removeText, enhanceFigure, wish]);
 
   useEffect(() => {
     if (!running) loadEstimate();
@@ -125,6 +125,7 @@ export function SwapPanel({
         confirmUnknownCost: confirmUnknown || undefined,
         confirmReferenceRisks: confirmReferenceRisks || undefined,
         variantId,
+        quoteId: est && isBalanceEst(est) ? est.quoteId ?? undefined : undefined,
       });
       reload();
     } catch (e) {

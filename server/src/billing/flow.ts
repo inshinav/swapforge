@@ -37,6 +37,10 @@ export function toUserEstimate(est: EstimateInfo, userId: string): EstimateForUs
   }
   return {
     kind: 'balance',
+    quoteId: null,
+    action: 'first',
+    expiresAt: null,
+    refFingerprint: '',
     stages: est.stages,
     priceUsd: priceCents === null ? null : priceCents / 100,
     balanceUsd: available / 100,

@@ -222,6 +222,29 @@ export function applySchema(d: DatabaseSync): void {
       closed_at TEXT
     );
 
+    -- One durable record per confirmed user action. Quotes are immutable snapshots; only the
+    -- lifecycle/link columns change after confirmation.
+    CREATE TABLE IF NOT EXISTS flow_attempts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK (action IN ('first','rerun','retry','iterate','classify','describe')),
+      version INTEGER,
+      source_generation_id TEXT,
+      generation_id TEXT,
+      hold_id TEXT,
+      final_price_cents INTEGER,
+      pricing_snapshot_json TEXT NOT NULL,
+      ref_fingerprint TEXT NOT NULL,
+      context_fingerprint TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'quoted' CHECK (status IN ('quoted','held','running','done','failed','cancelled')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      error TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_telegram_login_replays_expiry ON telegram_login_replays(expires_at);
     CREATE INDEX IF NOT EXISTS idx_models_user ON models(user_id);
@@ -231,6 +254,10 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_holds_user_open ON credit_holds(user_id) WHERE status = 'open';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_holds_one_open_per_project ON credit_holds(project_id) WHERE status = 'open';
+    CREATE INDEX IF NOT EXISTS idx_flow_attempts_user ON flow_attempts(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_flow_attempts_project ON flow_attempts(project_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_flow_attempts_active_project
+      ON flow_attempts(project_id) WHERE status IN ('held','running');
   `);
 
   // Микромиграции v1 → v2
@@ -256,9 +283,11 @@ export function applySchema(d: DatabaseSync): void {
   ensureColumn(d, 'usage_events', 'user_id', `user_id TEXT`);
   // email покупателя (Lava.top требует в инвойсе; спрашиваем при первой оплате картой)
   ensureColumn(d, 'users', 'email', `email TEXT`);
+  ensureColumn(d, 'credit_holds', 'attempt_id', `attempt_id TEXT`);
   d.exec(`
     CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events(user_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_holds_attempt ON credit_holds(attempt_id) WHERE attempt_id IS NOT NULL;
   `);
 }
 

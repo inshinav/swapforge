@@ -139,6 +139,7 @@ export const api = {
       confirmReferenceRisks?: boolean;
       variantId?: string;
       preset?: string;
+      quoteId?: string;
     },
   ) => post(u(`api/projects/${id}/swap`), body).then((r) => j<{ ok: true }>(r)),
   presets: () => fetch(u('api/presets')).then((r) => j<PresetInfo[]>(r)),
@@ -201,8 +202,17 @@ export const api = {
     post(u(`api/models/${modelId}/refs/${refId}/describe`)).then((r) => j<{ note: string }>(r)),
   modelFileUrl: (modelId: string, file: string) =>
     u(`api/models/${modelId}/file/${encodeURIComponent(file)}`),
-  estimate: (id: string) =>
-    fetch(u(`api/projects/${id}/estimate`)).then((r) => j<EstimateInfo | EstimateForUser>(r)),
+  estimate: (
+    id: string,
+    flags?: { removeText: boolean; enhanceFigure: boolean; wish: string },
+  ) => {
+    const query = flags
+      ? `?removeText=${flags.removeText ? '1' : '0'}&enhanceFigure=${flags.enhanceFigure ? '1' : '0'}&wish=${encodeURIComponent(flags.wish)}`
+      : '';
+    return fetch(u(`api/projects/${id}/estimate${query}`)).then((r) =>
+      j<EstimateInfo | EstimateForUser>(r),
+    );
+  },
 
   // ── пользовательский баланс в USD ────────────────────────────────────────
   billingBalance: () => fetch(u('api/billing/balance')).then((r) => j<DollarBalanceInfo>(r)),

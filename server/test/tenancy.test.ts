@@ -12,6 +12,7 @@ process.env.OWNER_TELEGRAM_ID = '9000'; // dev-login с этим id станет
 
 const { buildApp } = await import('../src/app');
 const { getDb } = await import('../src/db');
+const { setFfmpegHealthForTests } = await import('../src/routes');
 
 import type { FastifyInstance } from 'fastify';
 
@@ -50,6 +51,7 @@ describe('тенантность роутов', () => {
   let projectA: string;
 
   beforeAll(async () => {
+    setFfmpegHealthForTests(true);
     app = await buildApp({ logger: false });
     owner = await login(app, 9000, 'Владелец');
     userA = await login(app, 1001, 'Юзер А');

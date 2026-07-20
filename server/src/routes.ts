@@ -9,8 +9,9 @@ import { registerAuthRoutes } from './auth/routes';
 import { registerModelRoutes } from './routes-models';
 import { registerBillingRoutes } from './billing/routes';
 import { registerAdminRoutes } from './admin/routes';
-import { openHoldForProject, placeHold, priceCredits } from './billing/credits';
+import { openHoldForProject } from './billing/credits';
 import { forceReleaseProjectHold, releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
+import { confirmFlowQuote, issueFlowQuote, markAttemptRunning } from './billing/attempts';
 import { requireOwner } from './auth/middleware';
 import { applyModelVariant } from './models';
 import { ffmpegAvailable, probe } from './ffmpeg';
@@ -141,6 +142,11 @@ function fieldValue(fields: unknown, name: string): string {
 
 let ffmpegOk: boolean | null = null;
 
+/** Deterministic health seam; production callers never use this. */
+export function setFfmpegHealthForTests(value: boolean | null): void {
+  ffmpegOk = value;
+}
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerAuthRoutes(app);
   registerModelRoutes(app);
@@ -207,9 +213,33 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     try {
-      const est = await buildEstimate(p);
+      const query = (req.query ?? {}) as {
+        removeText?: string;
+        enhanceFigure?: string;
+        wish?: string;
+      };
+      const currentFlags = parseFlags(p.flags_json);
+      const flagsJson = JSON.stringify({
+        removeText: query.removeText === undefined ? currentFlags.removeText : query.removeText === '1',
+        enhanceFigure:
+          query.enhanceFigure === undefined ? currentFlags.enhanceFigure : query.enhanceFigure === '1',
+        wish: query.wish === undefined ? currentFlags.wish : query.wish.trim().slice(0, 500),
+        generateAudio: parseGenerateAudio(p.flags_json),
+      });
+      const draft = { ...p, flags_json: flagsJson };
+      const est = await buildEstimate(draft);
       // Не-владельцу — только итоговая пользовательская цена, без себестоимости оператора.
-      return req.user!.role === 'owner' ? est : toUserEstimate(est, req.user!.id);
+      if (req.user!.role === 'owner') return est;
+      const snap = snapshotProject(draft);
+      const action = snap.latestGenStatus === 'done' ? 'rerun' : 'first';
+      return issueFlowQuote({
+        userId: req.user!.id,
+        projectId: id,
+        action,
+        estimate: est,
+        flagsJson,
+        version: snap.latestVersion || null,
+      });
     } catch (e) {
       return bad(reply, 502, `Смета недоступна: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -376,6 +406,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       preset?: string;
       /** Явное решение продолжить при предупреждениях (blocker этим не обходится). */
       confirmReferenceRisks?: boolean;
+      quoteId?: string;
     };
 
     // Кнопка модели: подкладываем реф-листы варианта в чистый проект — дальше всё как обычно
@@ -470,17 +501,44 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
-    // Кредитный резерв не-владельца на ВЕСЬ флоу (перечитка баланса — внутри sync-транзакции)
+    let attemptId: string | null = null;
+    // Quote confirmation and hold creation are one SQLite transaction. A stale quote never starts work.
     if (!isOwner) {
-      const holdCredits = priceCredits(est.totalUsd ?? est.wavespeed.usd ?? 0);
-      const hold = placeHold(req.user!.id, id, holdCredits);
-      if (!hold.ok) {
+      const action = snap.latestGenStatus === 'done' ? 'rerun' : 'first';
+      const confirmed = body.quoteId
+        ? confirmFlowQuote({
+            quoteId: body.quoteId,
+            userId: req.user!.id,
+            projectId: id,
+            action,
+            flagsJson,
+            version: snap.latestVersion || null,
+          })
+        : { ok: false as const, reason: 'missing' as const };
+      if (!confirmed.ok && confirmed.reason === 'insufficient') {
         return bad(
           reply,
           402,
-          `Нужно $${(hold.needCredits / 100).toFixed(2)}, на балансе $${(hold.availableCredits / 100).toFixed(2)}`,
+          `Нужно $${((confirmed.needCredits ?? 0) / 100).toFixed(2)}, на балансе $${((confirmed.availableCredits ?? 0) / 100).toFixed(2)}`,
         );
       }
+      if (!confirmed.ok) {
+        const fresh = issueFlowQuote({
+          userId: req.user!.id,
+          projectId: id,
+          action,
+          estimate: est,
+          flagsJson,
+          version: snap.latestVersion || null,
+        });
+        return reply.code(409).send({
+          error: confirmed.reason === 'missing' ? 'Сначала обнови цену и нажми ещё раз' : 'Цена или референсы изменились — проверь новую сумму',
+          code: 'quote_stale',
+          estimate: fresh,
+        });
+      }
+      if (confirmed.replayed) return { ok: true, replayed: true };
+      attemptId = confirmed.attemptId;
     }
 
     getDb()
@@ -488,6 +546,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         `UPDATE projects SET flags_json = ?, flow = 'auto', flow_started_at = datetime('now'), error = NULL WHERE id = ?`,
       )
       .run(flagsJson, id);
+    if (attemptId) markAttemptRunning(attemptId);
 
     // Повторный свап при готовом рендере ('done') — прямой рендер; иначе весь флоу.
     // Если запуск рендера отбит гейтом — возвращаем резерв (работа не пошла, F1).

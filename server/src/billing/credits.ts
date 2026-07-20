@@ -58,6 +58,7 @@ export interface HoldRow {
   generation_id: string | null;
   credits: number;
   status: string;
+  attempt_id: string | null;
 }
 
 export function openHoldForProject(projectId: string): HoldRow | undefined {
@@ -104,9 +105,14 @@ export function placeHold(userId: string, projectId: string, credits: number): P
 }
 
 export function attachHoldGeneration(holdId: string, generationId: string): void {
-  getDb()
-    .prepare(`UPDATE credit_holds SET generation_id = ? WHERE id = ? AND status = 'open'`)
-    .run(generationId, holdId);
+  const db = getDb();
+  tx(db, () => {
+    db.prepare(`UPDATE credit_holds SET generation_id = ? WHERE id = ? AND status = 'open'`).run(generationId, holdId);
+    db.prepare(
+      `UPDATE flow_attempts SET generation_id = ?, status = 'running'
+        WHERE hold_id = ? AND status IN ('held','running')`,
+    ).run(generationId, holdId);
+  });
 }
 
 /**
@@ -122,6 +128,11 @@ export function settleHold(holdId: string, factCredits: number, generationId?: s
     if (!hold) return false;
     const charge = Math.max(0, Math.min(Math.round(factCredits), hold.credits));
     d.prepare(`UPDATE credit_holds SET status = 'settled', closed_at = datetime('now') WHERE id = ?`).run(holdId);
+    if (hold.attempt_id) {
+      d.prepare(
+        `UPDATE flow_attempts SET status='done', generation_id=COALESCE(?, generation_id), finished_at=datetime('now') WHERE id=?`,
+      ).run(generationId ?? hold.generation_id, hold.attempt_id);
+    }
     if (charge > 0) {
       d.prepare(
         `INSERT INTO credit_ledger (id, user_id, delta_credits, kind, hold_id, generation_id, project_id, note)
@@ -150,6 +161,11 @@ export function releaseHold(holdId: string, chargeCredits = 0, note = ''): boole
     if (!hold) return false;
     const charge = Math.max(0, Math.min(Math.round(chargeCredits), hold.credits));
     d.prepare(`UPDATE credit_holds SET status = 'released', closed_at = datetime('now') WHERE id = ?`).run(holdId);
+    if (hold.attempt_id) {
+      d.prepare(
+        `UPDATE flow_attempts SET status='failed', finished_at=datetime('now'), error=? WHERE id=?`,
+      ).run((note || 'attempt_released').slice(0, 300), hold.attempt_id);
+    }
     if (charge > 0) {
       d.prepare(
         `INSERT INTO credit_ledger (id, user_id, delta_credits, kind, hold_id, generation_id, project_id, note)

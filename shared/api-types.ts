@@ -232,6 +232,11 @@ export interface EstimateInfo {
 /** Пользовательская смета: итоговая цена уже включает сервисную маржу. */
 export interface EstimateForUser {
   kind: 'balance';
+  /** Durable server quote. Null only while a reliable price is unavailable. */
+  quoteId: string | null;
+  action: FlowAction;
+  expiresAt: string | null;
+  refFingerprint: string;
   stages: string[];
   /** Цена запуска в USD (null = живые тарифы недоступны — запуск не дадим). */
   priceUsd: number | null;
@@ -240,6 +245,8 @@ export interface EstimateForUser {
   approximate: boolean;
   warnings: string[];
 }
+
+export type FlowAction = 'first' | 'rerun' | 'retry' | 'iterate' | 'classify' | 'describe';
 
 export interface DollarBalanceInfo {
   balanceUsd: number;
