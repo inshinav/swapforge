@@ -8,6 +8,7 @@ import { rateLimit } from '../rateLimit';
 import { clearCookies, loginCookies, mintCsrfValue, parseCookies, SESSION_COOKIE } from './cookies';
 import { createSession, destroySession, type SessionUser } from './sessions';
 import { verifyTelegramLogin, type TgAuthPayload } from './telegram';
+import { consumeTelegramLoginHash } from './telegram-replay';
 
 interface DbUser {
   id: string;
@@ -76,6 +77,11 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     if (!verdict.ok) {
       req.log.warn({ reason: verdict.reason }, 'tg-login отклонён');
       return reply.code(401).send({ error: 'Подпись Telegram не подтвердилась — попробуй войти ещё раз' });
+    }
+    const loginHash = String(body.hash);
+    const authDate = Number(body.auth_date);
+    if (!consumeTelegramLoginHash(loginHash, authDate)) {
+      return reply.code(409).send({ error: 'Эта ссылка входа уже использована — открой вход через Telegram ещё раз' });
     }
     const u = upsertTgUser(body as unknown as TgAuthPayload);
     if (u.status !== 'active') {

@@ -21,6 +21,29 @@ export interface CheckoutResult {
   payUrl: string;
 }
 
+const CHECKOUT_HOSTS: Record<ProviderId, readonly string[]> = {
+  cryptopay: ['t.me', 'telegram.me'],
+  lavatop: ['lava.top'],
+};
+
+/** Prevent a compromised/malformed provider response from becoming an open redirect. */
+export function validateCheckoutUrl(provider: ProviderId, raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('Платёжный провайдер вернул некорректную ссылку');
+  }
+  const hostname = url.hostname.toLowerCase();
+  const allowed = CHECKOUT_HOSTS[provider].some(
+    (root) => hostname === root || hostname.endsWith(`.${root}`),
+  );
+  if (url.protocol !== 'https:' || url.username || url.password || !allowed) {
+    throw new Error('Платёжный провайдер вернул небезопасную ссылку');
+  }
+  return url.toString();
+}
+
 export type PaymentEvent =
   | {
       kind: 'purchase';

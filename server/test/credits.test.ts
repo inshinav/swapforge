@@ -39,7 +39,7 @@ const {
 const { reconcileOrphanHolds, releaseFlowHoldOnFailure, settleProjectHold, toUserEstimate } = await import(
   '../src/billing/flow'
 );
-const { encodeRef } = await import('../src/billing/provider');
+const { encodeRef, validateCheckoutUrl } = await import('../src/billing/provider');
 const {
   CryptoPayProvider,
   cryptoPayAvailableToRole,
@@ -70,6 +70,16 @@ describe('priceCredits', () => {
     expect(priceCredits(0.001)).toBe(1);
     expect(priceCredits(0)).toBe(1);
     expect(priceCredits(1.234)).toBe(155); // ceil(154.25)
+  });
+});
+
+describe('checkout URL guard', () => {
+  it('allows only HTTPS provider hosts and their subdomains', () => {
+    expect(validateCheckoutUrl('cryptopay', 'https://t.me/CryptoBot?start=abc')).toContain('t.me/CryptoBot');
+    expect(validateCheckoutUrl('lavatop', 'https://app.lava.top/invoice/1')).toContain('app.lava.top');
+    expect(() => validateCheckoutUrl('cryptopay', 'http://t.me/CryptoBot')).toThrow(/небезопасную/);
+    expect(() => validateCheckoutUrl('cryptopay', 'https://t.me.evil.example/pay')).toThrow(/небезопасную/);
+    expect(() => validateCheckoutUrl('lavatop', 'javascript:alert(1)')).toThrow(/небезопасную/);
   });
 });
 
@@ -404,6 +414,14 @@ describe('ручное пополнение владельцем по Telegram u
           balance: { balanceUsd: 0, heldUsd: 0, availableUsd: 0 },
         },
       });
+
+      const retiredAdjust = await owner.app.inject({
+        method: 'POST',
+        url: '/api/billing/adjust',
+        payload: { userId: buyer.userId, delta: 99_999, note: 'legacy' },
+      });
+      expect(retiredAdjust.statusCode).toBe(410);
+      expect(creditBalance(buyer.userId).balance).toBe(0);
 
       const payload = {
         userId: buyer.userId,

@@ -133,6 +133,14 @@ export function applySchema(d: DatabaseSync): void {
       last_seen_at TEXT
     );
 
+    -- A signed Telegram Login Widget payload is a bearer credential. Remember its hash for
+    -- the remainder of the freshness window so it cannot mint multiple independent sessions.
+    CREATE TABLE IF NOT EXISTS telegram_login_replays (
+      login_hash TEXT PRIMARY KEY,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- v4: exactly-once миграции ДАННЫХ (backfill/сиды); DDL остаётся на applySchema.
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -215,6 +223,7 @@ export function applySchema(d: DatabaseSync): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_telegram_login_replays_expiry ON telegram_login_replays(expires_at);
     CREATE INDEX IF NOT EXISTS idx_models_user ON models(user_id);
     CREATE INDEX IF NOT EXISTS idx_model_variants_model ON model_variants(model_id, idx);
     CREATE INDEX IF NOT EXISTS idx_model_refs_model ON model_refs(model_id, idx);

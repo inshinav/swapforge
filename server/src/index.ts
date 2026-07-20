@@ -46,9 +46,9 @@ async function main(): Promise<void> {
         // index.html не кэшируем — иначе после деплоя браузер держит старый билд;
         // ассеты хэшированы vite'ом, им можно вечный кэш
         if (filePath.endsWith('index.html')) {
-          res.setHeader('Cache-Control', 'no-cache');
+          res.header('Cache-Control', 'no-cache');
         } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          res.header('Cache-Control', 'public, max-age=31536000, immutable');
         }
       },
     });

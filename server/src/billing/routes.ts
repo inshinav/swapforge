@@ -10,7 +10,7 @@ import { config } from '../config';
 import { adjustCredits, creditBalance, grantPurchase, listLedger } from './credits';
 import { cryptoPayAvailableToRole } from './cryptopay';
 import { getPack } from './packs';
-import { getProvider, readyProviders } from './provider';
+import { getProvider, readyProviders, validateCheckoutUrl } from './provider';
 
 function bad(reply: FastifyReply, code: number, msg: string) {
   return reply.code(code).send({ error: msg });
@@ -122,32 +122,18 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     }
 
     try {
-      const { payUrl } = await provider.createCheckout({ userId: req.user!.id, amountUsd: usd(amountCents), email });
-      return { payUrl };
+      const result = await provider.createCheckout({ userId: req.user!.id, amountUsd: usd(amountCents), email });
+      return { payUrl: validateCheckoutUrl(provider.id, result.payUrl) };
     } catch (e) {
       req.log.error({ err: e instanceof Error ? e.message : e }, 'checkout не удался');
       return bad(reply, 502, 'Не удалось создать счёт — попробуй позже');
     }
   });
 
-  // Ручная корректировка владельцем: разбор неопознанных платежей/споров
+  // Legacy endpoint deliberately cannot mutate the ledger. All manual grants go through the
+  // idempotent, audited /manual-topup service below.
   app.post('/api/billing/adjust', { preHandler: requireOwner }, async (req, reply) => {
-    const body = (req.body ?? {}) as { userId?: string; telegramId?: number; delta?: number; note?: string };
-    let userId = body.userId ?? null;
-    if (!userId && body.telegramId) {
-      const u = getDb().prepare(`SELECT id FROM users WHERE telegram_id = ?`).get(body.telegramId) as
-        | { id: string }
-        | undefined;
-      userId = u?.id ?? null;
-    }
-    if (!userId || typeof body.delta !== 'number' || !Number.isFinite(body.delta) || body.delta === 0) {
-      return bad(reply, 400, 'нужны userId (или telegramId) и delta ≠ 0');
-    }
-    if (!getDb().prepare(`SELECT 1 FROM users WHERE id = ?`).get(userId)) {
-      return bad(reply, 404, 'Пользователь не найден');
-    }
-    adjustCredits(userId, body.delta, body.note ?? 'ручная корректировка владельцем');
-    return { ok: true, balance: creditBalance(userId) };
+    return bad(reply, 410, 'Используй безопасное идемпотентное пополнение /api/billing/manual-topup');
   });
 
   // Простое ручное пополнение после перевода владельцу напрямую: сначала ищем точный
@@ -245,7 +231,7 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       if (!user || expectedCents === null || !amountValid) {
         // деньги не теряем молча: 200 (провайдер не ретраит вечно) + громкий лог
         console.error(
-          `[billing:${providerId}] платёж ${ev.paymentRef} без юзера/суммы (user=${ev.userId} amount=${ev.amountCents} pack=${ev.packId}) — разберись через /api/billing/adjust`,
+          `[billing:${providerId}] платёж ${ev.paymentRef} без юзера/суммы (user=${ev.userId} amount=${ev.amountCents} pack=${ev.packId}) — проверь в админке`,
         );
         return { ok: true, unmatched: true };
       }

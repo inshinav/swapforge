@@ -8,6 +8,7 @@ import { createHash, createHmac } from 'node:crypto';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'swapforge-auth-'));
 
 const { verifyTelegramLogin, TG_AUTH_MAX_AGE_MS } = await import('../src/auth/telegram');
+const { consumeTelegramLoginHash } = await import('../src/auth/telegram-replay');
 const {
   createSession,
   authenticateSession,
@@ -99,6 +100,25 @@ describe('verifyTelegramLogin', () => {
     expect(verifyTelegramLogin('строка', BOT_TOKEN, NOW).ok).toBe(false);
     expect(verifyTelegramLogin({ id: 1, auth_date: 1, hash: 'не-hex' }, BOT_TOKEN, NOW).ok).toBe(false);
     expect(verifyTelegramLogin(validPayload(), '', NOW).ok).toBe(false);
+  });
+});
+
+describe('Telegram login replay protection', () => {
+  it('consumes a verified hash exactly once during its freshness window', () => {
+    const hash = 'a'.repeat(64);
+    const authDate = Math.floor(NOW / 1000) - 60;
+    expect(consumeTelegramLoginHash(hash, authDate, NOW)).toBe(true);
+    expect(consumeTelegramLoginHash(hash, authDate, NOW + 1_000)).toBe(false);
+  });
+
+  it('purges expired replay rows', () => {
+    getDb()
+      .prepare(`INSERT INTO telegram_login_replays (login_hash, expires_at) VALUES (?, ?)`)
+      .run('b'.repeat(64), '2000-01-01 00:00:00');
+    expect(consumeTelegramLoginHash('c'.repeat(64), Math.floor(NOW / 1000), NOW)).toBe(true);
+    expect(
+      getDb().prepare(`SELECT 1 FROM telegram_login_replays WHERE login_hash = ?`).get('b'.repeat(64)),
+    ).toBeUndefined();
   });
 });
 

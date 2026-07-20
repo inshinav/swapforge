@@ -204,6 +204,7 @@ export default function Billing({
 
     // Вкладка резервируется прямо в click-handler, иначе мобильный браузер заблокирует её после await.
     const paymentTab = window.open('', '_blank');
+    if (paymentTab !== null) paymentTab.opener = null;
     setBusy(provider);
     setErr('');
     try {
