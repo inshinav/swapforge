@@ -423,7 +423,7 @@ export default function App() {
             } : undefined}
           />
         ) : activeView === 'admin' ? (
-          <Admin />
+          <Admin pricing={pricing} usage={usage} />
         ) : (
           <Library onOpen={openProjectAndRefresh} />
         )}
@@ -450,9 +450,9 @@ export default function App() {
             баланс WaveSpeed: ${pricing.balanceUsd.toFixed(2)}
           </span>
           )}
-          {usage && usage.totalUsd > 0 && (
+          {usage && (
           <span>
-            за месяц: ${usage.totalUsd.toFixed(2)}
+            OpenAI за месяц: ${usage.openaiUsd.toFixed(2)} · всего: ${usage.totalUsd.toFixed(2)}
             {usage.runs > 0 ? ` · ${usage.runs} рендеров` : ''}
           </span>
           )}

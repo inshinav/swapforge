@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AdminOverview, AdminUserOverview } from '@shared/api-types';
+import type { AdminOverview, AdminUserOverview, PricingInfo, UsageSummary } from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
@@ -60,7 +60,15 @@ function Stat({ label, value, accent = false }: { label: string; value: string; 
   );
 }
 
-export default function Admin() {
+const OPENAI_BALANCE_URL = 'https://platform.openai.com/settings/organization/billing/credit-grants';
+
+export default function Admin({
+  pricing,
+  usage,
+}: {
+  pricing: PricingInfo | null;
+  usage: UsageSummary | null;
+}) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -182,6 +190,40 @@ export default function Admin() {
                 <Stat label="зарезервировано" value={money(overview.summary.heldUsd)} />
                 <Stat label="сейчас в работе" value={String(overview.summary.activeRenders)} accent={overview.summary.activeRenders > 0} />
                 <Stat label="готовых роликов" value={String(overview.summary.completedRenders)} />
+              </div>
+              <div className="grid sm:grid-cols-2 gap-2" aria-label="Мои балансы AI-провайдеров">
+                <div className="rounded-xl border border-line bg-panel2 px-3 py-3 min-w-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-bold text-ink">OpenAI</div>
+                    <a
+                      href={OPENAI_BALANCE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-semibold text-lime hover:text-lime-dim shrink-0"
+                    >
+                      Точный баланс ↗
+                    </a>
+                  </div>
+                  <div className="text-xl font-extrabold mt-1">
+                    {usage ? money(usage.openaiUsd) : '—'}
+                  </div>
+                  <div className="text-[11px] text-dim mt-0.5">
+                    расходы SwapForge за текущий месяц
+                  </div>
+                </div>
+                <div className="rounded-xl border border-line bg-panel2 px-3 py-3 min-w-0">
+                  <div className="text-xs font-bold text-ink">WaveSpeed</div>
+                  <div className={`text-xl font-extrabold mt-1 ${
+                    pricing?.balanceUsd !== null && pricing?.balanceUsd !== undefined && pricing.balanceUsd < 2
+                      ? 'text-warn'
+                      : ''
+                  }`}>
+                    {pricing?.balanceUsd !== null && pricing?.balanceUsd !== undefined
+                      ? money(pricing.balanceUsd)
+                      : '—'}
+                  </div>
+                  <div className="text-[11px] text-dim mt-0.5">текущий баланс рендеров</div>
+                </div>
               </div>
               <div
                 role="status"
