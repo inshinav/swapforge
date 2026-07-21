@@ -225,7 +225,6 @@ function UnderTheHood({
               докатится до рендера WaveSpeed — это платно (см. смету выше)
             </div>
           )}
-          <AudioModeRow proj={proj} reload={reload} />
           {showRefs && <RefsSection proj={proj} reload={reload} />}
           <AnalysisView proj={proj} reload={reload} />
           <PromptsView proj={proj} reload={reload} />
@@ -235,47 +234,8 @@ function UnderTheHood({
   );
 }
 
-/** Звук результата: настройка «под капотом», третьей галочки на главном экране нет (решение Alex). */
-function AudioModeRow({ proj, reload }: { proj: ProjectFull; reload: () => void }) {
-  const [native, setNative] = useState(proj.flags?.generateAudio ?? true);
-  const [saved, setSaved] = useState(false);
-  const save = async (v: boolean) => {
-    setNative(v);
-    try {
-      // сервер применит сохранённое значение при следующем свапе (тело запуска звук не шлёт)
-      await api.swapAudioPref(proj.id, v);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
-      reload(); // освежаем proj.flags, чтобы весь UI видел актуальный выбор
-    } catch {
-      /* не критично — настройка сохранится при следующей попытке */
-    }
-  };
-  return (
-    <div className="rounded-xl border border-line bg-panel2 px-4 py-3 flex flex-wrap items-center gap-3 text-sm">
-      <span className="font-semibold">Звук результата</span>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input
-          type="radio"
-          checked={native}
-          onChange={() => void save(true)}
-          className="accent-[#C6F24E]"
-        />
-        нативная генерация (движок/среда под новый визуал)
-      </label>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input
-          type="radio"
-          checked={!native}
-          onChange={() => void save(false)}
-          className="accent-[#C6F24E]"
-        />
-        дорожка исходника как есть
-      </label>
-      {saved && <span className="text-xs text-ok">сохранено</span>}
-    </div>
-  );
-}
+// Звук результата настраивается видимой галочкой «Сгенерировать звук» в «Настройках»
+// SwapPanel (по умолчанию ВЫКЛ = дорожка исходника — решение Alex 21.07.2026).
 
 // ── Загрузка ролика ─────────────────────────────────────────────────────────
 

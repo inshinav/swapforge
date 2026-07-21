@@ -521,14 +521,14 @@ export function cancelQueuedForProject(projectId: string): void {
     .run(projectId);
 }
 
-/** Звук по умолчанию — нативная генерация (решение Alex); false = дорожка исходника. */
+/** Звук по умолчанию — дорожка исходника (решение Alex 21.07.2026); true = нативная генерация. */
 export function parseGenerateAudio(flagsJson: string | null | undefined): boolean {
-  if (!flagsJson) return true;
+  if (!flagsJson) return false;
   try {
     const v = (JSON.parse(flagsJson) as { generateAudio?: unknown }).generateAudio;
-    return v === undefined ? true : !!v;
+    return v === undefined ? false : !!v;
   } catch {
-    return true;
+    return false;
   }
 }
 

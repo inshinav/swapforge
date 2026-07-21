@@ -72,9 +72,26 @@ export function SwapPanel({
   previewAsUser?: boolean;
 }) {
   const savedFlags = proj.flags;
-  const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
+  // Все опции по умолчанию выключены (решение Alex 21.07.2026): чистый прогон без
+  // вмешательств, звук = дорожка исходника; включаются осознанно.
+  const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? false);
   const [enhanceFigure, setEnhanceFigure] = useState(savedFlags?.enhanceFigure ?? false);
   const [wish, setWish] = useState(savedFlags?.wish ?? '');
+  const [nativeAudio, setNativeAudio] = useState(savedFlags?.generateAudio ?? false);
+  const [audioSaved, setAudioSaved] = useState(false);
+
+  // Звук сохраняется сразу (PATCH): тело запуска звук не шлёт — сервер берёт флаг проекта
+  const saveAudio = async (value: boolean) => {
+    setNativeAudio(value);
+    try {
+      await api.swapAudioPref(proj.id, value);
+      setAudioSaved(true);
+      window.setTimeout(() => setAudioSaved(false), 1500);
+      reload();
+    } catch {
+      /* не критично — настройка сохранится при следующей попытке */
+    }
+  };
   const [confirmUnknown, setConfirmUnknown] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState<string | null>(null);
@@ -344,22 +361,30 @@ export function SwapPanel({
                 )}
               </div>
             )}
-            <details className="rounded-xl border border-line bg-panel2">
-              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">Настройки <span className="text-xs text-dim font-normal">необязательно</span></summary>
-              <div className="border-t border-line p-3 space-y-3">
-                <div className="grid sm:grid-cols-2 gap-2">
-                  <FlagBox checked={removeText} onChange={setRemoveText} title="Убрать текст" hint="капшены и стикеры" />
-                  <FlagBox checked={enhanceFigure} onChange={setEnhanceFigure} title="Усилить фигуру" hint="лицо не меняется" />
-                </div>
-                <textarea
-                  value={wish}
-                  onChange={(e) => setWish(e.target.value.slice(0, 500))}
-                  rows={2}
-                  placeholder="Пожелание к ролику (необязательно)"
-                  className="w-full rounded-lg bg-panel border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
+            <section className="rounded-xl border border-line bg-panel2 p-3 sm:p-4 space-y-3" aria-label="Настройки запуска">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="text-sm font-bold">Настройки</span>
+                <span className="text-xs text-dim">по умолчанию всё выключено — включай при необходимости</span>
+                {audioSaved && <span className="text-xs text-ok ml-auto">сохранено</span>}
+              </div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                <FlagBox checked={removeText} onChange={setRemoveText} title="Убрать текст" hint="капшены и стикеры" />
+                <FlagBox checked={enhanceFigure} onChange={setEnhanceFigure} title="Усилить фигуру" hint="лицо не меняется" />
+                <FlagBox
+                  checked={nativeAudio}
+                  onChange={(v) => void saveAudio(v)}
+                  title="Сгенерировать звук"
+                  hint="выкл — останется дорожка исходника"
                 />
               </div>
-            </details>
+              <textarea
+                value={wish}
+                onChange={(e) => setWish(e.target.value.slice(0, 500))}
+                rows={2}
+                placeholder="Пожелание к ролику (необязательно)"
+                className="w-full rounded-lg bg-panel border border-line text-sm px-3 py-2 outline-none focus:border-lime/50 resize-y sf-scroll"
+              />
+            </section>
             {launchErr && (
               <div className="space-y-2">
                 <ErrorNote text={launchErr} />

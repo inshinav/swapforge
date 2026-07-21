@@ -181,7 +181,7 @@ describe('рендер: happy path', () => {
     expect(String(payload.prompt)).not.toMatch(/start frame|reference image \d/i);
     expect(payload.aspect_ratio).toBe('9:16');
     expect(payload.resolution).toBe('720p');
-    expect(payload.generate_audio).toBe(true);
+    expect(payload.generate_audio).toBe(false); // дефолт: дорожка исходника (21.07.2026)
     expect((payload.reference_images as string[])).toHaveLength(1);
     expect((payload.reference_images as string[])[0]).toContain('ref_a.jpg');
     expect(g.file).toBe(`gen_${genId}.mp4`);
@@ -496,14 +496,15 @@ describe('гвард двойного финала', () => {
 });
 
 describe('вспомогательное', () => {
-  it('latestStartFrame берёт самый свежий файл версии; parseGenerateAudio дефолтит в true', () => {
+  it('latestStartFrame берёт самый свежий файл версии; parseGenerateAudio дефолтит в false (дорожка исходника)', () => {
     const pid = readyProject();
     fs.writeFileSync(path.join(startDir(pid), 'start_v1_2026-07-16T09-00-00.png'), 'png2');
     expect(latestStartFrame(pid, 1)).toBe('start_v1_2026-07-16T09-00-00.png');
     expect(latestStartFrame(pid, 9)).toBeNull();
-    expect(parseGenerateAudio(null)).toBe(true);
+    expect(parseGenerateAudio(null)).toBe(false);
     expect(parseGenerateAudio('{"generateAudio":false}')).toBe(false);
-    expect(parseGenerateAudio('{"removeText":true}')).toBe(true);
+    expect(parseGenerateAudio('{"removeText":true}')).toBe(false);
+    expect(parseGenerateAudio('{"generateAudio":true}')).toBe(true);
   });
 
   it('safeMediaPath понимает renders и режет traversal', () => {
