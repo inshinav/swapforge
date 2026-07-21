@@ -62,7 +62,7 @@ function project(id = randomUUID()): string {
 
 describe('пресеты: манифест и применение', () => {
   it('манифест валиден: файлы существуют, модель первой, роли корректны', () => {
-    expect(PRESETS.length).toBe(6);
+    expect(PRESETS.length).toBe(9);
     // две модели, у каждой свой байк
     expect(getPreset('lunaria-moto')?.refs[1]!.file).toBe('lunaria-bike.jpg');
     expect(getPreset('motolola-loose')?.refs[1]!.file).toBe('zx6r.jpg');
@@ -77,6 +77,9 @@ describe('пресеты: манифест и применение', () => {
     }
     expect(getPreset('motolola-braid')?.refs[0]!.note).toContain('КОС');
     expect(getPreset('motolola-loose')?.refs[0]!.note).toContain('РАСПУЩЕН');
+    expect(getPreset('motolola-moto-loose')?.refs[0]!.note).toContain('НЕ добавлять лисий хвост');
+    expect(getPreset('motolola-moto-braid')?.refs[0]!.file).toBe('motolola-moto-braid.png');
+    expect(getPreset('motolola-moto-twinbraids')?.refs[0]!.file).toBe('motolola-moto-twinbraids.png');
     expect(getPreset('nope')).toBeUndefined();
   });
 
@@ -119,6 +122,9 @@ describe('пресеты: роуты', () => {
       'lunaria-sport',
       'motolola-braid',
       'motolola-loose',
+      'motolola-moto-braid',
+      'motolola-moto-loose',
+      'motolola-moto-twinbraids',
       'motolola-twinbraids',
     ]);
 

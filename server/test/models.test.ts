@@ -94,26 +94,27 @@ describe('модели: домен', () => {
   });
 });
 
-describe('m002: сид пресетов в модели владельца', () => {
+describe('m002/m003: сид пресетов в модели владельца', () => {
   function freshDb() {
     const d = new DatabaseSync(':memory:');
     applySchema(d);
     return d;
   }
 
-  it('2 модели × 3 варианта, ноты verbatim, общий байк один (variant_id NULL)', () => {
+  it('MotoLola: 6 вариантов, Lunaria: 3; ноты verbatim, общий байк один', () => {
     const d = freshDb();
     runDataMigrations(d, { ownerTelegramId: '777' });
     const models = d.prepare(`SELECT id, name FROM models ORDER BY name`).all() as Array<{ id: string; name: string }>;
     expect(models.map((m) => m.name).sort()).toEqual(['Lunaria', 'MotoLola']);
     for (const m of models) {
       const variants = d.prepare(`SELECT title FROM model_variants WHERE model_id = ? ORDER BY idx`).all(m.id) as Array<{ title: string }>;
-      expect(variants.length).toBe(3);
+      const expectedVariants = m.name === 'MotoLola' ? 6 : 3;
+      expect(variants.length).toBe(expectedVariants);
       const shared = d.prepare(`SELECT file, note FROM model_refs WHERE model_id = ? AND variant_id IS NULL`).all(m.id) as Array<{ file: string; note: string }>;
       expect(shared.length).toBe(1); // один общий байк, не три копии
       expect(shared[0]!.note).toContain('ТОЛЬКО если в исходнике есть мотоцикл');
       const own = d.prepare(`SELECT note FROM model_refs WHERE model_id = ? AND variant_id IS NOT NULL`).all(m.id) as Array<{ note: string }>;
-      expect(own.length).toBe(3);
+      expect(own.length).toBe(expectedVariants);
     }
     // ноты модельных листов byte-identical нотам пресетов
     const allNotes = (d.prepare(`SELECT note FROM model_refs`).all() as Array<{ note: string }>).map((r) => r.note);
@@ -127,6 +128,30 @@ describe('m002: сид пресетов в модели владельца', () 
     // идемпотентность
     runDataMigrations(d, { ownerTelegramId: '777' });
     expect((d.prepare(`SELECT COUNT(*) AS c FROM models`).get() as { c: number }).c).toBe(2);
+  });
+
+  it('m003 добавляет три мотолука в существующую MotoLola ровно один раз', () => {
+    const d = freshDb();
+    const ownerId = randomUUID();
+    const modelId = randomUUID();
+    d.prepare(`INSERT INTO users (id, telegram_id, role) VALUES (?, 777, 'owner')`).run(ownerId);
+    d.prepare(`INSERT INTO models (id, user_id, name) VALUES (?, ?, 'MotoLola')`).run(modelId, ownerId);
+    d.prepare(`INSERT INTO schema_migrations (id) VALUES ('m001-owner-and-backfill')`).run();
+    d.prepare(`INSERT INTO schema_migrations (id) VALUES ('m002-seed-owner-models')`).run();
+
+    runDataMigrations(d, { ownerTelegramId: '777' });
+    const files = d
+      .prepare(`SELECT file FROM model_refs WHERE model_id = ? AND variant_id IS NOT NULL ORDER BY file`)
+      .all(modelId) as Array<{ file: string }>;
+    expect(files.map((row) => row.file)).toEqual([
+      'motolola-moto-braid.png',
+      'motolola-moto-loose.png',
+      'motolola-moto-twinbraids.png',
+    ]);
+    expect((d.prepare(`SELECT COUNT(*) AS c FROM model_variants WHERE model_id = ?`).get(modelId) as { c: number }).c).toBe(3);
+    expect((d.prepare(`SELECT COUNT(*) AS c FROM model_refs WHERE model_id = ? AND variant_id IS NULL`).get(modelId) as { c: number }).c).toBe(1);
+    runDataMigrations(d, { ownerTelegramId: '777' });
+    expect((d.prepare(`SELECT COUNT(*) AS c FROM model_refs WHERE model_id = ?`).get(modelId) as { c: number }).c).toBe(4);
   });
 
   it('без владельца откладывается', () => {

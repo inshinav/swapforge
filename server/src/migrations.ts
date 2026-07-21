@@ -66,7 +66,7 @@ const MIGRATIONS: DataMigration[] = [
   },
   {
     // Захардкоженные пресеты v3 → «просто модели владельца» в новой системе:
-    // 2 модели × 3 варианта, общий байк каждой модели = shared-реф (variant_id NULL).
+    // Варианты каждой модели берутся из PRESETS, общий байк каждой модели = shared-реф (variant_id NULL).
     // Ассеты копируются из репо (server/assets/presets) в data-dir; notes verbatim.
     // Откладывается, пока нет владельца или ассетов на диске (репо их несёт — на
     // проде будут; retirement presets.ts — только ПОСЛЕ чекпоинта этой миграции).
@@ -121,6 +121,86 @@ const MIGRATIONS: DataMigration[] = [
             if (isShared) sharedByFile.set(r.file, r.file);
           }
         });
+      }
+      return true;
+    },
+  },
+  {
+    // Добавляет три мотолука MotoLola владельцу, у которого m002 уже была применена.
+    // На чистой установке m002 уже создаёт эти варианты из PRESETS, поэтому миграция просто подтверждает их наличие.
+    id: 'm003-add-motolola-motolooks',
+    up(d, opts) {
+      if (!opts.ownerTelegramId) return false;
+      const owner = d
+        .prepare(`SELECT id FROM users WHERE telegram_id = ?`)
+        .get(Number(opts.ownerTelegramId)) as { id: string } | undefined;
+      if (!owner) return false;
+
+      const presets = PRESETS.filter((p) => p.id.startsWith('motolola-moto-'));
+      if (presets.length !== 3) return false;
+      for (const preset of presets) {
+        for (const ref of preset.refs) {
+          if (!fs.existsSync(path.join(presetsDir(), ref.file))) return false;
+        }
+      }
+
+      let model = d
+        .prepare(`SELECT id FROM models WHERE user_id = ? AND name = 'MotoLola' ORDER BY created_at, rowid LIMIT 1`)
+        .get(owner.id) as { id: string } | undefined;
+      if (!model) {
+        model = { id: randomUUID() };
+        d.prepare(`INSERT INTO models (id, user_id, name) VALUES (?, ?, 'MotoLola')`).run(model.id, owner.id);
+      }
+      ensureModelDirs(model.id);
+
+      let variantIdx = (d
+        .prepare(`SELECT COALESCE(MAX(idx), -1) + 1 AS idx FROM model_variants WHERE model_id = ?`)
+        .get(model.id) as { idx: number }).idx;
+      let refIdx = (d
+        .prepare(`SELECT COALESCE(MAX(idx), -1) + 1 AS idx FROM model_refs WHERE model_id = ?`)
+        .get(model.id) as { idx: number }).idx;
+      const insertVariant = d.prepare(
+        `INSERT INTO model_variants (id, model_id, title, hint, idx) VALUES (?, ?, ?, ?, ?)`,
+      );
+      const insertRef = d.prepare(
+        `INSERT INTO model_refs (id, model_id, variant_id, file, role, note, idx) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+
+      for (const preset of presets) {
+        const modelRef = preset.refs.find((ref) => ref.role === 'model');
+        if (!modelRef) continue;
+        const existingRef = d
+          .prepare(`SELECT 1 FROM model_refs WHERE model_id = ? AND file = ?`)
+          .get(model.id, modelRef.file);
+        if (existingRef) continue;
+
+        const title = preset.title.includes('·')
+          ? preset.title.split('·').slice(1).join('·').trim()
+          : preset.title;
+        let variant = d
+          .prepare(`SELECT id FROM model_variants WHERE model_id = ? AND title = ? ORDER BY idx LIMIT 1`)
+          .get(model.id, title) as { id: string } | undefined;
+        if (!variant) {
+          variant = { id: randomUUID() };
+          insertVariant.run(variant.id, model.id, title, preset.hint, variantIdx++);
+        }
+        fs.copyFileSync(
+          path.join(presetsDir(), modelRef.file),
+          path.join(modelRefsDir(model.id), modelRef.file),
+        );
+        insertRef.run(randomUUID(), model.id, variant.id, modelRef.file, modelRef.role, modelRef.note, refIdx++);
+      }
+
+      // У старой модели общий Kawasaki уже есть. Если модель пришлось восстановить, добавляем его один раз.
+      const bikeRef = presets.flatMap((preset) => preset.refs).find((ref) => ref.role === 'vehicle');
+      if (bikeRef) {
+        const existingBike = d
+          .prepare(`SELECT 1 FROM model_refs WHERE model_id = ? AND variant_id IS NULL AND file = ?`)
+          .get(model.id, bikeRef.file);
+        if (!existingBike) {
+          fs.copyFileSync(path.join(presetsDir(), bikeRef.file), path.join(modelRefsDir(model.id), bikeRef.file));
+          insertRef.run(randomUUID(), model.id, null, bikeRef.file, bikeRef.role, bikeRef.note, refIdx++);
+        }
       }
       return true;
     },
