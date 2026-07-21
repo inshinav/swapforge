@@ -313,10 +313,9 @@ function UploadZone({ onCreated, guided = false }: { onCreated: (id: string) => 
         </div>
       )}
       <div
-        className={`rounded-2xl border-2 border-dashed px-4 py-14 text-center transition-colors cursor-pointer select-none ${
+        className={`rounded-2xl border-2 border-dashed px-4 py-14 text-center transition-colors select-none ${
           drag ? 'border-lime bg-lime/5' : 'border-line2 hover:border-lime/40'
         }`}
-        onClick={() => inputRef.current?.click()}
         onDragOver={(e) => {
           e.preventDefault();
           setDrag(true);
@@ -332,9 +331,13 @@ function UploadZone({ onCreated, guided = false }: { onCreated: (id: string) => 
           <>
             <div className="text-lg font-bold">Загрузить видео</div>
             <div className="text-sm text-mut mt-2">MP4 / MOV · до 300 МБ · максимум 60 сек · рекомендуем до 15 сек</div>
+            <Button kind="primary" className="mt-5" onClick={() => inputRef.current?.click()}>
+              Выбрать видео
+            </Button>
+            <div className="text-xs text-dim mt-2">или перетащи файл сюда</div>
           </>
         ) : (
-          <>
+          <div role="status" aria-live="polite" aria-atomic="true">
             <div className="mb-4 flex justify-center">
               <Spinner size={26} />
             </div>
@@ -343,7 +346,7 @@ function UploadZone({ onCreated, guided = false }: { onCreated: (id: string) => 
               <div className="h-full bg-lime transition-all" style={{ width: `${pct}%` }} />
             </div>
             <div className="text-xs text-dim mt-3 sf-pulse">{UPLOAD_LINES[lineIdx]}</div>
-          </>
+          </div>
         )}
         <input
           ref={inputRef}
@@ -561,7 +564,7 @@ function RefsSection({ proj, reload }: { proj: ProjectFull; reload: () => void }
           <span className="text-xs text-dim">роль можно изменить после загрузки</span>
         </div>
       )}
-      <div className="p-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+      <div className="p-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
         {[...proj.refs]
           .sort((a, b) => a.idx - b.idx)
           .map((r, i, arr) => (

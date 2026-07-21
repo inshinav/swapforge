@@ -11,8 +11,8 @@
   --color-line: #26262b;
   --color-line2: #333339;
   --color-ink: #ededef;
-  --color-mut: #8f8f98;
-  --color-dim: #5d5d66;
+  --color-mut: #a3a3ad;
+  --color-dim: #7d7d88;
   --color-lime: #c6f24e;
   --color-lime-dim: #a8d13d;
   --color-danger: #ff6f6f;
@@ -37,6 +37,20 @@ body {
 
 #root {
   min-width: 0;
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-lime);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 ::selection {

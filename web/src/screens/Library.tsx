@@ -61,7 +61,7 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
           sub="Здесь появятся последние готовые ролики"
         />
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
           {shown.map((p) => (
             <LibCard key={p.id} p={p} onOpen={onOpen} onDeleted={load} />
           ))}

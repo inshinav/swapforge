@@ -65,12 +65,21 @@ export function RenderPanel({ proj, reload }: { proj: ProjectFull; reload: () =>
       <div className="p-5 flex flex-col lg:flex-row gap-5">
         <div className="shrink-0">
           {latest.file ? (
-            <video
-              src={api.mediaUrl(proj.id, 'renders', latest.file)}
-              controls
-              playsInline
-              className="w-56 rounded-xl border border-lime/40 bg-black"
-            />
+            <div className="space-y-3">
+              <video
+                src={api.mediaUrl(proj.id, 'renders', latest.file)}
+                controls
+                playsInline
+                className="w-56 rounded-xl border border-lime/40 bg-black"
+              />
+              <a
+                href={api.mediaUrl(proj.id, 'renders', latest.file)}
+                download={latest.file}
+                className="w-56 min-h-11 inline-flex items-center justify-center rounded-lg bg-lime px-4 py-2 text-sm font-bold text-black hover:bg-lime-dim"
+              >
+                Скачать ролик
+              </a>
+            </div>
           ) : (
             <div className="w-56 aspect-[9/16] rounded-xl border border-line bg-panel2 flex items-center justify-center text-center text-xs text-dim p-3">
               файл счищен ротацией — параметры и оценка сохранены

@@ -703,7 +703,7 @@ function ProgressStepper({ proj, gen, detailed }: { proj: ProjectFull; gen: Gene
     }
   };
   return (
-    <div>
+    <div role="status" aria-live="polite" aria-atomic="false">
       {gen?.status === 'queued' && (
         <div className="mb-3 flex items-center gap-3 rounded-lg border border-line bg-panel2 px-3 py-2 text-xs">
           <span className="text-mut">

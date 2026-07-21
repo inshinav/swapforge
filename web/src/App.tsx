@@ -322,7 +322,7 @@ export default function App() {
         />
       </header>
 
-      <main className={`flex-1 w-full min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 ${journeyActive ? 'pb-6' : 'pb-24 md:pb-6'}`}>
+      <main className={`flex-1 w-full min-w-0 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 ${journeyActive ? 'pb-6' : 'pb-24 md:pb-6'}`}>
         {journeyActive && journeyStatus && activeView !== 'start' && (
           <JourneyBar
             status={journeyStatus}

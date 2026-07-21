@@ -160,7 +160,7 @@ export default function Admin() {
   };
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto">
+    <div className="space-y-4 max-w-7xl mx-auto">
       <Card>
         <SectionTitle
           title="Админ"
