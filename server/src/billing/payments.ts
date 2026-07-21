@@ -254,11 +254,11 @@ export function processPaidEvent(
     if (intent.user_id !== event.userId || (event.amountCents !== undefined && intent.credits_cents !== event.amountCents)) {
       return quarantine(eventId, intent, 'user_or_credit_amount_mismatch');
     }
-    const user = d.prepare(`SELECT role,status FROM users WHERE id=?`).get(intent.user_id) as
-      | { role: string; status: string }
+    const user = d.prepare(`SELECT role,status,sandbox_of FROM users WHERE id=?`).get(intent.user_id) as
+      | { role: string; status: string; sandbox_of: string | null }
       | undefined;
     if (!user || user.status !== 'active') return quarantine(eventId, intent, 'user_unavailable');
-    if (provider === 'cryptopay' && !cryptoPayAvailableToRole(user.role)) {
+    if (provider === 'cryptopay' && !cryptoPayAvailableToRole(user.role, undefined, !!user.sandbox_of)) {
       return quarantine(eventId, intent, 'cryptopay_testnet_owner_only');
     }
 
@@ -310,6 +310,48 @@ export function processPaidEvent(
 
 export function webhookEventHash(raw: Buffer): string {
   return createHash('sha256').update(raw).digest('hex');
+}
+
+export interface PaymentEventSummary {
+  provider: string;
+  source: string;
+  verified: boolean;
+  outcome: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+/** Последние входящие события оплат (вебхуки/сверки) — диагностика владельца. */
+export function listRecentPaymentEvents(limit = 15): PaymentEventSummary[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT provider, source, verified, outcome, reason, created_at
+         FROM payment_events ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+    )
+    .all(Math.max(1, Math.min(100, limit))) as Array<{
+    provider: string;
+    source: string;
+    verified: number;
+    outcome: string;
+    reason: string | null;
+    created_at: string;
+  }>;
+  return rows.map((r) => ({
+    provider: r.provider,
+    source: r.source,
+    verified: r.verified === 1,
+    outcome: r.outcome,
+    reason: r.reason,
+    createdAt: r.created_at,
+  }));
+}
+
+/** Счётчики интентов по статусам — сводка «где застряли деньги». */
+export function paymentIntentStats(): Record<string, number> {
+  const rows = getDb()
+    .prepare(`SELECT status, COUNT(*) AS n FROM payment_intents GROUP BY status`)
+    .all() as Array<{ status: string; n: number }>;
+  return Object.fromEntries(rows.map((r) => [r.status, r.n]));
 }
 
 export function recordPaymentEventReceipt(input: {

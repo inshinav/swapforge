@@ -56,6 +56,7 @@ function fakeProvider(status: ProviderPaymentStatus, find = false): PaymentProvi
     ready: true,
     needsEmail: false,
     createCheckout: vi.fn(),
+    healthCheck: vi.fn(async () => ({ ok: true, detail: 'test' })),
     getPayment: vi.fn(async () => (find ? null : status)),
     findRecentPayment: vi.fn(async () => (find ? status : null)),
     verifyWebhook: vi.fn(() => true),

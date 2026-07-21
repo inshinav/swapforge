@@ -187,4 +187,19 @@ export class LavaTopProvider implements PaymentProvider {
   parseWebhook(rawBody: Buffer): PaymentEvent {
     return parseLavaEvent(rawBody);
   }
+
+  async healthCheck() {
+    if (!config.lavaApiKey) return { ok: false, detail: 'LAVA_API_KEY не задан' };
+    if (!config.lavaWebhookSecret) return { ok: false, detail: 'LAVA_WEBHOOK_SECRET не задан — зачисления не пройдут' };
+    if (!config.lavaDynamicOfferId) return { ok: false, detail: 'LAVA_DYNAMIC_OFFER_ID не задан' };
+    try {
+      // Авторизованный read: живость ключа. Сам оффер снаружи не виден (приватный) —
+      // его окончательно подтверждает только реальный createInvoice.
+      const beginDate = new Date(Date.now() - 24 * 3_600_000).toISOString();
+      await lavaRequest(`/api/v1/invoices?beginDate=${encodeURIComponent(beginDate)}&page=0&size=1`);
+      return { ok: true, detail: `ключ API работает · курс $1 = ${config.lavaRubPerUsd} ₽` };
+    } catch (e) {
+      return { ok: false, detail: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+    }
+  }
 }

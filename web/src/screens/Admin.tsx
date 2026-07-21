@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AdminOverview, AdminUserOverview, PricingInfo, UsageSummary } from '@shared/api-types';
+import type {
+  AdminOverview,
+  AdminUserOverview,
+  BillingHealthInfo,
+  PricingInfo,
+  UsageSummary,
+} from '@shared/api-types';
 import { api } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 
@@ -253,6 +259,8 @@ export default function Admin({
         </div>
       </Card>
 
+      <BillingOps />
+
       <Card>
         <SectionTitle
           title="Пользователи"
@@ -360,5 +368,183 @@ export default function Admin({
         </div>
       </Card>
     </div>
+  );
+}
+
+// ── Оплата: живой health-check провайдеров + застрявшие счета ───────────────
+
+const PROVIDER_RU: Record<string, string> = { cryptopay: 'Крипта (Crypto Pay)', lavatop: 'Карта / СБП (Lava.top)' };
+const INTENT_STATUS_RU: Record<string, string> = {
+  creating: 'создаётся',
+  pending: 'ждёт оплаты',
+  paid: 'оплачен, не зачислен',
+  credited: 'зачислен',
+  expired: 'истёк',
+  cancelled: 'отменён',
+  failed: 'не удался',
+  quarantined: 'в карантине',
+};
+const EVENT_OUTCOME_TONE: Record<string, 'ok' | 'warn' | 'danger' | 'mut'> = {
+  credited: 'ok',
+  replay: 'mut',
+  ignored: 'mut',
+  received: 'mut',
+  rejected: 'danger',
+  invalid: 'danger',
+  quarantined: 'warn',
+};
+
+interface StuckIntent {
+  id: string;
+  user_id: string;
+  provider: 'cryptopay' | 'lavatop';
+  credits_cents: number;
+  status: string;
+  last_error: string | null;
+  created_at: string;
+}
+
+function BillingOps() {
+  const [health, setHealth] = useState<BillingHealthInfo | null>(null);
+  const [stuck, setStuck] = useState<StuckIntent[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [err, setErr] = useState('');
+  const [reconciling, setReconciling] = useState<string | null>(null);
+
+  const check = useCallback(async () => {
+    setChecking(true);
+    setErr('');
+    try {
+      const [nextHealth, creating, pending, quarantined] = await Promise.all([
+        api.billingHealth(),
+        api.adminPaymentIntents('creating'),
+        api.adminPaymentIntents('pending'),
+        api.adminPaymentIntents('quarantined'),
+      ]);
+      setHealth(nextHealth);
+      setStuck([...quarantined.intents, ...creating.intents, ...pending.intents] as StuckIntent[]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  const reconcile = async (id: string) => {
+    setReconciling(id);
+    try {
+      await api.adminReconcilePayment(id);
+      await check();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReconciling(null);
+    }
+  };
+
+  return (
+    <Card>
+      <SectionTitle
+        title="Оплата"
+        hint="живой пинг провайдеров и застрявшие счета"
+        right={
+          <Button kind="ghost" busy={checking} onClick={() => void check()} className="shrink-0">
+            Проверить провайдеров
+          </Button>
+        }
+      />
+      <div className="p-4 sm:p-5 space-y-4">
+        {health === null && !err ? (
+          <div className="flex justify-center py-6"><Spinner /></div>
+        ) : health && (
+          <>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {health.providers.map((p) => (
+                <div key={p.id} className={`rounded-xl border px-3 py-3 space-y-1.5 ${p.check.ok ? 'border-ok/30 bg-ok/5' : 'border-danger/35 bg-danger/5'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={p.check.ok ? 'text-ok' : 'text-danger'}>{p.check.ok ? '✓' : '✗'}</span>
+                    <span className="text-sm font-semibold">{PROVIDER_RU[p.id] ?? p.id}</span>
+                    {p.testnet && <Tag tone="warn">тестнет</Tag>}
+                    {!p.availableToUsers && <Tag tone="warn">клиентам скрыт</Tag>}
+                  </div>
+                  <div className="text-xs text-mut">{p.check.detail}</div>
+                  {p.testnet && (
+                    <div className="text-[11px] text-dim">
+                      Платить криптой могут только владелец и тест-клиент. Для публики создай mainnet-приложение в @CryptoBot и замени CRYPTO_PAY_TOKEN.
+                    </div>
+                  )}
+                </div>
+              ))}
+              {health.providers.length === 0 && (
+                <div className="text-sm text-warn">Ни один платёжный провайдер не сконфигурирован (BILLING_PROVIDERS)</div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-1.5 text-xs" aria-label="Счета по статусам">
+              {Object.entries(health.intents).map(([status, n]) => (
+                <Tag key={status} tone={status === 'credited' ? 'ok' : ['quarantined', 'failed'].includes(status) ? 'danger' : ['creating', 'paid'].includes(status) ? 'warn' : 'mut'}>
+                  {INTENT_STATUS_RU[status] ?? status}: {n}
+                </Tag>
+              ))}
+              {Object.keys(health.intents).length === 0 && <span className="text-mut">счетов ещё не было</span>}
+            </div>
+
+            {stuck && stuck.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-dim">Требуют внимания</div>
+                {stuck.map((intent) => (
+                  <div key={intent.id} className="rounded-lg border border-line bg-panel2 px-3 py-2 flex flex-wrap items-center gap-2 text-xs">
+                    <Tag tone={intent.status === 'quarantined' ? 'danger' : 'warn'}>{INTENT_STATUS_RU[intent.status] ?? intent.status}</Tag>
+                    <span className="font-semibold">{money(intent.credits_cents / 100)}</span>
+                    <span className="text-mut">{PROVIDER_RU[intent.provider] ?? intent.provider}</span>
+                    <span className="text-dim">{ago(intent.created_at)}</span>
+                    {intent.last_error && <span className="text-danger truncate max-w-60" title={intent.last_error}>{intent.last_error}</span>}
+                    <button
+                      type="button"
+                      disabled={reconciling === intent.id}
+                      onClick={() => void reconcile(intent.id)}
+                      className="ml-auto text-lime hover:underline disabled:opacity-50 min-h-8"
+                      title="Спросить провайдера о судьбе счёта: оплаченный — зачислится, мёртвый — закроется"
+                    >
+                      {reconciling === intent.id ? 'сверяю…' : 'сверить'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {health.events.length > 0 && (
+              <details className="rounded-xl border border-line bg-panel2">
+                <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">
+                  Последние события оплат ({health.events.length})
+                </summary>
+                <div className="border-t border-line px-3 py-2 space-y-1">
+                  {health.events.map((event, index) => (
+                    <div key={`${event.createdAt}-${index}`} className="flex flex-wrap items-center gap-2 text-xs py-0.5">
+                      <Tag tone={EVENT_OUTCOME_TONE[event.outcome] ?? 'mut'}>{event.outcome}</Tag>
+                      <span className="text-mut">{event.provider}</span>
+                      <span className="text-dim">{event.source}</span>
+                      {!event.verified && <span className="text-danger">подпись не сошлась</span>}
+                      {event.reason && <span className="text-mut truncate max-w-52" title={event.reason}>{event.reason}</span>}
+                      <span className="text-dim ml-auto">{ago(event.createdAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            <div className="text-[11px] text-dim">
+              Полную оплату «глазами клиента» проверяй тест-клиентом: меню профиля → «Войти тест-клиентом» —
+              реальные цены, резерв и зачисление на отдельном балансе.
+            </div>
+          </>
+        )}
+        {err && <ErrorNote text={err} onRetry={() => void check()} />}
+      </div>
+    </Card>
   );
 }

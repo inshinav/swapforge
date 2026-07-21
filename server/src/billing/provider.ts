@@ -87,6 +87,12 @@ export type PaymentEvent =
   | { kind: 'ignored'; reason: string }
   | { kind: 'invalid'; reason: string };
 
+export interface ProviderHealth {
+  ok: boolean;
+  /** Человекочитаемый итог живого пинга (без секретов). */
+  detail: string;
+}
+
 export interface PaymentProvider {
   readonly id: ProviderId;
   /** Провайдер сконфигурирован (есть ключи) и готов создавать инвойсы. */
@@ -99,6 +105,8 @@ export interface PaymentProvider {
   /** Подпись/секрет вебхука по СЫРОМУ телу + заголовкам. */
   verifyWebhook(rawBody: Buffer, headers: Record<string, string | string[] | undefined>): boolean;
   parseWebhook(rawBody: Buffer): PaymentEvent;
+  /** Живой авторизованный read-пинг API провайдера (проверка ключей владельцем). */
+  healthCheck(): Promise<ProviderHealth>;
 }
 
 /** Единая упаковка userId+суммы в round-trip строку провайдера. */

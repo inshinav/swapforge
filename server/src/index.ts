@@ -7,6 +7,7 @@ import { getDb, resetInterruptedJobs } from './db';
 import { buildApp } from './app';
 import { warmPricing } from './pricing';
 import { resumeGenerations } from './engine/render';
+import { resumeFinishJobs } from './engine/finish';
 import { cleanupStorageLifecycle, enforceStorageCap, sweepOrphanRefFiles } from './storage';
 import { purgeExpiredSessions } from './auth/sessions';
 import { reconcileOrphanHolds } from './billing/flow';
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   // Рендеры переживают рестарт: submitted/rendering/downloading снова поллятся,
   // прерванные аплоады помечаются failed (ретрай дёшев — URL переиспользуются)
   resumeGenerations();
+  resumeFinishJobs(); // повисшие Reality Finish обработки → failed (перезапуск дёшев)
   reconcileOrphanHolds(); // осиротевшие open-холды (краш между done и settle) — закрыть
   void reconcileDuePaymentIntents().catch((e) =>
     console.warn(`[billing] сверка платежей не удалась: ${e instanceof Error ? e.message : e}`),
@@ -45,7 +47,15 @@ async function main(): Promise<void> {
       `[cleanup] results=${cleaned.purgedResults.length} projects=${cleaned.deletedProjects.length} transient=${cleaned.transientFiles}`,
     );
   }
-  setInterval(() => cleanupStorageLifecycle(), 60 * 60_000).unref();
+  // Уборка не имеет права ронять процесс (на Windows-дев rmSync под открытым
+  // ffmpeg-файлом кидает EPERM; interval-колбэк без catch = uncaught exception)
+  setInterval(() => {
+    try {
+      cleanupStorageLifecycle();
+    } catch (e) {
+      console.warn(`[cleanup] фоновая уборка не удалась: ${e instanceof Error ? e.message : e}`);
+    }
+  }, 60 * 60_000).unref();
   // Прогрев живых тарифов (litellm + каталог WaveSpeed + баланс) — не блокирует старт
   void warmPricing().catch((e) =>
     console.warn(`[pricing] прогрев не удался: ${e instanceof Error ? e.message : e}`),

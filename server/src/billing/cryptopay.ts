@@ -72,13 +72,15 @@ async function cryptoRequest(method: string, body: Record<string, unknown>): Pro
 
 /**
  * Testnet нельзя выдавать обычным пользователям: иначе тестовыми монетами можно
- * купить настоящий USD-баланс SwapForge. На публичном prod тестирует только owner.
+ * купить настоящий USD-баланс SwapForge. На публичном prod тестирует только owner
+ * и его тест-клиент (sandbox — тот же владелец, проходящий путь клиента).
  */
 export function cryptoPayAvailableToRole(
   role: string | null | undefined,
   testnet = config.cryptoPayTestnet,
+  sandbox = false,
 ): boolean {
-  return !testnet || role === 'owner';
+  return !testnet || role === 'owner' || sandbox;
 }
 
 export function verifyCryptoPaySignature(rawBody: Buffer, signature: string, token: string): boolean {
@@ -179,5 +181,19 @@ export class CryptoPayProvider implements PaymentProvider {
 
   parseWebhook(rawBody: Buffer): PaymentEvent {
     return parseCryptoPayEvent(rawBody);
+  }
+
+  async healthCheck() {
+    if (!this.ready) return { ok: false, detail: 'CRYPTO_PAY_TOKEN не задан' };
+    try {
+      const me = await cryptoRequest('getMe', {});
+      const name = typeof me.name === 'string' ? me.name : `app ${String(me.app_id ?? '?')}`;
+      return {
+        ok: true,
+        detail: `приложение «${name}» · ${config.cryptoPayTestnet ? 'ТЕСТНЕТ (клиентам скрыт)' : 'mainnet'}`,
+      };
+    } catch (e) {
+      return { ok: false, detail: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+    }
   }
 }

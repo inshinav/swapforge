@@ -19,6 +19,10 @@ export function startDir(id: string): string {
 export function rendersDir(id: string): string {
   return path.join(projectDir(id), 'renders');
 }
+/** Reality Finish: кэш превью-фрагментов и tmp-файлы обработки. */
+export function finishDir(id: string): string {
+  return path.join(projectDir(id), 'finish');
+}
 
 export function ensureProjectDirs(id: string): void {
   fs.mkdirSync(framesDir(id), { recursive: true });
@@ -120,7 +124,7 @@ export function enforceStorageCap(): { purged: string[]; purgedRenders: string[]
   if (usage > config.storageCapBytes) {
     const renders = db
       .prepare(
-        `SELECT g.id, g.project_id, g.file, g.bytes FROM generations g
+        `SELECT g.id, g.project_id, g.file, g.bytes, g.finish_file FROM generations g
           WHERE g.status = 'done' AND g.render_purged = 0 AND g.file IS NOT NULL
             AND COALESCE(g.rating, 0) != 1
             AND g.rowid NOT IN (
@@ -128,11 +132,14 @@ export function enforceStorageCap(): { purged: string[]; purgedRenders: string[]
             )
           ORDER BY g.created_at ASC, g.rowid ASC`,
       )
-      .all() as Array<{ id: string; project_id: string; file: string; bytes: number }>;
+      .all() as Array<{ id: string; project_id: string; file: string; bytes: number; finish_file: string | null }>;
     for (const r of renders) {
       if (usage <= config.storageCapBytes) break;
       fs.rmSync(path.join(rendersDir(r.project_id), r.file), { force: true });
-      db.prepare(`UPDATE generations SET render_purged = 1 WHERE id = ?`).run(r.id);
+      purgeFinishArtifacts(r.project_id, r.id, r.finish_file);
+      db.prepare(
+        `UPDATE generations SET render_purged = 1, finish_file = NULL, finish_json = NULL WHERE id = ?`,
+      ).run(r.id);
       usage -= r.bytes;
       purgedRenders.push(r.id);
     }
@@ -173,6 +180,16 @@ export interface StorageCleanupResult {
   transientFiles: number;
 }
 
+/** Ротация основного рендера уносит и его Reality Finish артефакты (файл + кэш превью). */
+function purgeFinishArtifacts(projectId: string, genId: string, finishFile: string | null): void {
+  if (finishFile) fs.rmSync(path.join(rendersDir(projectId), finishFile), { force: true });
+  const dir = finishDir(projectId);
+  if (!fs.existsSync(dir)) return;
+  for (const f of fs.readdirSync(dir)) {
+    if (f.includes(genId)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+  }
+}
+
 /** Физически оставляет только последние 20 готовых роликов пользователя. */
 export function enforceLatestResultLimit(userId?: string, keep = 20): string[] {
   const db = getDb();
@@ -183,15 +200,18 @@ export function enforceLatestResultLimit(userId?: string, keep = 20): string[] {
   for (const user of users) {
     const results = db
       .prepare(
-        `SELECT g.id, g.project_id, g.file
+        `SELECT g.id, g.project_id, g.file, g.finish_file
            FROM generations g JOIN projects p ON p.id=g.project_id
           WHERE p.user_id=? AND g.status='done' AND g.render_purged=0 AND g.file IS NOT NULL
           ORDER BY COALESCE(g.finished_at, g.created_at) DESC, g.rowid DESC`,
       )
-      .all(user.id) as Array<{ id: string; project_id: string; file: string }>;
+      .all(user.id) as Array<{ id: string; project_id: string; file: string; finish_file: string | null }>;
     for (const result of results.slice(Math.max(0, keep))) {
       fs.rmSync(path.join(rendersDir(result.project_id), result.file), { force: true });
-      db.prepare(`UPDATE generations SET render_purged=1 WHERE id=?`).run(result.id);
+      purgeFinishArtifacts(result.project_id, result.id, result.finish_file);
+      db.prepare(
+        `UPDATE generations SET render_purged=1, finish_file=NULL, finish_json=NULL WHERE id=?`,
+      ).run(result.id);
       purged.push(result.id);
     }
   }
@@ -220,9 +240,12 @@ export function cleanupInvisibleProjects(userId?: string, keep = 20): string[] {
               AND status IN ('queued','uploading_assets','submitted','rendering','downloading')
            ) OR EXISTS (
              SELECT 1 FROM credit_holds WHERE project_id=? AND status='open'
+           ) OR EXISTS (
+             -- Reality Finish мид-ffmpeg: не выдёргиваем каталог из-под энкода
+             SELECT 1 FROM generations WHERE project_id=? AND finish_json LIKE '%"status":"processing"%'
            )`,
         )
-        .get(project.id, project.id, project.id);
+        .get(project.id, project.id, project.id, project.id);
       if (protectedRow) continue;
       db.prepare(`DELETE FROM projects WHERE id=?`).run(project.id);
       deleteProjectFiles(project.id);
@@ -233,7 +256,10 @@ export function cleanupInvisibleProjects(userId?: string, keep = 20): string[] {
   return deleted;
 }
 
-/** .part, orphan renders и старые terminal render-work не переживают уборку. */
+/** Кэш превью Reality Finish живёт двое суток; активные tmp-файлы всегда моложе. */
+const FINISH_CACHE_TTL_MS = 48 * 3_600_000;
+
+/** .part, orphan renders, старый finish-кэш и terminal render-work не переживают уборку. */
 export function sweepTransientProjectFiles(nowMs = Date.now()): number {
   const db = getDb();
   const root = path.join(config.dataDir, 'projects');
@@ -256,13 +282,43 @@ export function sweepTransientProjectFiles(nowMs = Date.now()): number {
     const renderRoot = rendersDir(projectId);
     if (fs.existsSync(renderRoot)) {
       const known = new Set(
-        (db.prepare(`SELECT file FROM generations WHERE project_id=? AND file IS NOT NULL`).all(projectId) as Array<{ file: string }>).map(
-          (row) => row.file,
-        ),
+        (db
+          .prepare(
+            `SELECT file FROM generations WHERE project_id=? AND file IS NOT NULL
+             UNION SELECT finish_file FROM generations WHERE project_id=? AND finish_file IS NOT NULL`,
+          )
+          .all(projectId, projectId) as Array<{ file: string }>).map((row) => row.file),
       );
       for (const file of fs.readdirSync(renderRoot)) {
         if (!known.has(file)) {
           fs.rmSync(path.join(renderRoot, file), { force: true });
+          removed++;
+        }
+      }
+    }
+    // Кэш Reality Finish: артефакты удалённых генераций — сразу, живых — по TTL 48ч
+    // (активные tmp/скретчи всегда моложе; .part-файлов здесь не бывает).
+    const finishRoot = finishDir(projectId);
+    if (fs.existsSync(finishRoot)) {
+      const genIds = new Set(
+        (db.prepare(`SELECT id FROM generations WHERE project_id=?`).all(projectId) as Array<{ id: string }>).map(
+          (row) => row.id,
+        ),
+      );
+      for (const entry of fs.readdirSync(finishRoot)) {
+        const full = path.join(finishRoot, entry);
+        const genId = /(?:^|[_.-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(entry)?.[1];
+        let stale = false;
+        if (genId && !genIds.has(genId)) stale = true;
+        else {
+          try {
+            stale = nowMs - fs.statSync(full).mtimeMs >= FINISH_CACHE_TTL_MS;
+          } catch {
+            continue; // файл исчез между readdir и stat
+          }
+        }
+        if (stale) {
+          fs.rmSync(full, { recursive: true, force: true });
           removed++;
         }
       }
@@ -325,7 +381,7 @@ export function invalidateUserUsage(userId: string): void {
 /** Безопасное имя файла внутри каталога проекта (без путей от пользователя). */
 export function safeMediaPath(
   projectId: string,
-  sub: 'frames' | 'refs' | 'start' | 'renders' | '.',
+  sub: 'frames' | 'refs' | 'start' | 'renders' | 'finish' | '.',
   file: string,
 ): string | null {
   if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;

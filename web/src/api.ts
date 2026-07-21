@@ -1,11 +1,14 @@
 import type {
   AuthUser,
+  BillingHealthInfo,
   BillingMethodsInfo,
   BillingProviderId,
   DollarBalanceInfo,
   DollarLedgerEntry,
   EstimateForUser,
   EstimateInfo,
+  FinishMode,
+  FinishPreviewInfo,
   HealthInfo,
   AdminOverview,
   MeInfo,
@@ -74,6 +77,9 @@ export const api = {
   devLogin: (telegramId: number, name?: string) =>
     post(u('api/auth/dev-login'), { telegramId, name }).then((r) => j<{ user: AuthUser }>(r)),
   logout: () => post(u('api/auth/logout')).then((r) => j<{ ok: true }>(r)),
+  // Тест-клиент владельца: переключение в настоящего metered-юзера и обратно
+  testClient: () => post(u('api/auth/test-client')).then((r) => j<{ user: AuthUser }>(r)),
+  testClientExit: () => post(u('api/auth/test-client/exit')).then((r) => j<{ user: AuthUser }>(r)),
 
   health: () => fetch(u('api/health')).then((r) => j<HealthInfo>(r)),
   projects: () => fetch(u('api/projects')).then((r) => j<ProjectSummary[]>(r)),
@@ -244,6 +250,23 @@ export const api = {
   ownerManualTopup: (body: { userId: string; amountUsd: number; note: string; requestId: string }) =>
     post(u('api/billing/manual-topup'), body).then((r) => j<OwnerManualTopupResult>(r)),
   adminOverview: () => fetch(u('api/admin/overview')).then((r) => j<AdminOverview>(r)),
+  billingHealth: () => fetch(u('api/admin/billing/health')).then((r) => j<BillingHealthInfo>(r)),
+  adminPaymentIntents: (status: 'creating' | 'pending' | 'paid' | 'quarantined') =>
+    fetch(u(`api/admin/payment-intents?status=${status}`)).then((r) =>
+      j<{
+        intents: Array<{
+          id: string;
+          user_id: string;
+          provider: BillingProviderId;
+          credits_cents: number;
+          status: string;
+          last_error: string | null;
+          created_at: string;
+        }>;
+      }>(r),
+    ),
+  adminReconcilePayment: (id: string) =>
+    post(u(`api/admin/payment-intents/${id}/reconcile`)).then((r) => j<{ intent: unknown }>(r)),
   swapAudioPref: (id: string, generateAudio: boolean) =>
     fetch(u(`api/projects/${id}/flags`), {
       method: 'PATCH',
@@ -260,9 +283,19 @@ export const api = {
     post(u(`api/generations/${genId}/cancel-queue`)).then((r) => j<{ ok: true }>(r)),
   genRate: (genId: string, body: { rating: 1 | -1; artifacts: string[]; notes: string }) =>
     post(u(`api/generations/${genId}/rating`), body).then((r) => j<{ ok: true }>(r)),
+
+  // ── Reality Finish: адаптивный camera/UGC-финиш готового рендера ─────────
+  finishPreview: (genId: string, body: { mode: FinishMode; intensity: number }) =>
+    post(u(`api/generations/${genId}/finish/preview`), body).then((r) => j<FinishPreviewInfo>(r)),
+  finishApply: (genId: string, body: { mode: FinishMode; intensity: number }) =>
+    post(u(`api/generations/${genId}/finish`), body).then((r) => j<{ ok: true }>(r)),
+  finishRemove: (genId: string) =>
+    fetch(u(`api/generations/${genId}/finish`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
+      j<{ ok: true }>(r),
+    ),
   pricing: () => fetch(u('api/pricing')).then((r) => j<PricingInfo>(r)),
   usageSummary: () => fetch(u('api/usage/summary')).then((r) => j<UsageSummary>(r)),
 
-  mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src' | 'start' | 'renders', file: string) =>
+  mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src' | 'start' | 'renders' | 'finish', file: string) =>
     u(`api/projects/${id}/media/${sub}/${encodeURIComponent(file)}`),
 };

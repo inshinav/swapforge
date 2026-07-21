@@ -41,6 +41,18 @@ import {
   retryGeneration,
   startRender,
 } from './engine/render';
+import {
+  FINISH_MODES,
+  FinishGateError,
+  activeFinishCountForUser,
+  buildFinishPreview,
+  finishBusy,
+  previewCached,
+  previewInflight,
+  projectHasActiveFinish,
+  removeFinish,
+  startFinishApply,
+} from './engine/finish';
 import { LIMIT_MESSAGE, consumeDailyLimit } from './limits';
 import { renderLegalPage } from './legal';
 import { nextStageOf, parseFlags, snapshotProject } from './engine/orchestrator';
@@ -50,7 +62,7 @@ import { buildActionEstimate, buildEstimate, getBalanceCached, pricingDates } fr
 import { monthSummary } from './usage';
 import { toFull, toSummary, type DbProject } from './rows';
 import { ARTIFACT_TYPES, type ArtifactType } from '../../shared/taxonomy';
-import type { HealthInfo, PricingInfo } from '../../shared/api-types';
+import type { FinishMode, HealthInfo, PricingInfo } from '../../shared/api-types';
 import type { Analysis } from '../../shared/analysis';
 import { referenceAuditMessage, referenceAuditPause } from './engine/reference-audit';
 import { MAX_PROJECT_REFS, ReferenceLimitError, loadReferenceManifest } from './engine/reference-manifest';
@@ -144,6 +156,8 @@ interface OwnedGen {
   version: number;
   feedback_id: string | null;
   status: string;
+  file: string | null;
+  render_purged: number;
 }
 
 /** Генерация через JOIN к владельцу проекта — genId-роуты не обходят тенантность. */
@@ -151,7 +165,7 @@ function getOwnedGeneration(req: FastifyRequest, genId: string): OwnedGen | unde
   if (!req.user) return undefined;
   return getDb()
     .prepare(
-      `SELECT g.id, g.project_id, g.version, g.feedback_id, g.status
+      `SELECT g.id, g.project_id, g.version, g.feedback_id, g.status, g.file, g.render_purged
          FROM generations g JOIN projects p ON p.id = g.project_id
         WHERE g.id = ? AND p.user_id = ?`,
     )
@@ -458,6 +472,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (BUSY.has(p.status) || isQueued(id)) return bad(reply, 409, 'Дождись окончания текущей задачи');
     if (projectHasActiveGeneration(id)) {
       return bad(reply, 409, 'Идёт рендер этого проекта — дождись окончания');
+    }
+    if (projectHasActiveFinish(id)) {
+      return bad(reply, 409, 'Идёт обработка ролика (Reality Finish) — дождись окончания');
     }
     // queued-задачи проекта отменяются каскадом, резерв возвращается ДО удаления строк
     cancelQueuedForProject(id);
@@ -834,6 +851,98 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       if (e instanceof RenderGateError) return bad(reply, e.httpStatus, e.message);
       return bad(reply, 502, e instanceof Error ? e.message : String(e));
     }
+  });
+
+  // ── Reality Finish: адаптивный camera/UGC-финиш готового рендера ─────────
+
+  /** Общие гейты finish-роутов: только готовый, не счищенный ротацией рендер. */
+  function finishGate(reply: FastifyReply, gen: OwnedGen): FastifyReply | null {
+    if (gen.status !== 'done' || !gen.file) {
+      return bad(reply, 409, 'Reality Finish доступен только для готового ролика');
+    }
+    if (gen.render_purged === 1) {
+      return bad(reply, 409, 'Файл рендера счищен ротацией — обработать нечего');
+    }
+    return null;
+  }
+
+  function parseFinishBody(body: unknown): { mode: FinishMode; intensity: number } | null {
+    const b = (body ?? {}) as { mode?: unknown; intensity?: unknown };
+    if (!FINISH_MODES.includes(b.mode as FinishMode)) return null;
+    const raw = typeof b.intensity === 'number' ? b.intensity : 0.7;
+    if (!Number.isFinite(raw) || raw <= 0 || raw > 1) return null;
+    return { mode: b.mode as FinishMode, intensity: raw };
+  }
+
+  app.post('/api/generations/:genId/finish/preview', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { genId } = req.params as { genId: string };
+    const gen = getOwnedGeneration(req, genId);
+    if (!gen) return bad(reply, 404, 'Генерация не найдена');
+    const gate = finishGate(reply, gen);
+    if (gate) return gate;
+    const parsed = parseFinishBody(req.body);
+    if (!parsed) return bad(reply, 400, 'Укажи режим (natural/phone/camera) и интенсивность 0.1–1');
+    // Кэш-хиты и присоединение к уже строящемуся превью бесплатны;
+    // каждая пара НОВЫХ превью-энкодов — под дневным капом
+    if (
+      req.user!.role !== 'owner' &&
+      !previewCached(gen.project_id, genId, parsed.mode, parsed.intensity) &&
+      !previewInflight(genId, parsed.mode, parsed.intensity)
+    ) {
+      const lim = consumeDailyLimit(req.user!.id, 'finish_preview', config.limitFinishPreviewPerDay);
+      if (!lim.allowed) return bad(reply, 429, `${LIMIT_MESSAGE} (превью обработки сегодня: ${lim.count})`);
+    }
+    try {
+      return await buildFinishPreview(gen.project_id, genId, gen.file!, parsed.mode, parsed.intensity);
+    } catch (e) {
+      if (e instanceof FinishGateError) return bad(reply, e.httpStatus, e.message);
+      return bad(reply, 502, `Превью не собралось: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  app.post('/api/generations/:genId/finish', async (req, reply) => {
+    if (crossSite(req)) return bad(reply, 403, 'Кросс-сайтовый запрос отклонён');
+    const { genId } = req.params as { genId: string };
+    const gen = getOwnedGeneration(req, genId);
+    if (!gen) return bad(reply, 404, 'Генерация не найдена');
+    const gate = finishGate(reply, gen);
+    if (gate) return gate;
+    const parsed = parseFinishBody(req.body);
+    if (!parsed) return bad(reply, 400, 'Укажи режим (natural/phone/camera) и интенсивность 0.1–1');
+    if (finishBusy(genId)) return bad(reply, 409, 'Обработка этого ролика уже идёт — дождись');
+    if (req.user!.role !== 'owner') {
+      // Очередь обработок общая на всех — один пользователь не должен занимать её часами
+      if (activeFinishCountForUser(req.user!.id) >= config.userFinishConcurrent) {
+        return bad(
+          reply,
+          409,
+          `Уже обрабатываются ${config.userFinishConcurrent} твоих ролика — дождись их завершения`,
+        );
+      }
+      const lim = consumeDailyLimit(req.user!.id, 'finish', config.limitFinishPerDay);
+      if (!lim.allowed) return bad(reply, 429, `${LIMIT_MESSAGE} (обработок сегодня: ${lim.count})`);
+    }
+    try {
+      startFinishApply(gen.project_id, genId, gen.file!, parsed.mode, parsed.intensity);
+    } catch (e) {
+      if (e instanceof FinishGateError) return bad(reply, e.httpStatus, e.message);
+      throw e;
+    }
+    return { ok: true };
+  });
+
+  app.delete('/api/generations/:genId/finish', async (req, reply) => {
+    const { genId } = req.params as { genId: string };
+    const gen = getOwnedGeneration(req, genId);
+    if (!gen) return bad(reply, 404, 'Генерация не найдена');
+    try {
+      removeFinish(gen.project_id, genId);
+    } catch (e) {
+      if (e instanceof FinishGateError) return bad(reply, e.httpStatus, e.message);
+      throw e;
+    }
+    return { ok: true };
   });
 
   app.post('/api/generations/:genId/rating', async (req, reply) => {
@@ -1240,7 +1349,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const p = getOwnedProject(req, id);
     if (!p) return bad(reply, 404, 'Проект не найден');
     let full: string | null = null;
-    if (sub === 'frames' || sub === 'refs' || sub === 'start' || sub === 'renders') {
+    if (sub === 'frames' || sub === 'refs' || sub === 'start' || sub === 'renders' || sub === 'finish') {
       full = safeMediaPath(id, sub, file);
     } else if (sub === 'src' && p.video_file && file === p.video_file) {
       full = safeMediaPath(id, '.', file);

@@ -13,7 +13,14 @@ declare global {
  * Вход через Telegram Login Widget (режим data-onauth: payload уходит JS-ом на наш
  * POST — редирект-режим не работает под basic auth из-за user:pass@ в URL).
  */
-export default function Login({ onAuthed }: { onAuthed: () => void }) {
+export default function Login({
+  onAuthed,
+  onOpenGuide,
+}: {
+  onAuthed: () => void;
+  /** «Как это работает» до входа — страница-гайд открыта анониму. */
+  onOpenGuide?: () => void;
+}) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [healthError, setHealthError] = useState(false);
   const [err, setErr] = useState('');
@@ -86,6 +93,16 @@ export default function Login({ onAuthed }: { onAuthed: () => void }) {
             </h1>
             <p className="text-mut text-sm mt-2">Замени персонажа в видео за несколько шагов.</p>
           </div>
+
+          {onOpenGuide && (
+            <button
+              type="button"
+              onClick={onOpenGuide}
+              className="w-full min-h-11 rounded-xl border border-line2 bg-panel2 px-4 py-2.5 text-sm font-semibold hover:border-lime/50 hover:text-lime"
+            >
+              📖 Как работает сервис — цены, шаги, вопросы
+            </button>
+          )}
 
           {health === null && !healthError && <Spinner />}
           {healthError && (

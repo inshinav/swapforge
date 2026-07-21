@@ -1,11 +1,17 @@
-// Результат свапа: плеер готового ролика, фактическая стоимость, 👍/👎 с таксономией
-// артефактов (кормит few-shot) и история всех прогонов проекта.
-import { useState } from 'react';
-import type { GenerationRow, ProjectFull } from '@shared/api-types';
+// Результат свапа: плеер готового ролика, фактическая стоимость, Reality Finish
+// (адаптивный camera/UGC-финиш), 👍/👎 с таксономией артефактов (кормит few-shot)
+// и история всех прогонов проекта.
+import { useRef, useState } from 'react';
+import type {
+  FinishMode,
+  FinishPreviewInfo,
+  GenerationRow,
+  ProjectFull,
+} from '@shared/api-types';
 import { ARTIFACTS, ARTIFACT_TYPES, type ArtifactType } from '@shared/taxonomy';
 import { api } from '../api';
 import { confirmPaidAction } from '../paid-actions';
-import { Button, Card, ErrorNote, SectionTitle, Tag } from '../ui';
+import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
 import { GEN_ACTIVE } from './SwapPanel';
 
 const COST_SOURCE_RU: Record<string, string> = {
@@ -77,7 +83,7 @@ export function RenderPanel({ proj, reload }: { proj: ProjectFull; reload: () =>
                 download={latest.file}
                 className="w-56 min-h-11 inline-flex items-center justify-center rounded-lg bg-lime px-4 py-2 text-sm font-bold text-black hover:bg-lime-dim"
               >
-                Скачать ролик
+                {latest.finish?.status === 'done' ? 'Скачать оригинал' : 'Скачать ролик'}
               </a>
             </div>
           ) : (
@@ -91,6 +97,12 @@ export function RenderPanel({ proj, reload }: { proj: ProjectFull; reload: () =>
           <RatingBlock proj={proj} g={latest} reload={reload} />
         </div>
       </div>
+
+      {latest.file && (
+        <div className="px-5 pb-5">
+          <RealityFinish key={latest.id} proj={proj} g={latest} reload={reload} />
+        </div>
+      )}
 
       {history.length > 0 && (
         <div className="px-5 pb-5">
@@ -138,6 +150,260 @@ function GenMeta({ g }: { g: GenerationRow }) {
       <Tag>{fmtDate(g.finishedAt ?? g.createdAt)}</Tag>
       {g.notes.includes('NSFW') && <Tag tone="warn">⚠ NSFW-флаг WaveSpeed</Tag>}
     </div>
+  );
+}
+
+// ── Reality Finish ──────────────────────────────────────────────────────────
+
+const FINISH_MODE_CARDS: Array<{ id: FinishMode; title: string; hint: string }> = [
+  { id: 'natural', title: 'Natural', hint: 'лёгкое зерно и естественная резкость — максимум реализма' },
+  { id: 'phone', title: 'Phone UGC', hint: 'сенсорный шум, лёгкая компрессия и резкость смартфона' },
+  { id: 'camera', title: 'Creator Camera', hint: 'мягкие света, плотный цвет и киношное зерно' },
+];
+
+const FINISH_MODE_RU: Record<FinishMode, string> = {
+  natural: 'Natural',
+  phone: 'Phone UGC',
+  camera: 'Creator Camera',
+};
+
+/**
+ * Финальный этап после рендера: примерка camera/UGC-финиша на коротком фрагменте
+ * (Before/After), интенсивность и применение ко всему ролику. Оригинал остаётся
+ * доступен всегда — обработка пишется отдельным файлом.
+ */
+function RealityFinish({
+  proj,
+  g,
+  reload,
+}: {
+  proj: ProjectFull;
+  g: GenerationRow;
+  reload: () => void;
+}) {
+  const finish = g.finish;
+  const [mode, setMode] = useState<FinishMode | null>(finish?.mode ?? null);
+  const [intensity, setIntensity] = useState(finish?.intensity ?? 0.7);
+  const [preview, setPreview] = useState<FinishPreviewInfo | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showAfter, setShowAfter] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const seq = useRef(0);
+  const processing = finish?.status === 'processing';
+
+  const loadPreview = async (m: FinishMode, i: number) => {
+    const my = ++seq.current;
+    setLoading(true);
+    setErr(null);
+    try {
+      const p = await api.finishPreview(g.id, { mode: m, intensity: i });
+      if (seq.current !== my) return;
+      setPreview(p);
+      setShowAfter(true);
+    } catch (e) {
+      if (seq.current === my) setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (seq.current === my) setLoading(false);
+    }
+  };
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+      reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-line bg-panel2 p-4 space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-bold">📷 Reality Finish</span>
+        <span className="text-xs text-mut">
+          сделать ролик менее «ИИ-гладким» — как съёмка на телефон или реальную камеру
+        </span>
+        {finish?.status === 'done' && <Tag tone="ok">применён: {FINISH_MODE_RU[finish.mode]}</Tag>}
+      </div>
+
+      {processing && (
+        <div className="flex items-center gap-2 text-sm text-mut">
+          <Spinner size={14} />
+          обрабатываю весь ролик ({FINISH_MODE_RU[finish!.mode]},{' '}
+          {Math.round((finish!.intensity ?? 1) * 100)}%) — обычно до пары минут, страницу можно закрыть
+        </div>
+      )}
+
+      {finish?.status === 'failed' && finish.error && (
+        <ErrorNote text={`Обработка не удалась: ${finish.error}`} />
+      )}
+
+      {finish?.status === 'done' && finish.file && (
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={api.mediaUrl(proj.id, 'renders', finish.file)}
+            download={finish.file}
+            className="min-h-11 inline-flex items-center justify-center rounded-lg bg-lime px-4 py-2 text-sm font-bold text-black hover:bg-lime-dim"
+          >
+            Скачать с обработкой
+          </a>
+          <span className="text-xs text-dim">
+            {FINISH_MODE_RU[finish.mode]} · {Math.round((finish.intensity ?? 1) * 100)}% · оригинал
+            выше остаётся без изменений
+          </span>
+          <Button
+            kind="ghost"
+            busy={busy}
+            className="!py-1 !px-2.5 text-xs"
+            onClick={() => void act(() => api.finishRemove(g.id))}
+          >
+            Убрать обработку
+          </Button>
+        </div>
+      )}
+
+      {!processing && (
+        <>
+          <div className="grid sm:grid-cols-3 gap-2">
+            {FINISH_MODE_CARDS.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                disabled={loading || busy}
+                onClick={() => {
+                  setMode(m.id);
+                  void loadPreview(m.id, intensity);
+                }}
+                className={`text-left rounded-lg border px-3 py-2.5 transition-colors disabled:opacity-60 ${
+                  mode === m.id ? 'border-lime/60 bg-lime/5' : 'border-line hover:border-line2'
+                }`}
+              >
+                <span className="text-sm font-semibold block">{m.title}</span>
+                <span className="text-xs text-mut">{m.hint}</span>
+              </button>
+            ))}
+          </div>
+
+          {mode && (
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row gap-4">
+                <div className="shrink-0 space-y-2">
+                  <div className="relative w-44 aspect-[9/16] rounded-lg border border-line bg-black overflow-hidden">
+                    {loading && (
+                      <div className="absolute inset-0 flex items-center justify-center z-10 bg-black/40">
+                        <Spinner size={18} />
+                      </div>
+                    )}
+                    {preview && (
+                      <>
+                        <video
+                          key={`b-${preview.before}`}
+                          src={api.mediaUrl(proj.id, 'finish', preview.before)}
+                          muted
+                          loop
+                          autoPlay
+                          playsInline
+                          className={`absolute inset-0 w-full h-full object-contain ${showAfter ? 'invisible' : ''}`}
+                        />
+                        <video
+                          key={`a-${preview.after}`}
+                          src={api.mediaUrl(proj.id, 'finish', preview.after)}
+                          muted
+                          loop
+                          autoPlay
+                          playsInline
+                          className={`absolute inset-0 w-full h-full object-contain ${showAfter ? '' : 'invisible'}`}
+                        />
+                      </>
+                    )}
+                    {!preview && !loading && (
+                      <div className="absolute inset-0 flex items-center justify-center text-xs text-dim p-3 text-center">
+                        выбери режим — соберу превью фрагмента
+                      </div>
+                    )}
+                  </div>
+                  {preview && (
+                    <div className="flex w-44 rounded-lg border border-line2 bg-panel p-0.5 gap-0.5">
+                      <button
+                        type="button"
+                        aria-pressed={!showAfter}
+                        onClick={() => setShowAfter(false)}
+                        className={`min-h-9 flex-1 rounded-md text-xs font-bold transition-colors ${
+                          !showAfter ? 'bg-lime text-black' : 'text-mut hover:text-ink'
+                        }`}
+                      >
+                        До
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={showAfter}
+                        onClick={() => setShowAfter(true)}
+                        className={`min-h-9 flex-1 rounded-md text-xs font-bold transition-colors ${
+                          showAfter ? 'bg-lime text-black' : 'text-mut hover:text-ink'
+                        }`}
+                      >
+                        После
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0 space-y-3">
+                  <label className="block text-sm">
+                    <span className="font-semibold">Интенсивность: {Math.round(intensity * 100)}%</span>
+                    <input
+                      type="range"
+                      min={10}
+                      max={100}
+                      step={10}
+                      value={Math.round(intensity * 100)}
+                      disabled={loading || busy}
+                      onChange={(e) => setIntensity(Number(e.target.value) / 100)}
+                      onPointerUp={() => {
+                        if (mode) void loadPreview(mode, intensity);
+                      }}
+                      onKeyUp={() => {
+                        if (mode) void loadPreview(mode, intensity);
+                      }}
+                      className="w-full mt-2 accent-[#C6F24E]"
+                    />
+                  </label>
+                  {preview && preview.notes.length > 0 && (
+                    <div className="text-xs text-mut">
+                      <span className="text-dim">Подстроено под ролик:</span> {preview.notes.join(' · ')}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      kind="primary"
+                      busy={busy}
+                      disabled={loading || !preview}
+                      onClick={() => {
+                        if (mode) void act(() => api.finishApply(g.id, { mode, intensity }));
+                      }}
+                    >
+                      ✓ Применить ко всему ролику
+                    </Button>
+                    <span className="text-xs text-dim">бесплатно — входит в стоимость рендера</span>
+                  </div>
+                  <div className="text-xs text-dim">
+                    Движение, длительность, звук, разрешение и кадр не меняются — только внешний вид.
+                    Оригинал всегда можно скачать без обработки.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {err && <ErrorNote text={err} />}
+    </section>
   );
 }
 

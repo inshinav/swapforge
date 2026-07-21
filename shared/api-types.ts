@@ -91,6 +91,61 @@ export interface FlowFlagsDto {
   generateAudio: boolean;
 }
 
+// ── Reality Finish: адаптивный camera/UGC-финиш готового рендера ────────────
+
+export type FinishMode = 'natural' | 'phone' | 'camera';
+
+/**
+ * Нормализованные (0..1) замеры готового рендера — база адаптации фильтров.
+ * Все значения — доли/пропорции, а не абсолютные величины кодека.
+ */
+export interface FinishStats {
+  /** Средняя яркость кадра (YAVG/255). */
+  brightness: number;
+  /** Разброс 10–90 перцентилей яркости — прокси контраста. */
+  contrast: number;
+  /** Средняя насыщенность хромы. */
+  saturation: number;
+  /** Энергия границ (Собель) — прокси резкости. */
+  sharpness: number;
+  /** Высокочастотная текстура/шум (residual после лёгкого блюра). */
+  noise: number;
+  /** Доля пикселей у верхней границы диапазона (пережжённые света). */
+  clippedHighlights: number;
+  /** Доля пикселей у нижней границы (проваленные тени). */
+  crushedShadows: number;
+  /** Доля пикселей в диапазоне тонов кожи (YCbCr-маска). */
+  skin: number;
+  /** Сколько кадров легло в замер. */
+  sampledFrames: number;
+}
+
+export type FinishStatus = 'processing' | 'done' | 'failed';
+
+export interface GenerationFinishInfo {
+  status: FinishStatus;
+  mode: FinishMode;
+  /** 0.1–1.0 (шаг 0.1) — множитель всех дельт обработки. */
+  intensity: number;
+  /** Имя обработанного файла в renders (только при status='done'). */
+  file: string | null;
+  error: string | null;
+  finishedAt: string | null;
+}
+
+export interface FinishPreviewInfo {
+  mode: FinishMode;
+  intensity: number;
+  /** Имена файлов в медиа-каталоге 'finish' (api.mediaUrl(projectId, 'finish', file)). */
+  before: string;
+  after: string;
+  stats: FinishStats;
+  /** Какие адаптации применены под замер этого ролика (RU, для UI). */
+  notes: string[];
+  fragmentStartSec: number;
+  fragmentDurationSec: number;
+}
+
 export interface GenerationRow {
   id: string;
   version: number;
@@ -120,6 +175,8 @@ export interface GenerationRow {
   /** Для длинного ролика: сколько частей подготовлено из общего числа. */
   segmentCount?: number;
   segmentDone?: number;
+  /** Reality Finish: состояние адаптивной пост-обработки (null — не запускалась). */
+  finish: GenerationFinishInfo | null;
 }
 
 export interface PresetInfo {
@@ -391,6 +448,35 @@ export interface AuthUser {
   firstName: string;
   photoUrl: string;
   role: 'user' | 'owner';
+  /** Тест-клиент владельца: настоящий metered-юзер для проверки пути клиента. */
+  sandbox: boolean;
+}
+
+// ── Проверка оплаты владельцем ──────────────────────────────────────────────
+
+export interface BillingProviderHealth {
+  id: BillingProviderId;
+  needsEmail: boolean;
+  /** Только у cryptopay: тестовая сеть (клиентам способ скрыт). */
+  testnet?: boolean;
+  /** Виден ли способ обычным пользователям прямо сейчас. */
+  availableToUsers: boolean;
+  check: { ok: boolean; detail: string };
+}
+
+export interface BillingHealthInfo {
+  generatedAt: string;
+  providers: BillingProviderHealth[];
+  /** Счётчики payment_intents по статусам. */
+  intents: Record<string, number>;
+  events: Array<{
+    provider: string;
+    source: string;
+    verified: boolean;
+    outcome: string;
+    reason: string | null;
+    createdAt: string;
+  }>;
 }
 
 export interface MeInfo {

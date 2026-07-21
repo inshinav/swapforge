@@ -7,6 +7,9 @@ import { parseGenerateAudio, queuePositionOf } from './engine/render';
 import { projectOpenaiUsd, projectOpenaiUsdSince } from './usage';
 import type {
   FeedbackRow,
+  FinishMode,
+  FinishStatus,
+  GenerationFinishInfo,
   GenerationRow,
   GenerationStatus,
   ProjectCosts,
@@ -123,6 +126,27 @@ interface DbGeneration {
   finished_at: string | null;
   segment_count?: number;
   segment_done?: number;
+  finish_json?: string | null;
+  finish_file?: string | null;
+}
+
+/** Reality Finish DTO из finish_json + finish_file; кривой/пустой JSON = «не запускалась». */
+function finishOf(g: DbGeneration): GenerationFinishInfo | null {
+  const parsed = parse<{ job?: Record<string, unknown> }>(g.finish_json ?? null);
+  const job = parsed?.job;
+  if (!job) return null;
+  const status = job.status as FinishStatus;
+  const mode = job.mode as FinishMode;
+  if (!['processing', 'done', 'failed'].includes(status)) return null;
+  if (!['natural', 'phone', 'camera'].includes(mode)) return null;
+  return {
+    status,
+    mode,
+    intensity: typeof job.intensity === 'number' ? job.intensity : 1,
+    file: status === 'done' ? g.finish_file ?? null : null,
+    error: typeof job.error === 'string' ? job.error : null,
+    finishedAt: typeof job.finishedAt === 'string' ? job.finishedAt : null,
+  };
 }
 
 function toGeneration(g: DbGeneration): GenerationRow {
@@ -151,6 +175,7 @@ function toGeneration(g: DbGeneration): GenerationRow {
     queuePosition: g.status === 'queued' ? queuePositionOf(g.id) : null,
     segmentCount: g.segment_count ?? 1,
     segmentDone: g.segment_done ?? 0,
+    finish: finishOf(g),
   };
 }
 

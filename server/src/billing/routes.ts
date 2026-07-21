@@ -13,9 +13,11 @@ import { getProvider, readyProviders, validateCheckoutUrl } from './provider';
 import {
   createPaymentIntent,
   listPaymentIntents,
+  listRecentPaymentEvents,
   listRecoverablePaymentIntents,
   markPaymentIntentCreationUncertain,
   markPaymentIntentPending,
+  paymentIntentStats,
   processPaidEvent,
   reconcilePaymentIntent,
   recordPaymentEventReceipt,
@@ -100,7 +102,7 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       minTopupUsd: config.minTopupUsd,
       maxTopupUsd: config.maxTopupUsd,
       providers: readyProviders()
-        .filter((p) => p.id !== 'cryptopay' || cryptoPayAvailableToRole(billingRole))
+        .filter((p) => p.id !== 'cryptopay' || cryptoPayAvailableToRole(billingRole, undefined, req.user?.sandbox))
         .map((p) => ({
           id: p.id,
           needsEmail: p.needsEmail,
@@ -117,7 +119,7 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     const body = (req.body ?? {}) as { amountUsd?: number; provider?: string; email?: string };
     const provider = getProvider(body.provider ?? '');
     if (!provider || !provider.ready) return bad(reply, 400, 'Способ оплаты недоступен');
-    if (provider.id === 'cryptopay' && !cryptoPayAvailableToRole(req.user?.role)) {
+    if (provider.id === 'cryptopay' && !cryptoPayAvailableToRole(req.user?.role, undefined, req.user?.sandbox)) {
       return bad(reply, 400, 'Способ оплаты недоступен');
     }
     const amountCents = topupCents(body.amountUsd);
@@ -152,6 +154,12 @@ export function registerBillingRoutes(app: FastifyInstance): void {
     } catch (e) {
       markPaymentIntentCreationUncertain(intent.id, e);
       req.log.error({ err: e instanceof Error ? e.message : e }, 'checkout не удался');
+      // Lava валидирует email строже нашего RE («Incorrect email to purchase») —
+      // юзер должен услышать причину, а не безликое «попробуй позже»
+      const message = e instanceof Error ? e.message : String(e);
+      if (/email/i.test(message)) {
+        return bad(reply, 400, 'Платёжная система не приняла email — проверь адрес и попробуй ещё раз');
+      }
       return bad(reply, 502, 'Не удалось создать счёт — попробуй позже');
     }
   });
@@ -221,6 +229,27 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       ok: true,
       replayed: result === 'replay',
       user: manualUser(user),
+    };
+  });
+
+  // Живая проверка оплаты владельцем: пинг API каждого включённого провайдера
+  // (без секретов), статус вебхук-конфига, счётчики интентов и последние события.
+  app.get('/api/admin/billing/health', { preHandler: requireOwner }, async () => {
+    const providers = await Promise.all(
+      readyProviders().map(async (p) => ({
+        id: p.id,
+        needsEmail: p.needsEmail,
+        ...(p.id === 'cryptopay'
+          ? { testnet: config.cryptoPayTestnet, availableToUsers: cryptoPayAvailableToRole('user') }
+          : { availableToUsers: true }),
+        check: await p.healthCheck(),
+      })),
+    );
+    return {
+      generatedAt: new Date().toISOString(),
+      providers,
+      intents: paymentIntentStats(),
+      events: listRecentPaymentEvents(15),
     };
   });
 

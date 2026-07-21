@@ -95,6 +95,7 @@ export default function App() {
   });
 
   const isOwner = session !== null && session !== 'anon' && session.user.role === 'owner';
+  const isSandbox = session !== null && session !== 'anon' && session.user.sandbox;
   const showOwnerTools = isOwner && ownerViewMode === 'admin';
   const showUserExperience = !isOwner || ownerViewMode === 'user';
   const previewAsUser = isOwner && ownerViewMode === 'user';
@@ -280,6 +281,24 @@ export default function App() {
     });
   }, []);
 
+  // Тест-клиент: сессия реально меняется на другого (metered) юзера — проект/баланс/
+  // журней владельца ему не принадлежат, локальные ссылки сбрасываем.
+  const [switchErr, setSwitchErr] = useState<string | null>(null);
+  const switchTestClient = useCallback((enter: boolean) => {
+    setSwitchErr(null);
+    void (enter ? api.testClient() : api.testClientExit())
+      .then(() => {
+        localStorage.removeItem('sf-project');
+        setProjectId(null);
+        setJourneyData(null);
+        setBalance(null);
+        setSession(null); // спиннер до свежего /api/me
+        loadSession();
+        go('swap');
+      })
+      .catch((e) => setSwitchErr(e instanceof Error ? e.message : String(e)));
+  }, [go, loadSession]);
+
   if (session === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -289,7 +308,28 @@ export default function App() {
   }
 
   if (session === 'anon') {
-    return <Login onAuthed={loadSession} />;
+    // Гайд открыт и до входа: человек может ознакомиться с сервисом по прямой ссылке #guide
+    if (view === 'guide') {
+      return (
+        <div className="min-h-screen">
+          <header className="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-bg/90 backdrop-blur z-20">
+            <Logo onClick={() => go('swap')} />
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={() => go('swap')}
+              className="min-h-11 rounded-xl bg-lime px-4 text-sm font-bold text-black hover:bg-lime-dim"
+            >
+              Войти через Telegram
+            </button>
+          </header>
+          <main className="w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <Guide onLoginCta={() => go('swap')} />
+          </main>
+        </div>
+      );
+    }
+    return <Login onAuthed={loadSession} onOpenGuide={() => go('guide')} />;
   }
 
   const u = session.user;
@@ -355,10 +395,32 @@ export default function App() {
           canSwitchMode={isOwner}
           ownerMode={ownerViewMode}
           onOwnerModeChange={changeOwnerViewMode}
+          onTestClient={isOwner ? () => switchTestClient(true) : undefined}
           onGuide={() => go('guide')}
           onLogout={logout}
         />
       </header>
+
+      {isSandbox && (
+        <div className="border-b border-warn/30 bg-warn/10 px-4 sm:px-6 py-2 flex items-center gap-3">
+          <span className="text-sm font-bold shrink-0">🧪 Тест-клиент</span>
+          <span className="text-xs text-mut hidden sm:inline min-w-0 truncate">
+            Ты видишь сервис как обычный клиент: реальные цены, резервы и оплата. Баланс и проекты — отдельные.
+          </span>
+          <button
+            type="button"
+            onClick={() => switchTestClient(false)}
+            className="ml-auto shrink-0 min-h-9 rounded-lg border border-line2 bg-panel2 px-3 text-xs font-bold hover:border-lime/50 hover:text-lime"
+          >
+            ← Вернуться к владельцу
+          </button>
+        </div>
+      )}
+      {switchErr && (
+        <div className="px-4 sm:px-6 py-2 text-xs text-danger border-b border-danger/30 bg-danger/5">
+          Переключение не удалось: {switchErr}
+        </div>
+      )}
 
       <main className={`flex-1 w-full min-w-0 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 ${journeyActive ? 'pb-6' : 'pb-24 md:pb-6'}`}>
         {journeyActive && journeyStatus && activeView !== 'start' && (
@@ -407,6 +469,7 @@ export default function App() {
             userId={userId!}
             neededUsd={billingNeed}
             previewAsUser={previewAsUser}
+            onTestClient={isOwner ? () => switchTestClient(true) : undefined}
             onBackToSwap={() => go(journeyActive ? 'start' : 'swap')}
             onBalanceChange={(next) => {
               setBalance(next);
@@ -521,6 +584,7 @@ function UserChip({
   canSwitchMode,
   ownerMode,
   onOwnerModeChange,
+  onTestClient,
   onGuide,
   onLogout,
 }: {
@@ -530,6 +594,8 @@ function UserChip({
   canSwitchMode: boolean;
   ownerMode: OwnerViewMode;
   onOwnerModeChange: (mode: OwnerViewMode) => void;
+  /** Владелец: переключиться в настоящего metered тест-клиента. */
+  onTestClient?: () => void;
   onGuide: () => void;
   onLogout: () => void;
 }) {
@@ -581,6 +647,19 @@ function UserChip({
               className="flex w-full"
             />
           </div>
+        )}
+        {onTestClient && (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onTestClient();
+            }}
+            className="w-full min-h-11 rounded-lg px-3 text-left text-sm text-mut hover:bg-panel2 hover:text-ink"
+            title="Отдельный клиентский аккаунт с реальными ценами и оплатой — проверка пути клиента"
+          >
+            🧪 Войти тест-клиентом
+          </button>
         )}
         <button
           type="button"

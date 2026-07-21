@@ -341,9 +341,16 @@ export function applySchema(d: DatabaseSync): void {
   ensureColumn(d, 'generations', 'segment_count', `segment_count INTEGER NOT NULL DEFAULT 1`);
   ensureColumn(d, 'generations', 'segment_done', `segment_done INTEGER NOT NULL DEFAULT 0`);
   ensureColumn(d, 'generations', 'validation_json', `validation_json TEXT`);
+  // Reality Finish: замер ролика + состояние адаптивной пост-обработки; имя
+  // обработанного файла отдельной колонкой — уборки/ротация ищут его SQL-ом.
+  ensureColumn(d, 'generations', 'finish_json', `finish_json TEXT`);
+  ensureColumn(d, 'generations', 'finish_file', `finish_file TEXT`);
   ensureColumn(d, 'usage_events', 'user_id', `user_id TEXT`);
   // email покупателя (Lava.top требует в инвойсе; спрашиваем при первой оплате картой)
   ensureColumn(d, 'users', 'email', `email TEXT`);
+  // Тест-клиент владельца: обычный metered-юзер, привязанный к owner (переключение
+  // сессии туда-обратно). Не NULL только у синтетических аккаунтов.
+  ensureColumn(d, 'users', 'sandbox_of', `sandbox_of TEXT`);
   ensureColumn(d, 'credit_holds', 'attempt_id', `attempt_id TEXT`);
   d.exec(`
     CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at);

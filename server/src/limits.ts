@@ -5,7 +5,13 @@
 import { getDb } from './db';
 import { tx } from './billing/credits';
 
-export type DailyLimitKind = 'projects' | 'classify' | 'describe' | 'manual_llm';
+export type DailyLimitKind =
+  | 'projects'
+  | 'classify'
+  | 'describe'
+  | 'manual_llm'
+  | 'finish'
+  | 'finish_preview';
 
 /** 'YYYY-MM-DD' (UTC) — сбрасывается в 00:00 UTC. */
 export function dayKey(nowMs = Date.now()): string {

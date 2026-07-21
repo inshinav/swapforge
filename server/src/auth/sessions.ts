@@ -15,6 +15,8 @@ export interface SessionUser {
   firstName: string;
   photoUrl: string;
   role: 'user' | 'owner';
+  /** Тест-клиент владельца: обычный metered-юзер для проверки пути клиента. */
+  sandbox: boolean;
 }
 
 export function hashToken(token: string): string {
@@ -48,7 +50,7 @@ export function authenticateSession(rawToken: string, nowMs = Date.now()): Sessi
   const row = getDb()
     .prepare(
       `SELECT s.token_hash, s.expires_at, s.last_seen_at, s.created_at,
-              u.id, u.telegram_id, u.tg_username, u.tg_first_name, u.tg_photo_url, u.role, u.status
+              u.id, u.telegram_id, u.tg_username, u.tg_first_name, u.tg_photo_url, u.role, u.status, u.sandbox_of
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = ?`,
     )
@@ -65,6 +67,7 @@ export function authenticateSession(rawToken: string, nowMs = Date.now()): Sessi
         tg_photo_url: string;
         role: string;
         status: string;
+        sandbox_of: string | null;
       }
     | undefined;
   if (!row) return null;
@@ -85,6 +88,7 @@ export function authenticateSession(rawToken: string, nowMs = Date.now()): Sessi
     firstName: row.tg_first_name,
     photoUrl: row.tg_photo_url,
     role: row.role === 'owner' ? 'owner' : 'user',
+    sandbox: !!row.sandbox_of,
   };
 }
 

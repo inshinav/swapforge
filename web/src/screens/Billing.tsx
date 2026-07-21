@@ -77,12 +77,15 @@ export default function Billing({
   userId,
   neededUsd,
   previewAsUser = false,
+  onTestClient,
   onBackToSwap,
   onBalanceChange,
 }: {
   userId: string;
   neededUsd: number | null;
   previewAsUser?: boolean;
+  /** Владелец: пройти оплату по-настоящему из отдельного клиентского аккаунта. */
+  onTestClient?: () => void;
   onBackToSwap: () => void;
   onBalanceChange: (balance: DollarBalanceInfo) => void;
 }) {
@@ -303,6 +306,18 @@ export default function Billing({
             <div>
               <div className="text-4xl font-extrabold tracking-tight">{money(balance.availableUsd)}</div>
               {balance.heldUsd > 0 && <div className="text-xs text-mut mt-1">{money(balance.heldUsd)} зарезервировано</div>}
+            </div>
+          )}
+
+          {previewAsUser && (
+            <div className="rounded-xl border border-warn/35 bg-warn/5 px-4 py-3 text-sm space-y-2">
+              <div>
+                Ты владелец в режиме просмотра: пополнение отсюда уйдёт на баланс владельца и в работе
+                не списывается. Чтобы пройти оплату и списания по-настоящему — включи тест-клиента.
+              </div>
+              {onTestClient && (
+                <Button kind="primary" onClick={onTestClient}>🧪 Войти тест-клиентом</Button>
+              )}
             </div>
           )}
 

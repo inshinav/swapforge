@@ -91,6 +91,12 @@ export const config = {
   limitDescribePerDay: Number(env('LIMIT_DESCRIBE_PER_DAY', '30')),
   /** Общий кап ручных LLM-роутов (analyze/generate/iterate/startframe «под капотом»). */
   limitManualLlmPerDay: Number(env('LIMIT_MANUAL_LLM_PER_DAY', '40')),
+  /** Reality Finish: обработка всего ролика (локальный CPU) — кап запусков в день. */
+  limitFinishPerDay: Number(env('LIMIT_FINISH_PER_DAY', '40')),
+  /** Reality Finish: одновременные обработки одного пользователя (очередь общая). */
+  userFinishConcurrent: Number(env('USER_FINISH_CONCURRENT', '2')),
+  /** Reality Finish: кап НЕкэшированных превью в день (кэш-хиты бесплатны). */
+  limitFinishPreviewPerDay: Number(env('LIMIT_FINISH_PREVIEW_PER_DAY', '120')),
 };
 
 /**

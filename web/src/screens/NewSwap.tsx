@@ -32,8 +32,12 @@ function useProject(id: string | null) {
     void reload();
   }, [id, reload]);
   const status = proj?.status;
-  // рендер живёт в generations: поллим и его, но реже (стадия долгая, удалённая)
-  const genActive = proj?.generations.some((g) => GEN_ACTIVE.includes(g.status)) ?? false;
+  // рендер живёт в generations: поллим и его, но реже (стадия долгая, удалённая);
+  // Reality Finish (локальная пост-обработка) тоже требует поллинга до финала
+  const genActive =
+    proj?.generations.some(
+      (g) => GEN_ACTIVE.includes(g.status) || g.finish?.status === 'processing',
+    ) ?? false;
   useEffect(() => {
     const local = !!status && BUSY.includes(status);
     if (!local && !genActive) return;

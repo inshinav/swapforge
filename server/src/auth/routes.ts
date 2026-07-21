@@ -18,6 +18,7 @@ interface DbUser {
   tg_photo_url: string;
   role: string;
   status: string;
+  sandbox_of?: string | null;
 }
 
 /** Upsert по telegram_id: профиль (ник/имя/фото) освежается на каждом входе. */
@@ -60,6 +61,7 @@ function toAuthUser(u: DbUser): SessionUser {
     firstName: u.tg_first_name,
     photoUrl: u.tg_photo_url,
     role: u.role === 'owner' ? 'owner' : 'user',
+    sandbox: !!u.sandbox_of,
   };
 }
 
@@ -109,6 +111,57 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     });
     if (u.status !== 'active') return reply.code(403).send({ error: 'Аккаунт заблокирован' });
     const { cookies, user } = issueSession(u);
+    reply.header('Set-Cookie', cookies);
+    return { user };
+  });
+
+  // ── Тест-клиент владельца ────────────────────────────────────────────────
+  // Владелец переключается в НАСТОЯЩЕГО metered-юзера (цены/резервы/оплата — как у
+  // клиента) и обратно. Синтетический telegram_id = -ownerTelegramId: отрицательные
+  // id из настоящего Telegram не приходят — коллизий нет. ВАЖНО: сессия тест-клиента
+  // по силе эквивалентна владельческой (из неё есть выход обратно) — храним как owner.
+
+  app.post('/api/auth/test-client', async (req, reply) => {
+    if (req.user?.role !== 'owner') return reply.code(403).send({ error: 'Доступно только владельцу сервиса' });
+    const d = getDb();
+    const syntheticTgId = -Math.abs(req.user.telegramId);
+    let sandbox = d.prepare(`SELECT * FROM users WHERE telegram_id = ?`).get(syntheticTgId) as
+      | DbUser
+      | undefined;
+    if (!sandbox) {
+      const id = randomUUID();
+      d.prepare(
+        `INSERT INTO users (id, telegram_id, tg_username, tg_first_name, role, sandbox_of, last_login_at)
+         VALUES (?, ?, '', 'Тест-клиент', 'user', ?, datetime('now'))`,
+      ).run(id, syntheticTgId, req.user.id);
+      sandbox = d.prepare(`SELECT * FROM users WHERE id = ?`).get(id) as unknown as DbUser;
+    } else if (!sandbox.sandbox_of) {
+      return reply.code(409).send({ error: 'Аккаунт тест-клиента повреждён — обратись к логам' });
+    }
+    if (sandbox.status !== 'active') return reply.code(409).send({ error: 'Тест-клиент заблокирован' });
+    // Текущую owner-сессию гасим: одна кука — одна живая сессия, без «хвостов»
+    const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? '';
+    destroySession(raw);
+    const { cookies, user } = issueSession(sandbox);
+    reply.header('Set-Cookie', cookies);
+    return { user };
+  });
+
+  app.post('/api/auth/test-client/exit', async (req, reply) => {
+    if (!req.user?.sandbox) return reply.code(403).send({ error: 'Ты не в режиме тест-клиента' });
+    const d = getDb();
+    const sandboxRow = d.prepare(`SELECT sandbox_of FROM users WHERE id = ?`).get(req.user.id) as
+      | { sandbox_of: string | null }
+      | undefined;
+    const owner = sandboxRow?.sandbox_of
+      ? (d.prepare(`SELECT * FROM users WHERE id = ?`).get(sandboxRow.sandbox_of) as DbUser | undefined)
+      : undefined;
+    if (!owner || owner.role !== 'owner' || owner.status !== 'active') {
+      return reply.code(409).send({ error: 'Владелец недоступен — войди через Telegram заново' });
+    }
+    const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? '';
+    destroySession(raw);
+    const { cookies, user } = issueSession(owner);
     reply.header('Set-Cookie', cookies);
     return { user };
   });
