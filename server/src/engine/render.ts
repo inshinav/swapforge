@@ -342,6 +342,11 @@ export function startRender(projectId: string, version: number, opts: StartRende
       throw new RenderGateError(409, 'Референсы изменились — обнови проверку, промты и цену');
     }
   }
+  // Старт-кадр обязателен (решение Alex 21.07.2026): без него надписи/логотипы
+  // (особенно на технике) плывут — пиксельный якорь идентичности нужен всегда.
+  if (!latestStartFrame(projectId, version)) {
+    throw new RenderGateError(409, 'Нет стартового кадра этой версии — сгенерируй кадр');
+  }
   if (!config.wavespeedApiKey) {
     throw new RenderGateError(503, 'WAVESPEED_API_KEY не настроен на сервере');
   }
@@ -395,7 +400,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
     if (priorLong) {
       for (const segment of priorLong.segments) {
         if (segment.status === 'failed' || (segment.status === 'submitted' && !segment.outputFile)) {
-          const hasContinuityFrame = segment.index === 0 || !!segment.anchorFile;
+          const hasContinuityFrame = segment.index === 0 ? !!segment.startFile : !!segment.anchorFile;
           segment.status = segment.sourceFile && hasContinuityFrame ? 'prepared' : 'planned';
           delete segment.predictionId;
           delete segment.submittedAt;
@@ -684,8 +689,17 @@ async function runUploadAndSubmit(
     assets.video = { url, at: new Date().toISOString() };
     saveAssets(genId, assets);
   }
-  // Нормальный Video Edit получает исходное видео напрямую. GPT Image start-frame
-  // больше не конкурирует с ним за ракурс/позу; лишние object refs также исключены.
+  // Старт-кадр всегда первым референсом (решение Alex 21.07.2026): in-place edit
+  // первого кадра — пиксельный якорь лица/экипировки/НАДПИСЕЙ (текст на технике без
+  // него плывёт). Движение при этом диктует исходное видео (якорная строка ниже).
+  const startFile = latestStartFrame(projectId, gen.version);
+  if (!startFile) throw new Error('Стартовый кадр исчез — сгенерируй его заново');
+  if (!assets.start) {
+    const url = await ws.uploadBinary(path.join(startDir(projectId), startFile));
+    assets.start = { url, at: new Date().toISOString() };
+    saveAssets(genId, assets);
+  }
+  // Лишние object refs без пары в кадре по-прежнему исключены (contract-фильтр)
   const usableRefs = selectVideoEditRefs(analysis, refs);
   for (const r of usableRefs) {
     if (assets.refs[r.id]) continue;
@@ -717,11 +731,11 @@ async function runUploadAndSubmit(
   const fresh = loadGen(genId);
   if (!fresh || fresh.status !== 'uploading_assets') return;
 
-  const videoPrompt = finalizeVideoEditPrompt(promptRow.text, analysis, refs, parseFlags(p.flags_json));
+  const videoPrompt = `${finalizeVideoEditPrompt(promptRow.text, analysis, refs, parseFlags(p.flags_json))}\n\n${START_FRAME_ANCHOR}`;
   const predictionId = await ws.submitVideoEdit({
     prompt: videoPrompt,
     video: assets.video.url,
-    reference_images: usableRefs.map((r) => assets.refs![r.id]!.url),
+    reference_images: [assets.start.url, ...usableRefs.map((r) => assets.refs![r.id]!.url)],
     aspect_ratio: '9:16',
     resolution: params.resolution,
     generate_audio: params.generate_audio,
@@ -761,7 +775,18 @@ function longFile(projectId: string, genId: string, file: string): string {
   return path.join(longWorkDir(projectId, genId), file);
 }
 
+/**
+ * Серверная якорная строка (добавляется ПОСЛЕ finalize — LLM её не пишет):
+ * первый референс = точный первый кадр редактирования. Пиксельная стабильность
+ * лица/экипировки/надписей (текст на технике без якоря плывёт), движение — из исходника.
+ */
+const START_FRAME_ANCHOR =
+  'The first supplied reference image is the exact first frame of this edit: start on it and keep the swapped identity, outfit, vehicle design and every printed text, logo and number pixel-stable; follow the source video for all motion, camera, timing and interactions.';
+
 function continuationVideoPrompt(base: string, segment: LongSegmentState, count: number): string {
+  if (segment.index === 0) {
+    return `${base}\n\nPart ${segment.index + 1}/${count}: ${START_FRAME_ANCHOR}`;
+  }
   return `${base}\n\nContinuity ${segment.index + 1}/${count}: the first supplied reference is the exact boundary frame from the previous output. Use it only to keep appearance continuous; follow this source segment for all motion, camera, timing and interactions.`;
 }
 
@@ -895,6 +920,11 @@ async function runLongVideo(
       }
     }
 
+    // Старт-кадр обязателен: сегмент 0 стартует с него (пиксельный якорь идентичности
+    // и надписей), сегменты 1+ — с граничного кадра готовой предыдущей части.
+    const originalStart = latestStartFrame(projectId, gen.version);
+    if (!originalStart) throw new LongWsFailure('Стартовый кадр исчез — сгенерируй его заново');
+
     for (const segment of state.segments) {
       if (segment.status === 'done' && segment.outputFile && fs.existsSync(longFile(projectId, genId, segment.outputFile))) {
         continue;
@@ -907,7 +937,9 @@ async function runLongVideo(
         await (hooks.cut ?? cutVideoSegment)(source, longFile(projectId, genId, segment.sourceFile), segment.startSec, segment.endSec);
       }
 
-      if (segment.index > 0 && (!segment.anchorFile || !fs.existsSync(longFile(projectId, genId, segment.anchorFile)))) {
+      if (segment.index === 0) {
+        segment.startFile = originalStart;
+      } else if (!segment.anchorFile || !fs.existsSync(longFile(projectId, genId, segment.anchorFile))) {
         segment.anchorFile = `segment_${number}_anchor.png`;
         const anchor = longFile(projectId, genId, segment.anchorFile);
         const previous = state.segments[segment.index - 1];
@@ -941,20 +973,16 @@ async function runLongVideo(
         // URL сегментных ассетов намеренно обновляются перед каждым новым сабмитом:
         // retry через несколько дней не должен полагаться на истёкший CDN URL.
         segment.videoUrl = await ws.uploadBinary(longFile(projectId, genId, segment.sourceFile));
-        if (segment.index > 0) {
-          segment.startUrl = await ws.uploadBinary(longFile(projectId, genId, segment.anchorFile!));
-        }
+        const continuityFrame = segment.index === 0
+          ? path.join(startDir(projectId), segment.startFile!)
+          : longFile(projectId, genId, segment.anchorFile!);
+        segment.startUrl = await ws.uploadBinary(continuityFrame);
         const fresh = loadGen(genId);
         if (!fresh || !ACTIVE_GEN_STATUSES.includes(fresh.status)) return;
         segment.predictionId = await ws.submitVideoEdit({
-          prompt: segment.index === 0
-            ? videoPrompt
-            : continuationVideoPrompt(videoPrompt, segment, state.segments.length),
+          prompt: continuationVideoPrompt(videoPrompt, segment, state.segments.length),
           video: segment.videoUrl,
-          reference_images: [
-            ...(segment.index > 0 && segment.startUrl ? [segment.startUrl] : []),
-            ...usableRefs.map((r) => assets.refs![r.id]!.url),
-          ],
+          reference_images: [segment.startUrl, ...usableRefs.map((r) => assets.refs![r.id]!.url)],
           aspect_ratio: '9:16',
           resolution: config.seedanceResolution,
           generate_audio: parseGenerateAudio(project.flags_json),

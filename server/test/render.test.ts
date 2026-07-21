@@ -172,18 +172,21 @@ describe('рендер: happy path', () => {
 
     await until(() => genRow(genId)?.status === 'done');
     const g = genRow(genId)!;
-    // Анализ не подтверждает мотоцикл: загружаются только исходник и модель.
-    // Legacy start-frame на диске намеренно игнорируется.
-    expect(uploadLog).toEqual(['source.mp4', 'ref_a.jpg']);
+    // Старт-кадр всегда первым (якорь идентичности/надписей), затем исходник и
+    // подтверждённые рефы (мотоцикл анализом не подтверждён — отфильтрован).
+    expect(uploadLog).toEqual(['source.mp4', 'start_v1_2026-07-16T00-00-00.png', 'ref_a.jpg']);
     const payload = submitLog[0]!;
     expect(String(payload.prompt)).toContain('Replace only');
     expect(String(payload.prompt)).toContain('original live-action realism');
-    expect(String(payload.prompt)).not.toMatch(/start frame|reference image \d/i);
+    // LLM-часть промта нумерацию не пишет; серверная якорная строка добавляется после
+    expect(String(payload.prompt)).toContain('exact first frame of this edit');
+    expect(String(payload.prompt)).toContain('pixel-stable');
     expect(payload.aspect_ratio).toBe('9:16');
     expect(payload.resolution).toBe('720p');
     expect(payload.generate_audio).toBe(false); // дефолт: дорожка исходника (21.07.2026)
-    expect((payload.reference_images as string[])).toHaveLength(1);
-    expect((payload.reference_images as string[])[0]).toContain('ref_a.jpg');
+    expect((payload.reference_images as string[])).toHaveLength(2);
+    expect((payload.reference_images as string[])[0]).toContain('start_v1');
+    expect((payload.reference_images as string[])[1]).toContain('ref_a.jpg');
     expect(g.file).toBe(`gen_${genId}.mp4`);
     expect(fs.existsSync(path.join(rendersDir(pid), `gen_${genId}.mp4`))).toBe(true);
     expect(g.cost_source).toBe('balance_delta');
@@ -266,14 +269,14 @@ describe('рендер: ошибки и ретраи', () => {
     const genId = startRender(pid, 1, { ws, pollBaseMs: 5 });
     await until(() => genRow(genId)?.status === 'failed');
     expect(String(genRow(genId)!.error)).toContain('модерацией');
-    expect(uploadLog.length).toBe(2);
+    expect(uploadLog.length).toBe(3);
 
     // retry: пре-полл видит, что задача у WS реально failed → новый сабмит;
     // ассеты свежие → ни одной новой загрузки
     const ws2 = fakeWs({ uploadLog, pollScript: [{ status: 'failed', error: 'nsfw' }, { status: 'completed' }] });
     const retryId = await retryGeneration(genId, ws2);
     await until(() => genRow(retryId)?.status === 'done');
-    expect(uploadLog.length).toBe(2); // не выросло
+    expect(uploadLog.length).toBe(3); // не выросло
     expect(genRow(retryId)!.retry_of).toBe(genId);
     // фикс адверс-ревью №7: полностью переиспользованный ретрай хранит ассеты на СВОЕЙ строке
     expect(genRow(retryId)!.ws_assets_json).toBeTruthy();
@@ -283,7 +286,7 @@ describe('рендер: ошибки и ретраи', () => {
     const ws3 = fakeWs({ uploadLog, pollScript: [{ status: 'failed', error: 'x' }, { status: 'completed' }] });
     const retry2 = await retryGeneration(retryId, ws3);
     await until(() => genRow(retry2)?.status === 'done');
-    expect(uploadLog.length).toBe(2); // всё ещё не выросло
+    expect(uploadLog.length).toBe(3); // всё ещё не выросло
   });
 
   it('retry при живой задаче: completed → добираем БЕЗ второго сабмита; processing → 409', async () => {
@@ -341,7 +344,7 @@ describe('рендер: ошибки и ретраи', () => {
     const ws = fakeWs({ uploadLog, pollScript: [{ status: 'completed' }] });
     const retryId = await retryGeneration(failedId, ws);
     await until(() => genRow(retryId)?.status === 'done');
-    expect(uploadLog.length).toBe(2); // исходник + подтверждённый model ref
+    expect(uploadLog.length).toBe(3); // исходник + старт-кадр + подтверждённый model ref
   });
 
   it('поллер терпит 4 сетевые ошибки, 5-я подряд → failed с подсказкой recheck', async () => {
@@ -419,7 +422,7 @@ describe('рендер: гейты', () => {
     getDb().prepare(`UPDATE generations SET status='failed', error='cleanup' WHERE status = 'queued'`).run();
   });
 
-  it('нет промтов/исходника → говорящие 409; старт-кадр не является гейтом', () => {
+  it('нет промтов/исходника/старт-кадра → говорящие 409 (кадр снова обязателен)', () => {
     const db = getDb();
     const bare = randomUUID();
     db.prepare(
@@ -431,8 +434,7 @@ describe('рендер: гейты', () => {
 
     const noStart = readyProject();
     fs.rmSync(startDir(noStart), { recursive: true, force: true });
-    expect(() => startRender(noStart, 1, { ws: fakeWs({ pollScript: [{ status: 'processing' }] }) })).not.toThrow();
-    finishActive();
+    expect(() => startRender(noStart, 1, { ws: fakeWs() })).toThrow(/стартового кадра/);
 
     const purged = readyProject();
     db.prepare(`UPDATE projects SET video_purged = 1 WHERE id = ?`).run(purged);

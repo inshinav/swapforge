@@ -220,11 +220,16 @@ export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[], analysis?:
   return {
     endpoint: config.seedanceEndpoint,
     video: 'исходный ролик (motion control + мир)',
-    reference_images: refs.map((r, i) => ({
-      index: i + 1,
-      whatItIs: `${REF_ROLES[r.role as RefRole]?.ru ?? r.role}${r.note ? ` — ${r.note}` : ''}`,
-      file: r.file,
-    })),
+    reference_images: [
+      // Старт-кадр всегда первым (решение Alex 21.07.2026): пиксельный якорь
+      // идентичности и надписей; без него текст на технике плывёт
+      { index: 1, whatItIs: 'Стартовый кадр — точный первый кадр редактирования', file: 'start-frame.png' },
+      ...refs.map((r, i) => ({
+        index: i + 2,
+        whatItIs: `${REF_ROLES[r.role as RefRole]?.ru ?? r.role}${r.note ? ` — ${r.note}` : ''}`,
+        file: r.file,
+      })),
+    ],
     aspect_ratio: meta.aspect,
     resolution: '720p для итераций → 1080p финал',
     enable_web_search: false,

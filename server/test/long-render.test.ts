@@ -123,10 +123,12 @@ describe('длинный render pipeline', () => {
     expect(row.segment_done).toBe(2);
     expect(row.cost_actual_usd).toBe(2);
     expect(extractedFrom[0]).toMatch(/segment_01_render\.mp4$/);
-    expect(uploadedFiles).not.toContain('start_v1_2026-07-19T00-00-00.png');
-    expect((submits[0]!.reference_images as string[])).toHaveLength(1);
+    // Сегмент 0 стартует с обязательного старт-кадра (якорь идентичности/надписей)
+    expect(uploadedFiles).toContain('start_v1_2026-07-19T00-00-00.png');
+    expect((submits[0]!.reference_images as string[])).toHaveLength(2);
+    expect((submits[0]!.reference_images as string[])[0]).toContain('start_v1');
     expect(String(submits[0]!.prompt)).toContain('Replace only');
-    expect(String(submits[0]!.prompt)).not.toMatch(/start frame|reference image \d/i);
+    expect(String(submits[0]!.prompt)).toContain('exact first frame of this edit');
     expect(uploadedFiles).toContain('segment_02_anchor.png');
     expect((submits[1]!.reference_images as string[])[0]).toContain('segment_02_anchor.png');
     expect(String(submits[1]!.prompt)).toMatch(/exact boundary frame from the previous output/);

@@ -218,11 +218,12 @@ describe('манифест и параметры', () => {
     expect(m).not.toContain('START FRAME');
     expect(m).not.toMatch(/reference image \d/i);
   });
-  it('buildSeedanceParams: только подтверждённые рефы и поля WaveSpeed', () => {
+  it('buildSeedanceParams: старт-кадр первым + только подтверждённые рефы и поля WaveSpeed', () => {
     const p = buildSeedanceParams(META, REFS, ANALYSIS);
     expect(p.endpoint).toBe('bytedance/seedance-2.0/video-edit');
-    expect(p.reference_images.map((r) => r.index)).toEqual([1]);
-    expect(p.reference_images[0]!.file).toBe('ref_a.jpg');
+    expect(p.reference_images.map((r) => r.index)).toEqual([1, 2]);
+    expect(p.reference_images[0]!.file).toBe('start-frame.png');
+    expect(p.reference_images[1]!.file).toBe('ref_a.jpg');
     expect(p.aspect_ratio).toBe('9:16');
     expect(p.enable_web_search).toBe(false);
     expect(p.refFingerprint).toBe(referenceFingerprint(REFS));
