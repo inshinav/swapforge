@@ -12,7 +12,6 @@ import { framesDir, projectDir } from '../storage';
 import { config } from '../config';
 import { runAnalysis } from './analyze';
 import { runGeneration, buildSeedanceParams, type IterationCtx } from './generate';
-import { findSimilarWorked } from './similar';
 import { generateStartFrame } from './startframe';
 import { nextStageOf, parseFlags, snapshotProject, type FlowFlags } from './orchestrator';
 import { startRender } from './render';
@@ -139,20 +138,16 @@ function generationJob(projectId: string, opts: StartGenerationOpts): ProjectJob
       if (refs.length === 0) throw new Error('Добавь хотя бы один референс (модель)');
 
       const flags = opts.flagsOverride ?? parseFlags(p.flags_json);
-      // few-shot строго из проектов ЭТОГО пользователя; проект без владельца
-      // (легаси до m001) — пустой ретрив, не чужие примеры
-      // Legacy/partially-written analysis rows may predate required tags. Retrieval is optional,
-      // so malformed tags must degrade to an empty set instead of crashing a detached flow job.
-      const tags = Array.isArray(analysis.tags) ? analysis.tags : [];
-      const fewshot = p.user_id ? findSimilarWorked(p.user_id, projectId, tags) : [];
       const pair = await runGeneration(projectId, analysis, meta, refs, {
         lang: opts.lang,
-        fewshot,
+        // Старые «удачные» промты закрепляли шаблонность и неподтверждённую
+        // start-frame адресацию. Новый direct-edit контракт не наследует их.
+        fewshot: [],
         iteration: opts.iteration,
         flags,
       });
 
-      const params = buildSeedanceParams(meta, refs);
+      const params = buildSeedanceParams(meta, refs, analysis);
       const maxV = db
         .prepare(`SELECT COALESCE(MAX(version), 0) AS v FROM prompts WHERE project_id = ?`)
         .get(projectId) as { v: number };

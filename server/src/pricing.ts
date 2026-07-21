@@ -428,7 +428,7 @@ export async function buildActionEstimate(
   const warnings = [...base.warnings];
   const tasks: UsageTask[] =
     action === 'iterate'
-      ? ['prompt_pair', 'start_frame']
+      ? ['prompt_pair']
       : action === 'classify'
         ? ['classify_ref']
         : action === 'describe'
@@ -449,7 +449,7 @@ export async function buildActionEstimate(
     ...base,
     stages:
       action === 'iterate'
-        ? ['generate', 'startframe', 'render']
+        ? ['generate', 'render']
         : includesRender
           ? ['render']
           : [],

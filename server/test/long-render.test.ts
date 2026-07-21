@@ -123,10 +123,14 @@ describe('длинный render pipeline', () => {
     expect(row.segment_done).toBe(2);
     expect(row.cost_actual_usd).toBe(2);
     expect(extractedFrom[0]).toMatch(/segment_01_render\.mp4$/);
+    expect(uploadedFiles).not.toContain('start_v1_2026-07-19T00-00-00.png');
+    expect((submits[0]!.reference_images as string[])).toHaveLength(1);
+    expect(String(submits[0]!.prompt)).toContain('Replace only');
+    expect(String(submits[0]!.prompt)).not.toMatch(/start frame|reference image \d/i);
     expect(uploadedFiles).toContain('segment_02_anchor.png');
     expect((submits[1]!.reference_images as string[])[0]).toContain('segment_02_anchor.png');
-    expect(String(submits[1]!.prompt)).toMatch(/Start exactly on reference image 1/);
-    expect(String(submits[1]!.prompt)).toMatch(/no reset, morphing, duplicates or design drift/);
+    expect(String(submits[1]!.prompt)).toMatch(/exact boundary frame from the previous output/);
+    expect(String(submits[1]!.prompt)).toMatch(/follow this source segment for all motion/);
     expect(stitchedAnchors[0]).toBeNull();
     expect(stitchedAnchors[1]).toMatch(/segment_02_anchor\.png$/);
     expect(fs.readdirSync(startDir(project))).toEqual(['start_v1_2026-07-19T00-00-00.png']);

@@ -38,7 +38,7 @@ export const ARTIFACTS: Record<ArtifactType, ArtifactInfo> = {
   cross_wiring: {
     ru: 'Cross-wiring — референс применён не к тому субъекту',
     hint: 'Модель перепутала, какая картинка кто',
-    fix: 'Make reference indexing fully explicit and unambiguous: enumerate EVERY reference image number and what it depicts ("reference image 1 = the exact first frame, reference image 2 = the person, reference image 3 = the motorcycle"), and verify the reference_images array order matches the prompt numbering one-to-one.',
+    fix: 'Reduce the active reference set to assets with a confirmed counterpart in the source. Describe them semantically (person references versus matching object references), never by array index. Explicitly preserve every unrelated person, disconnected hand and object.',
   },
 };
 

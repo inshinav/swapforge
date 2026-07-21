@@ -29,7 +29,8 @@ import {
 } from '../billing/flow';
 import type { FrameInfo, RefInfo, VideoMeta } from '../../../shared/api-types';
 import type { Analysis } from '../../../shared/analysis';
-import { buildReferenceManifest, loadReferenceManifest } from './reference-manifest';
+import { loadReferenceManifest } from './reference-manifest';
+import { finalizeVideoEditPrompt, selectVideoEditRefs } from './video-edit-contract';
 
 /** Ошибка с HTTP-статусом для роутов (409 = гейт, 404 = нет объекта). */
 export class RenderGateError extends Error {
@@ -341,9 +342,6 @@ export function startRender(projectId: string, version: number, opts: StartRende
       throw new RenderGateError(409, 'Референсы изменились — обнови проверку, промты и цену');
     }
   }
-  if (!latestStartFrame(projectId, version)) {
-    throw new RenderGateError(409, 'Нет стартового кадра этой версии — сгенерируй кадр');
-  }
   if (!config.wavespeedApiKey) {
     throw new RenderGateError(503, 'WAVESPEED_API_KEY не настроен на сервере');
   }
@@ -397,7 +395,7 @@ export function startRender(projectId: string, version: number, opts: StartRende
     if (priorLong) {
       for (const segment of priorLong.segments) {
         if (segment.status === 'failed' || (segment.status === 'submitted' && !segment.outputFile)) {
-          const hasContinuityFrame = segment.index === 0 ? !!segment.startFile : !!segment.anchorFile;
+          const hasContinuityFrame = segment.index === 0 || !!segment.anchorFile;
           segment.status = segment.sourceFile && hasContinuityFrame ? 'prepared' : 'planned';
           delete segment.predictionId;
           delete segment.submittedAt;
@@ -686,15 +684,9 @@ async function runUploadAndSubmit(
     assets.video = { url, at: new Date().toISOString() };
     saveAssets(genId, assets);
   }
-  const startFile = latestStartFrame(projectId, gen.version);
-  if (!startFile) throw new Error('Стартовый кадр исчез — сгенерируй его заново');
-  if (!assets.start) {
-    const url = await ws.uploadBinary(path.join(startDir(projectId), startFile));
-    assets.start = { url, at: new Date().toISOString() };
-    saveAssets(genId, assets);
-  }
-  // максимум 9 reference_images с учётом старт-кадра → рефов не больше 8
-  const usableRefs = buildReferenceManifest(refs).refs;
+  // Нормальный Video Edit получает исходное видео напрямую. GPT Image start-frame
+  // больше не конкурирует с ним за ракурс/позу; лишние object refs также исключены.
+  const usableRefs = selectVideoEditRefs(analysis, refs);
   for (const r of usableRefs) {
     if (assets.refs[r.id]) continue;
     const url = await ws.uploadBinary(path.join(refsDir(projectId), r.file));
@@ -725,10 +717,11 @@ async function runUploadAndSubmit(
   const fresh = loadGen(genId);
   if (!fresh || fresh.status !== 'uploading_assets') return;
 
+  const videoPrompt = finalizeVideoEditPrompt(promptRow.text, analysis, refs, parseFlags(p.flags_json));
   const predictionId = await ws.submitVideoEdit({
-    prompt: promptRow.text,
+    prompt: videoPrompt,
     video: assets.video.url,
-    reference_images: [assets.start.url, ...usableRefs.map((r) => assets.refs![r.id]!.url)],
+    reference_images: usableRefs.map((r) => assets.refs![r.id]!.url),
     aspect_ratio: '9:16',
     resolution: params.resolution,
     generate_audio: params.generate_audio,
@@ -769,7 +762,7 @@ function longFile(projectId: string, genId: string, file: string): string {
 }
 
 function continuationVideoPrompt(base: string, segment: LongSegmentState, count: number): string {
-  return `${base}\n\nCONTINUITY ${segment.index + 1}/${count}: Start exactly on reference image 1. Keep the same face, body, outfit, key objects, contact points and lighting; no reset, morphing, duplicates or design drift.`;
+  return `${base}\n\nContinuity ${segment.index + 1}/${count}: the first supplied reference is the exact boundary frame from the previous output. Use it only to keep appearance continuous; follow this source segment for all motion, camera, timing and interactions.`;
 }
 
 function delay(ms: number): Promise<void> {
@@ -882,12 +875,18 @@ async function runLongVideo(
     const prompt = d
       .prepare(`SELECT text FROM prompts WHERE project_id = ? AND version = ? AND kind = 'video' LIMIT 1`)
       .get(projectId, gen.version) as { text: string } | undefined;
-    const videoPrompt = prompt?.text;
-    if (!videoPrompt) throw new LongWsFailure('Нет видеопромта для длинного рендера');
+    const storedVideoPrompt = prompt?.text;
+    if (!storedVideoPrompt) throw new LongWsFailure('Нет видеопромта для длинного рендера');
+    const videoPrompt = finalizeVideoEditPrompt(
+      storedVideoPrompt,
+      project.analysis,
+      refs,
+      parseFlags(project.flags_json),
+    );
 
     const assets: Assets = { refs: {}, ...freshAssets(gen.ws_assets_json) };
     assets.refs ??= {};
-    const usableRefs = buildReferenceManifest(refs).refs;
+    const usableRefs = selectVideoEditRefs(project.analysis, refs);
     for (const ref of usableRefs) {
       if (!assets.refs[ref.id]) {
         const url = await ws.uploadBinary(path.join(refsDir(projectId), ref.file));
@@ -895,9 +894,6 @@ async function runLongVideo(
         saveAssets(genId, assets);
       }
     }
-
-    const originalStart = latestStartFrame(projectId, gen.version);
-    if (!originalStart) throw new LongWsFailure('Стартовый кадр исчез — сгенерируй его заново');
 
     for (const segment of state.segments) {
       if (segment.status === 'done' && segment.outputFile && fs.existsSync(longFile(projectId, genId, segment.outputFile))) {
@@ -911,9 +907,7 @@ async function runLongVideo(
         await (hooks.cut ?? cutVideoSegment)(source, longFile(projectId, genId, segment.sourceFile), segment.startSec, segment.endSec);
       }
 
-      if (segment.index === 0) {
-        segment.startFile = originalStart;
-      } else if (!segment.anchorFile || !fs.existsSync(longFile(projectId, genId, segment.anchorFile))) {
+      if (segment.index > 0 && (!segment.anchorFile || !fs.existsSync(longFile(projectId, genId, segment.anchorFile)))) {
         segment.anchorFile = `segment_${number}_anchor.png`;
         const anchor = longFile(projectId, genId, segment.anchorFile);
         const previous = state.segments[segment.index - 1];
@@ -947,16 +941,20 @@ async function runLongVideo(
         // URL сегментных ассетов намеренно обновляются перед каждым новым сабмитом:
         // retry через несколько дней не должен полагаться на истёкший CDN URL.
         segment.videoUrl = await ws.uploadBinary(longFile(projectId, genId, segment.sourceFile));
-        const continuityFrame = segment.index === 0
-          ? path.join(startDir(projectId), segment.startFile!)
-          : longFile(projectId, genId, segment.anchorFile!);
-        segment.startUrl = await ws.uploadBinary(continuityFrame);
+        if (segment.index > 0) {
+          segment.startUrl = await ws.uploadBinary(longFile(projectId, genId, segment.anchorFile!));
+        }
         const fresh = loadGen(genId);
         if (!fresh || !ACTIVE_GEN_STATUSES.includes(fresh.status)) return;
         segment.predictionId = await ws.submitVideoEdit({
-          prompt: continuationVideoPrompt(videoPrompt, segment, state.segments.length),
+          prompt: segment.index === 0
+            ? videoPrompt
+            : continuationVideoPrompt(videoPrompt, segment, state.segments.length),
           video: segment.videoUrl,
-          reference_images: [segment.startUrl, ...usableRefs.map((r) => assets.refs![r.id]!.url)],
+          reference_images: [
+            ...(segment.index > 0 && segment.startUrl ? [segment.startUrl] : []),
+            ...usableRefs.map((r) => assets.refs![r.id]!.url),
+          ],
           aspect_ratio: '9:16',
           resolution: config.seedanceResolution,
           generate_audio: parseGenerateAudio(project.flags_json),

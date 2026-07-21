@@ -15,6 +15,11 @@ import { buildDoctrineSystem, ITERATION_ADDENDUM } from './doctrine';
 import type { FlowFlags } from './orchestrator';
 import type { SimilarExample } from './similar';
 import { buildReferenceManifest } from './reference-manifest';
+import {
+  finalizeVideoEditPrompt,
+  selectVideoEditRefs,
+  VIDEO_EDIT_PROMPT_MAX_WORDS,
+} from './video-edit-contract';
 
 export interface IterationCtx {
   prevVideoPrompt: string;
@@ -36,17 +41,13 @@ function mimeOf(file: string): string {
   return ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
 }
 
-/** Манифест референсов: №1 — старт-кадр, дальше рефы в пользовательском порядке. */
+/** Семантический манифест: WaveSpeed получает обычный неименованный reference_images[]. */
 export function buildManifestText(refs: RefInfo[]): string {
-  const lines = [
-    '1. START FRAME — will be generated from your imagePrompt: the exact first frame with the new subjects already in place. (no photo attached for this one)',
-  ];
-  refs.forEach((r, i) => {
+  return refs.map((r) => {
     const role = REF_ROLES[r.role as RefRole]?.en ?? r.role;
     const note = r.note ? ` User note: "${r.note}".` : '';
-    lines.push(`${i + 2}. ${role} — the user's own asset.${note} (photo attached below, labeled "Reference image ${i + 2}")`);
-  });
-  return lines.join('\n');
+    return `- ${role.toUpperCase()} REFERENCE — the user's own asset.${note}`;
+  }).join('\n');
 }
 
 export function buildGenerationRequest(
@@ -56,7 +57,7 @@ export function buildGenerationRequest(
   refs: RefInfo[],
   opts: GenerateOpts,
 ): { system: string; parts: ContentPart[] } {
-  refs = buildReferenceManifest(refs).refs;
+  refs = selectVideoEditRefs(analysis, refs);
   const system = buildDoctrineSystem(opts.flags) + (opts.iteration ? ITERATION_ADDENDUM : '');
   const parts: ContentPart[] = [];
 
@@ -67,27 +68,28 @@ export function buildGenerationRequest(
       `TASK: generate the two prompts for this project. imagePrompt language: ${opts.lang === 'ru' ? 'Russian' : 'English'}. videoPrompt: English. ${modes}\n\n` +
       `## SOURCE VIDEO META\nduration ${meta.durationSec}s, ${meta.width}x${meta.height} (aspect ${meta.aspect}), ${meta.fps} fps.\n\n` +
       `## VIDEO ANALYSIS (JSON)\n${JSON.stringify(analysis, null, 1)}\n\n` +
-      `## REFERENCE MANIFEST (this exact order goes into reference_images)\n${buildManifestText(refs)}`,
+      `## ACTIVE REFERENCES (only assets with a confirmed counterpart in the source; do not number them in the prompt)\n${buildManifestText(refs)}`,
   });
 
-  // Первый кадр — imagePrompt правит именно его (in-place edit), промт должен это знать
+  // Первый кадр нужен генератору промта только как визуальный контекст. imagePrompt
+  // остаётся owner-only диагностикой и не участвует в обычном video-edit рендере.
   const firstFrame = path.join(framesDir(projectId), 'first.jpg');
   if (fs.existsSync(firstFrame)) {
     parts.push({
       type: 'text',
-      text: 'SOURCE FIRST FRAME — the imagePrompt will be executed on THIS exact image (attached first at edit time); it swaps only the subjects and keeps everything else pixel-faithful:',
+      text: 'SOURCE FIRST FRAME — visual context for understanding the original framing. The normal video-edit flow uses the source video directly and does not attach a generated start frame:',
     });
     parts.push({ type: 'image', b64: fs.readFileSync(firstFrame).toString('base64'), mime: 'image/jpeg', detail: 'high' });
   }
 
   // Фото рефов — чтобы промты несли реальные детали внешности (цвета, дизайн, одежда)
-  refs.forEach((r, i) => {
+  refs.forEach((r) => {
     const p = path.join(refsDir(projectId), r.file);
     if (!fs.existsSync(p)) return;
     const role = REF_ROLES[r.role as RefRole]?.en ?? r.role;
     parts.push({
       type: 'text',
-      text: `Reference image ${i + 2} (${role}) — carry over its REAL appearance details into the prompts:`,
+      text: `${role.toUpperCase()} REFERENCE — use only its real appearance details for the matching replacement:`,
     });
     parts.push({ type: 'image', b64: fs.readFileSync(p).toString('base64'), mime: mimeOf(r.file), detail: 'high' });
   });
@@ -138,18 +140,18 @@ export function wordCount(s: string): number {
 }
 
 /** Норма доктрины 60–120; выше потолка — принудительный компресс-проход. */
-export const VIDEO_PROMPT_MAX_WORDS = 150;
+export const VIDEO_PROMPT_MAX_WORDS = VIDEO_EDIT_PROMPT_MAX_WORDS;
 
 /** Текст компресс-прохода: без картинок и анализа — только прежний вывод и бюджет.
  *  Точечная цель вместо полосы: по полосе модели стабильно промахиваются вверх. */
 export function buildCompressionRequest(pair: PromptPair): string {
   return (
     `Your previous output is over the WORD BUDGET (videoPrompt = ${wordCount(pair.videoPrompt)} words).\n` +
-    `Return a videoPrompt STRICTLY UNDER 120 words — an answer over 120 is invalid. Count the words before returning.\n` +
-    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 80–110 words; imagePrompt 60–110 (ceiling 120). Rules:\n` +
-    `- Keep verbatim: the reference-1 line, identity-lock sentences, active mode sentences (REMOVE-text / figure).\n` +
-    `- The keep-intent is ONE opening sentence and the DO NOT part is ONE sentence — no scene inventories, no captions, no timings.\n` +
-    `- Keep the REPLACE identity details; cut adjectives and repetition elsewhere.\n` +
+    `Return a videoPrompt STRICTLY UNDER 90 words — an answer over 90 is invalid. Count the words before returning.\n` +
+    `Rewrite BOTH prompts compressed. TARGET: videoPrompt 55–85 words; imagePrompt at most 100. Rules:\n` +
+    `- No reference numbers and no start/first-frame instruction.\n` +
+    `- Keep one scoped replacement sentence, one preservation sentence and one live-action realism sentence.\n` +
+    `- Preserve unrelated people, disconnected hands, objects and interactions.\n` +
     `- Do NOT add any new content or change meaning. Keep "notes" as is. Count words before returning.\n\n` +
     `Previous videoPrompt:\n${pair.videoPrompt}\n\nPrevious imagePrompt:\n${pair.imagePrompt}\n\nPrevious notes:\n${pair.notes}`
   );
@@ -205,24 +207,24 @@ export async function runGeneration(
       break;
     }
   }
-  return current;
+  return {
+    ...current,
+    videoPrompt: finalizeVideoEditPrompt(current.videoPrompt, analysis, refs, opts.flags),
+  };
 }
 
 /** Параметр-блок WaveSpeed: код, не LLM — имена полей точные. Эндпоинт зафиксирован (seedance-2.0). */
-export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[]): SeedanceParams {
+export function buildSeedanceParams(meta: VideoMeta, refs: RefInfo[], analysis?: Analysis | null): SeedanceParams {
   const manifest = buildReferenceManifest(refs);
-  refs = manifest.refs;
+  refs = selectVideoEditRefs(analysis, refs);
   return {
     endpoint: config.seedanceEndpoint,
     video: 'исходный ролик (motion control + мир)',
-    reference_images: [
-      { index: 1, whatItIs: 'Стартовый кадр — сгенерируй в ChatGPT по imagePrompt', file: 'start-frame.png' },
-      ...refs.map((r, i) => ({
-        index: i + 2,
-        whatItIs: `${REF_ROLES[r.role as RefRole]?.ru ?? r.role}${r.note ? ` — ${r.note}` : ''}`,
-        file: r.file,
-      })),
-    ],
+    reference_images: refs.map((r, i) => ({
+      index: i + 1,
+      whatItIs: `${REF_ROLES[r.role as RefRole]?.ru ?? r.role}${r.note ? ` — ${r.note}` : ''}`,
+      file: r.file,
+    })),
     aspect_ratio: meta.aspect,
     resolution: '720p для итераций → 1080p финал',
     enable_web_search: false,

@@ -50,46 +50,31 @@ describe('доктрина v2: opener и режимные блоки', () => {
   it('opener «Edit this video.» убран, правило про авто-префикс WaveSpeed добавлено', () => {
     expect(DOCTRINE_SYSTEM).not.toContain('Edit this video.');
     expect(DOCTRINE_SYSTEM).toContain('automatically prepends "Edit the input video."');
-    // ядро контракта нетронуто
-    expect(DOCTRINE_SYSTEM).toContain(
-      'Reference image 1 is the exact first frame of the edit — start from it.',
-    );
-    expect(DOCTRINE_SYSTEM).toContain(
-      'Keep the entire world, background, lighting, camera work and ALL motion exactly as in the source video',
-    );
-    expect(DOCTRINE_SYSTEM).toContain('DO NOT change or restyle anything except');
-    expect(DOCTRINE_SYSTEM).toContain('LIGHT the new');
+    expect(DOCTRINE_SYSTEM).toContain('source video is the sole authority for motion');
+    expect(DOCTRINE_SYSTEM).toContain('Never address images by number');
+    expect(DOCTRINE_SYSTEM).toContain('does NOT generate or attach a start frame');
   });
 
-  it('v3.1 любой формат: роль из видео, эмоции/перформанс исходника, игнор лишнего рефа, без артефактов', () => {
-    expect(DOCTRINE_SYSTEM).toContain('their actual role in THIS video');
-    expect(DOCTRINE_SYSTEM).toContain('with or without a vehicle');
-    expect(DOCTRINE_SYSTEM).toContain("Preserve the original person's performance exactly");
-    expect(DOCTRINE_SYSTEM).toContain('expressions, emotions, laughter, gaze and lip movement');
-    expect(DOCTRINE_SYSTEM).toContain('IGNORE references that have no counterpart');
-    expect(DOCTRINE_SYSTEM).toContain('no morphing, no warping, no artifacts');
-    // и в старт-кадре: эмоция исходного кадра + игнор рефа без пары в кадре
-    expect(DOCTRINE_SYSTEM).toContain("ORIGINAL figure's facial expression and emotion");
-    expect(DOCTRINE_SYSTEM).toContain('IGNORE that reference entirely');
+  it('любой формат: роль из анализа, лишние рефы исключены, чужие руки сохраняются', () => {
+    expect(DOCTRINE_SYSTEM).toContain('actual main role from the analysis');
+    expect(DOCTRINE_SYSTEM).toContain('A reference without a confirmed counterpart has already been removed');
+    expect(DOCTRINE_SYSTEM).toContain('every other person, disconnected hand');
+    expect(DOCTRINE_SYSTEM).toContain('visibly connected to that person');
+    expect(DOCTRINE_SYSTEM).not.toContain('no morphing, no warping, no artifacts');
   });
 
-  it('v3 «не сковывать»: без инвентарей в KEEP, подавители — только в итерациях, без форматов', () => {
-    expect(DOCTRINE_SYSTEM).toContain('TRUST THE SOURCE VIDEO');
-    expect(DOCTRINE_SYSTEM).toContain('NEVER enumerate scene objects');
-    expect(DOCTRINE_SYSTEM).toContain('for ITERATIONS');
+  it('не сковывает движение инвентарями и стеками отрицаний', () => {
+    expect(DOCTRINE_SYSTEM).toContain('Do not enumerate scenes, timestamps, risk lists');
+    expect(DOCTRINE_SYSTEM).toContain('Do not stack identity-lock slogans');
+    expect(DOCTRINE_SYSTEM).toContain('Trust the video');
     expect(DOCTRINE_SYSTEM).toContain('Never mention resolutions, aspect ratios or formats');
-    expect(DOCTRINE_SYSTEM).not.toContain('KEEP UNCHANGED, frame-accurate to the source video: [an explicit');
   });
 
-  it('v3 старт-кадр: in-place edit первого кадра, не реконструкция; модерационно-безопасные формулировки', () => {
-    expect(DOCTRINE_SYSTEM).toContain('SOURCE FIRST FRAME attached as the FIRST image');
-    expect(DOCTRINE_SYSTEM).toContain('IN-PLACE EDIT of the source frame');
-    expect(DOCTRINE_SYSTEM).toContain('Recreate this exact frame with the character');
-    expect(DOCTRINE_SYSTEM).toContain('EXACTLY as in the source frame');
+  it('imagePrompt остаётся только необязательной owner-диагностикой', () => {
+    expect(DOCTRINE_SYSTEM).toContain('optional owner diagnostic only');
+    expect(DOCTRINE_SYSTEM).toContain('not part of the normal paid render path');
     expect(DOCTRINE_SYSTEM).toContain('AI-generated virtual characters');
-    expect(DOCTRINE_SYSTEM).toContain('NEVER write "replace the person"');
-    expect(DOCTRINE_SYSTEM).not.toContain('Reconstruct the first-frame scene');
-    expect(DOCTRINE_SYSTEM).not.toContain('State the aspect ratio');
+    expect(DOCTRINE_SYSTEM).toContain('Keep it under 100 words');
   });
 
   it('матрица 4 комбо: блоки появляются строго по своим флагам', () => {
@@ -100,8 +85,8 @@ describe('доктрина v2: opener и режимные блоки', () => {
 
     const rt = buildDoctrineSystem({ removeText: true, enhanceFigure: false });
     expect(rt).toContain('MODE: REMOVE OVERLAY TEXT');
-    expect(rt).toContain('REMOVE every overlaid text element');
-    expect(rt).toContain('DO NOT keep or re-add any on-screen text');
+    expect(rt).toContain('Remove only overlaid captions');
+    expect(rt).toContain('Do not quote or enumerate text');
     expect(rt).not.toContain('MODE: FIGURE ENHANCEMENT');
 
     const fig = buildDoctrineSystem({ removeText: false, enhanceFigure: true });
@@ -125,33 +110,29 @@ describe('доктрина v2: opener и режимные блоки', () => {
   });
 
   it('режим OFF: оверлеи хранятся одной короткой строкой, без перечислений', () => {
-    expect(DOCTRINE_SYSTEM).toContain('NO remove-text mode is active');
-    expect(DOCTRINE_SYSTEM).toContain('Keep all on-screen text exactly as in the source');
-    expect(DOCTRINE_SYSTEM).toContain('Do not quote or enumerate the captions');
+    expect(DOCTRINE_SYSTEM).toContain('remove-text mode is off, leave it unchanged without describing it');
   });
 
-  it('бюджет слов зашит в доктрину: жёсткая полоса и неприкосновенные строки', () => {
-    expect(DOCTRINE_SYSTEM).toContain('WORD BUDGET (hard): videoPrompt 60–120 words');
-    expect(DOCTRINE_SYSTEM).toContain('never above 150');
-    expect(DOCTRINE_SYSTEM).toContain('NEVER cut to fit');
-    expect(DOCTRINE_SYSTEM).toContain('Length: 60–120 words'); // полоса imagePrompt
+  it('бюджет слов зашит в доктрину', () => {
+    expect(DOCTRINE_SYSTEM).toContain('normally 45–90 words and never above 110');
+    expect(DOCTRINE_SYSTEM).toContain('Keep it under 100 words');
   });
 });
 
 describe('энфорсмент длины промтов кодом', () => {
   it('wordCount и компресс-запрос: verbatim-строки и бюджет в инструкции', () => {
     expect(wordCount('  one   two\nthree ')).toBe(3);
-    expect(VIDEO_PROMPT_MAX_WORDS).toBe(150);
+    expect(VIDEO_PROMPT_MAX_WORDS).toBe(110);
     const req = buildCompressionRequest({
       videoPrompt: Array(300).fill('word').join(' '),
       imagePrompt: 'img prompt',
       notes: 'заметки',
     });
     expect(req).toContain('videoPrompt = 300 words');
-    expect(req).toContain('STRICTLY UNDER 120 words');
-    expect(req).toContain('TARGET: videoPrompt 80–110 words');
-    expect(req).toContain('no scene inventories, no captions, no timings');
-    expect(req).toContain('Keep verbatim: the reference-1 line');
+    expect(req).toContain('STRICTLY UNDER 90 words');
+    expect(req).toContain('TARGET: videoPrompt 55–85 words');
+    expect(req).toContain('No reference numbers and no start/first-frame instruction');
+    expect(req).toContain('Preserve unrelated people, disconnected hands');
     expect(req).toContain('img prompt');
     expect(req).toContain('заметки');
   });

@@ -25,7 +25,7 @@ export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () =>
       <SectionTitle
         step="4"
         title="Промты"
-        hint="вставляй как есть: №1 в ChatGPT, №2 в WaveSpeed"
+        hint="видео-промт применяется автоматически; кадр ниже — только ручная диагностика"
         right={
           versions.length > 1 && (
             <select
@@ -53,7 +53,7 @@ export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () =>
         {image && (
           <>
             <CopyBlock
-              title="1 · Промт стартового кадра"
+              title="Необязательно · диагностический промт кадра"
               badge={image.lang.toUpperCase()}
               text={image.text}
               mono={false}
@@ -62,7 +62,7 @@ export function PromptsView({ proj, reload }: { proj: ProjectFull; reload: () =>
           </>
         )}
         {video && (
-          <CopyBlock title="2 · Свап → Seedance 2.0 Video Edit (WaveSpeed)" badge="EN" text={video.text} />
+          <CopyBlock title="Основной · Seedance 2.0 Video Edit (WaveSpeed)" badge="EN" text={video.text} />
         )}
 
         {video?.params && <ParamsBlock p={video} />}
@@ -127,8 +127,8 @@ function StartFramePanel({
   return (
     <div className="rounded-xl border border-line bg-panel2 p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="text-sm font-semibold">Стартовый кадр по API</span>
-        <span className="text-xs text-dim">gpt-image-2 · high · с твоими рефами · это reference image 1</span>
+        <span className="text-sm font-semibold">Диагностический кадр по API</span>
+        <span className="text-xs text-dim">gpt-image-2 · не входит в рендер и не влияет на результат</span>
         <div className="flex-1" />
         <Button kind={frames.length ? 'ghost' : 'primary'} onClick={() => void generate()} busy={busy}>
           {busy ? 'Генерирую… ~1–2 мин' : frames.length ? 'Ещё вариант' : '🖼 Сгенерировать кадр'}

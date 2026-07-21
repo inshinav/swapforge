@@ -30,5 +30,5 @@ REFERENCE READINESS (write all user-facing strings in clear Russian):
 - blocker = generation is likely to lose identity/object geometry because an essential role/view is absent, unreadable or contradictory. warning = usable, but a concrete artifact risk remains. Do not block merely because every conceivable angle is not present.
 - sceneIndex is 1-based; use 0 only for a problem affecting the whole video. moment must include the approximate seconds.
 - evidence says what is visible in source/references. risk says what viewers may see if unchanged. action is one short exact instruction a normal phone user can follow. requiredShots lists exact photos to add/replace (angle, crop, light/background).
-- verdict: blocked if any blocker; review if warnings only; ready if no issues. Never recommend negative prompts, masks, seeds, @Image syntax, start-frame fields or automatic two-pass editing. Maximum usable project references is 8 because the generated continuity frame occupies slot 1.
+- verdict: blocked if any blocker; review if warnings only; ready if no issues. Never recommend negative prompts, masks, seeds, @Image syntax, start-frame fields or automatic two-pass editing. Maximum usable project references is 8; a long-video continuation may prepend one boundary frame from the previous generated segment.
 `;

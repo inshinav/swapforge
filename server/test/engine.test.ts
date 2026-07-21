@@ -210,18 +210,19 @@ describe('аудит готовности референсов', () => {
 });
 
 describe('манифест и параметры', () => {
-  it('старт-кадр всегда №1, рефы со сдвигом +2', () => {
+  it('использует семантические роли без нумерации и старт-кадра', () => {
     const m = buildManifestText(REFS);
-    expect(m).toMatch(/^1\. START FRAME/);
-    expect(m).toContain('2. person');
+    expect(m).toContain('PERSON REFERENCE');
     expect(m).toContain('чёрная кожаная куртка');
-    expect(m).toContain('3. vehicle');
+    expect(m).toContain('VEHICLE REFERENCE');
+    expect(m).not.toContain('START FRAME');
+    expect(m).not.toMatch(/reference image \d/i);
   });
-  it('buildSeedanceParams: порядок и поля WaveSpeed', () => {
-    const p = buildSeedanceParams(META, REFS);
+  it('buildSeedanceParams: только подтверждённые рефы и поля WaveSpeed', () => {
+    const p = buildSeedanceParams(META, REFS, ANALYSIS);
     expect(p.endpoint).toBe('bytedance/seedance-2.0/video-edit');
-    expect(p.reference_images.map((r) => r.index)).toEqual([1, 2, 3]);
-    expect(p.reference_images[0]!.file).toBe('start-frame.png');
+    expect(p.reference_images.map((r) => r.index)).toEqual([1]);
+    expect(p.reference_images[0]!.file).toBe('ref_a.jpg');
     expect(p.aspect_ratio).toBe('9:16');
     expect(p.enable_web_search).toBe(false);
     expect(p.refFingerprint).toBe(referenceFingerprint(REFS));
@@ -229,13 +230,11 @@ describe('манифест и параметры', () => {
 });
 
 describe('запрос генерации', () => {
-  it('доктрина содержит контракт и правило нумерации', () => {
-    expect(DOCTRINE_SYSTEM).toContain(
-      'Keep the entire world, background, lighting, camera work and ALL motion exactly as in the source video',
-    );
-    expect(DOCTRINE_SYSTEM).toContain('Reference image 1 is the exact first frame of the edit — start from it.');
-    expect(DOCTRINE_SYSTEM).toContain('DO NOT change or restyle anything except');
-    expect(DOCTRINE_SYSTEM).toContain('LIGHT the new');
+  it('доктрина делает исходник единственным источником движения и запрещает адресацию рефов', () => {
+    expect(DOCTRINE_SYSTEM).toContain('source video is the sole authority for motion');
+    expect(DOCTRINE_SYSTEM).toContain('Never address images by number');
+    expect(DOCTRINE_SYSTEM).toContain('original live-action realism');
+    expect(DOCTRINE_SYSTEM).not.toContain('Reference image 1 is the exact first frame');
   });
   it('обычная генерация: анализ + манифест, без итерации', () => {
     const { system, parts } = buildGenerationRequest('missing-project', ANALYSIS, META, REFS, {
@@ -245,7 +244,9 @@ describe('запрос генерации', () => {
     });
     expect(system).not.toContain('ITERATION MODE');
     const text = parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
-    expect(text).toContain('REFERENCE MANIFEST');
+    expect(text).toContain('ACTIVE REFERENCES');
+    expect(text).toContain('PERSON REFERENCE');
+    expect(text).not.toContain('VEHICLE REFERENCE');
     expect(text).toContain('night city street');
     expect(text).toContain('imagePrompt language: English');
   });

@@ -247,7 +247,7 @@ describe('оркестратор: флаги и решающая таблица'
       nextStageOf({ ...base, wantedFlags: { removeText: true, enhanceFigure: false, wish: '' } }),
     ).toBe('generate'); // смена галочек → регенерация
     expect(nextStageOf({ ...base, latestPromptRefsMatch: false })).toBe('generate');
-    expect(nextStageOf({ ...base, startframeReady: false })).toBe('startframe');
+    expect(nextStageOf({ ...base, startframeReady: false })).toBe('render');
     expect(nextStageOf(base)).toBe('render');
     expect(nextStageOf({ ...base, latestGenStatus: 'done' })).toBe('done');
     // failed-рендер не перезапускается автоматически (только ручной retry)
@@ -259,7 +259,6 @@ describe('оркестратор: флаги и решающая таблица'
       'storyboard',
       'analyze',
       'generate',
-      'startframe',
       'render',
     ]);
     expect(remainingStages(base)).toEqual(['render']);
@@ -285,7 +284,7 @@ describe('оркестратор: флаги и решающая таблица'
 });
 
 describe('buildEstimate: сквозная смета', () => {
-  it('свежий проект 12с: OpenAI ≈ $0.21 + WaveSpeed $3.60, баланс попадает в ответ', async () => {
+  it('свежий проект 12с: без GPT Image + WaveSpeed $3.60, баланс попадает в ответ', async () => {
     await ensureLitellmFresh(litellmFetch);
     getDb()
       .prepare(`INSERT INTO projects (id, meta_json) VALUES ('est1', ?)`)
@@ -301,10 +300,10 @@ describe('buildEstimate: сквозная смета', () => {
       },
       fakeWs(),
     );
-    expect(est.stages).toEqual(['storyboard', 'analyze', 'generate', 'startframe', 'render']);
+    expect(est.stages).toEqual(['storyboard', 'analyze', 'generate', 'render']);
     expect(est.wavespeed.usd).toBeCloseTo(3.6, 5);
-    expect(est.openai.usd).toBeGreaterThan(0.1);
-    expect(est.openai.usd).toBeLessThan(0.4);
+    expect(est.openai.usd).toBeGreaterThan(0.05);
+    expect(est.openai.usd).toBeLessThan(0.3);
     expect(est.totalUsd).toBeCloseTo(3.6 + (est.openai.usd ?? 0), 5);
     expect(est.balanceUsd).toBeCloseTo(3.92, 5);
     expect(est.approximate).toBe(false);
@@ -352,7 +351,7 @@ describe('buildEstimate: сквозная смета', () => {
     expect(est.wavespeed.usd).toBeCloseTo(exactRender.usd!, 6);
     expect(est.wavespeed.usd).toBeGreaterThan(4.5);
     expect(est.openai.perTask.filter((t) => t.task.startsWith('start_frame_segment_'))).toHaveLength(0);
-    expect(est.openai.perTask.filter((t) => t.task === 'start_frame')).toHaveLength(1);
+    expect(est.openai.perTask.filter((t) => t.task === 'start_frame')).toHaveLength(0);
     expect(est.warnings).toContain('длинный исходник будет бесшовно собран из 3 частей');
   });
   it('кэш баланса 60с: два вызова — один сетевой', async () => {

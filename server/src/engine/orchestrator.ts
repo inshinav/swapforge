@@ -47,7 +47,7 @@ export interface StageSnapshot {
   latestPromptRefsMatch?: boolean;
   /** Чего хочет проект сейчас (галочки на момент запуска). */
   wantedFlags: FlowFlags;
-  /** Есть ли старт-кадр для latestVersion. */
+  /** Legacy/manual owner diagnostic; normal video-edit no longer waits for it. */
   startframeReady: boolean;
   /** Статус последней генерации для latestVersion (null = генераций не было). */
   latestGenStatus: string | null;
@@ -69,12 +69,11 @@ export function nextStageOf(s: StageSnapshot): StageName {
   ) {
     return 'generate';
   }
-  if (!s.startframeReady) return 'startframe';
   if (s.latestGenStatus === null) return 'render';
   return 'done';
 }
 
-const STAGE_ORDER: StageName[] = ['storyboard', 'analyze', 'generate', 'startframe', 'render'];
+const STAGE_ORDER: StageName[] = ['storyboard', 'analyze', 'generate', 'render'];
 
 /** Что осталось прогнать (для сметы). 'done' = повторный прогон → только рендер. */
 export function remainingStages(s: StageSnapshot): StageName[] {
