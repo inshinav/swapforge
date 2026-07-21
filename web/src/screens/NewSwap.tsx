@@ -87,6 +87,7 @@ export default function NewSwap({
   onOpenModels,
   onOpenBilling,
   owner,
+  previewAsUser = false,
   guided = false,
 }: {
   projectId: string | null;
@@ -94,6 +95,7 @@ export default function NewSwap({
   onOpenModels: () => void;
   onOpenBilling: (needed: number) => void;
   owner: boolean;
+  previewAsUser?: boolean;
   guided?: boolean;
 }) {
   const { proj, err, reload } = useProject(projectId);
@@ -131,6 +133,7 @@ export default function NewSwap({
       onOpenModels={onOpenModels}
       onOpenBilling={onOpenBilling}
       owner={owner}
+      previewAsUser={previewAsUser}
     />
   );
 }
@@ -142,6 +145,7 @@ function ProjectView({
   onOpenModels,
   onOpenBilling,
   owner,
+  previewAsUser,
 }: {
   proj: ProjectFull;
   reload: () => void;
@@ -149,6 +153,7 @@ function ProjectView({
   onOpenModels: () => void;
   onOpenBilling: (needed: number) => void;
   owner: boolean;
+  previewAsUser: boolean;
 }) {
   // Пресетный проект: рефы подложены кнопкой — секция референсов уезжает «под капот»,
   // главный сценарий остаётся бесшовным. «Свои референсы» раскрывает её обратно.
@@ -172,6 +177,7 @@ function ProjectView({
         onOpenModels={onOpenModels}
         onOpenBilling={onOpenBilling}
         owner={owner}
+        previewAsUser={previewAsUser}
       />
       <RenderPanel proj={proj} reload={reload} />
       {owner && <UnderTheHood proj={proj} reload={reload} showRefs={presetRefs && !custom} />}

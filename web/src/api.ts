@@ -208,11 +208,17 @@ export const api = {
   estimate: (
     id: string,
     flags?: { removeText: boolean; enhanceFigure: boolean; wish: string },
+    previewAsUser = false,
   ) => {
-    const query = flags
-      ? `?removeText=${flags.removeText ? '1' : '0'}&enhanceFigure=${flags.enhanceFigure ? '1' : '0'}&wish=${encodeURIComponent(flags.wish)}`
-      : '';
-    return fetch(u(`api/projects/${id}/estimate${query}`)).then((r) =>
+    const query = new URLSearchParams();
+    if (flags) {
+      query.set('removeText', flags.removeText ? '1' : '0');
+      query.set('enhanceFigure', flags.enhanceFigure ? '1' : '0');
+      query.set('wish', flags.wish);
+    }
+    if (previewAsUser) query.set('preview', 'user');
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return fetch(u(`api/projects/${id}/estimate${suffix}`)).then((r) =>
       j<EstimateInfo | EstimateForUser>(r),
     );
   },
@@ -225,7 +231,8 @@ export const api = {
   billingBalance: () => fetch(u('api/billing/balance')).then((r) => j<DollarBalanceInfo>(r)),
   billingLedger: () =>
     fetch(u('api/billing/ledger')).then((r) => j<{ entries: DollarLedgerEntry[] }>(r)),
-  billingMethods: () => fetch(u('api/billing/packs')).then((r) => j<BillingMethodsInfo>(r)),
+  billingMethods: (previewAsUser = false) =>
+    fetch(u(`api/billing/packs${previewAsUser ? '?preview=user' : ''}`)).then((r) => j<BillingMethodsInfo>(r)),
   billingPaymentIntents: () =>
     fetch(u('api/billing/payment-intents')).then((r) => j<{ intents: PaymentIntentInfo[] }>(r)),
   checkout: (amountUsd: number, provider: BillingProviderId, email?: string) =>

@@ -55,6 +55,7 @@ export function SwapPanel({
   onOpenModels,
   onOpenBilling,
   owner,
+  previewAsUser = false,
 }: {
   proj: ProjectFull;
   reload: () => void;
@@ -67,6 +68,8 @@ export function SwapPanel({
   onOpenBilling: (needed: number) => void;
   /** Владелец видит технические стадии и себестоимость; пользователь — только простой путь и финальную цену. */
   owner: boolean;
+  /** Владелец смотрит обычный кабинет: сервер возвращает публичную цену, но сохраняет реальные owner-права. */
+  previewAsUser?: boolean;
 }) {
   const savedFlags = proj.flags;
   const [removeText, setRemoveText] = useState(savedFlags?.removeText ?? true);
@@ -103,10 +106,10 @@ export function SwapPanel({
   const loadEstimate = useCallback(() => {
     setEstErr(null);
     api
-      .estimate(proj.id, { removeText, enhanceFigure, wish })
+      .estimate(proj.id, { removeText, enhanceFigure, wish }, previewAsUser)
       .then(setEst)
       .catch((e) => setEstErr(e instanceof Error ? e.message : String(e)));
-  }, [proj.id, removeText, enhanceFigure, wish]);
+  }, [previewAsUser, proj.id, removeText, enhanceFigure, wish]);
 
   useEffect(() => {
     if (!running) loadEstimate();
@@ -121,7 +124,7 @@ export function SwapPanel({
       let launchEstimate = est;
       if (variantId) {
         await api.applyVariant(proj.id, variantId);
-        launchEstimate = await api.estimate(proj.id, { removeText, enhanceFigure, wish });
+        launchEstimate = await api.estimate(proj.id, { removeText, enhanceFigure, wish }, previewAsUser);
         setEst(launchEstimate);
       }
       // звук НЕ шлём: сервер берёт сохранённую настройку проекта — проп proj.flags

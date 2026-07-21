@@ -21,5 +21,25 @@ describe('web API foundation', () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(String(fetchMock.mock.calls[0]![0])).toBe(`${window.location.origin}/swapforge/api/health`);
+    fetchMock.mockRestore();
+  });
+
+  it('requests public pricing and payment methods for the owner user-preview mode', async () => {
+    window.history.replaceState({}, '', '/swapforge/#swap');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+
+    await api.estimate('project-1', { removeText: true, enhanceFigure: false, wish: 'test wish' }, true);
+    await api.billingMethods(true);
+
+    const estimateUrl = new URL(String(fetchMock.mock.calls[0]![0]));
+    expect(estimateUrl.pathname).toBe('/swapforge/api/projects/project-1/estimate');
+    expect(estimateUrl.searchParams.get('preview')).toBe('user');
+    expect(estimateUrl.searchParams.get('wish')).toBe('test wish');
+    expect(String(fetchMock.mock.calls[1]![0])).toBe(
+      `${window.location.origin}/swapforge/api/billing/packs?preview=user`,
+    );
+    fetchMock.mockRestore();
   });
 });

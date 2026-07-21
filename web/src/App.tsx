@@ -12,10 +12,12 @@ import { JourneyBar, JourneyHome, type JourneyStatus, type JourneyTarget } from 
 import { Spinner } from './ui';
 
 type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide' | 'admin';
+export type OwnerViewMode = 'admin' | 'user';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
 const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide', 'admin']);
+const OWNER_VIEW_MODE_KEY = 'sf-owner-view-mode';
 
 interface JourneyPrefs {
   balanceDeferred: boolean;
@@ -59,6 +61,17 @@ function viewFromHash(): View {
   return VIEW_HASHES.has(raw as View) ? (raw as View) : 'swap';
 }
 
+export function readOwnerViewMode(storage: Pick<Storage, 'getItem'>): OwnerViewMode {
+  return storage.getItem(OWNER_VIEW_MODE_KEY) === 'user' ? 'user' : 'admin';
+}
+
+export function resolveView(view: View, isOwner: boolean, ownerMode: OwnerViewMode): View {
+  if (!isOwner && view === 'admin') return 'swap';
+  if (isOwner && ownerMode === 'user' && view === 'admin') return 'swap';
+  if (isOwner && ownerMode === 'admin' && (view === 'billing' || view === 'start')) return 'admin';
+  return view;
+}
+
 export default function App() {
   const [session, setSession] = useState<Session>(null);
   const [view, setView] = useState<View>(viewFromHash);
@@ -73,8 +86,18 @@ export default function App() {
   const [journeyData, setJourneyData] = useState<JourneyData | null>(null);
   const [journeyPrefs, setJourneyPrefs] = useState<JourneyPrefs>(EMPTY_PREFS);
   const [journeyRouted, setJourneyRouted] = useState(false);
+  const [ownerViewMode, setOwnerViewMode] = useState<OwnerViewMode>(() => {
+    try {
+      return readOwnerViewMode(localStorage);
+    } catch {
+      return 'admin';
+    }
+  });
 
   const isOwner = session !== null && session !== 'anon' && session.user.role === 'owner';
+  const showOwnerTools = isOwner && ownerViewMode === 'admin';
+  const showUserExperience = !isOwner || ownerViewMode === 'user';
+  const previewAsUser = isOwner && ownerViewMode === 'user';
   const userId = session !== null && session !== 'anon' ? session.user.id : null;
 
   const loadSession = useCallback(() => {
@@ -106,7 +129,7 @@ export default function App() {
   }, []);
 
   const loadJourney = useCallback(async () => {
-    if (!userId || isOwner) return;
+    if (!userId || !showUserExperience) return;
     try {
       const [models, projects, nextBalance] = await Promise.all([
         api.models(),
@@ -128,10 +151,10 @@ export default function App() {
     } catch {
       // Основные экраны покажут свою ошибку; помощник не должен блокировать кабинет.
     }
-  }, [isOwner, userId]);
+  }, [showUserExperience, userId]);
 
   useEffect(() => {
-    if (!userId || isOwner) return;
+    if (!userId || !showUserExperience) return;
     try {
       const saved = JSON.parse(localStorage.getItem(journeyStorageKey(userId)) ?? '{}') as Partial<JourneyPrefs>;
       setJourneyPrefs({
@@ -145,10 +168,10 @@ export default function App() {
     setJourneyData(null);
     setJourneyRouted(false);
     void loadJourney();
-  }, [isOwner, loadJourney, userId]);
+  }, [loadJourney, showUserExperience, userId]);
 
   useEffect(() => {
-    if (!userId || isOwner || journeyPrefs.skipped || journeyData?.hasResult) return;
+    if (!userId || !showUserExperience || journeyPrefs.skipped || journeyData?.hasResult) return;
     const timer = window.setInterval(() => void loadJourney(), 8_000);
     const onFocus = () => void loadJourney();
     window.addEventListener('focus', onFocus);
@@ -156,7 +179,7 @@ export default function App() {
       window.clearInterval(timer);
       window.removeEventListener('focus', onFocus);
     };
-  }, [isOwner, journeyData?.hasResult, journeyPrefs.skipped, loadJourney, userId]);
+  }, [journeyData?.hasResult, journeyPrefs.skipped, loadJourney, showUserExperience, userId]);
 
   const saveJourneyPrefs = useCallback((patch: Partial<JourneyPrefs>) => {
     if (!userId) return;
@@ -172,21 +195,15 @@ export default function App() {
     go('billing');
   }, [go]);
 
-  const activeView: View =
-    (isOwner && view === 'billing') || (userId !== null && !isOwner && view === 'admin')
-      ? 'swap'
-      : view;
+  const activeView = resolveView(view, isOwner, ownerViewMode);
   const journeyStatus = journeyData ? buildJourneyStatus(journeyData, journeyPrefs) : null;
-  const journeyActive = !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && !isOwner;
+  const journeyActive =
+    !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && showUserExperience;
 
   useEffect(() => {
-    if (
-      (isOwner && (view === 'billing' || view === 'start')) ||
-      (userId !== null && !isOwner && view === 'admin')
-    ) {
-      go('swap');
-    }
-  }, [go, isOwner, userId, view]);
+    const next = resolveView(view, isOwner, ownerViewMode);
+    if (next !== view) go(next);
+  }, [go, isOwner, ownerViewMode, view]);
 
   useEffect(() => {
     if (!journeyActive || journeyRouted) return;
@@ -198,11 +215,22 @@ export default function App() {
     if (session === null || session === 'anon') return;
     api.health().then(setHealth).catch(() => setHealth(null));
     // USD оператора существует только для владельца — тенантам эти роуты закрыты (403)
-    if (isOwner) {
+    if (showOwnerTools) {
       api.pricing().then(setPricing).catch(() => setPricing(null));
       api.usageSummary().then(setUsage).catch(() => setUsage(null));
     } else void loadJourney();
-  }, [view, session, isOwner, loadJourney]);
+  }, [view, session, showOwnerTools, loadJourney]);
+
+  const changeOwnerViewMode = useCallback((next: OwnerViewMode) => {
+    if (!isOwner) return;
+    setOwnerViewMode(next);
+    try {
+      localStorage.setItem(OWNER_VIEW_MODE_KEY, next);
+    } catch {
+      // Режим всё равно переключится на текущую сессию.
+    }
+    go(next === 'admin' ? 'admin' : 'swap');
+  }, [go, isOwner]);
 
   const openProject = useCallback((id: string) => {
     const pid = id || null;
@@ -280,22 +308,29 @@ export default function App() {
           <TabBtn active={activeView === 'library'} onClick={() => go('library')}>
             Работы
           </TabBtn>
-          {isOwner && (
+          {showOwnerTools && (
             <TabBtn active={activeView === 'admin'} onClick={() => go('admin')}>
               Админ
             </TabBtn>
           )}
         </nav>}
         <div className="flex-1" />
-        {isOwner && health && health.keyPresent === false && (
+        {isOwner && (
+          <OwnerModeSwitch
+            mode={ownerViewMode}
+            onChange={changeOwnerViewMode}
+            className="hidden lg:flex"
+          />
+        )}
+        {showOwnerTools && health && health.keyPresent === false && (
           <span className="text-[11px] text-danger hidden sm:inline">LLM-ключ не настроен</span>
         )}
-        {isOwner && health && health.diskUsedPct !== undefined && health.diskUsedPct >= 80 && (
+        {showOwnerTools && health && health.diskUsedPct !== undefined && health.diskUsedPct >= 80 && (
           <span className="text-[11px] text-warn hidden sm:inline">
             хранилище {health.diskUsedPct}%
           </span>
         )}
-        {!isOwner && (
+        {showUserExperience && (
           <button
             type="button"
             onClick={() => openBilling()}
@@ -316,7 +351,10 @@ export default function App() {
         <UserChip
           name={u.firstName || (u.username ? `@${u.username}` : `id${u.telegramId}`)}
           photo={u.photoUrl}
-          owner={u.role === 'owner'}
+          owner={showOwnerTools}
+          canSwitchMode={isOwner}
+          ownerMode={ownerViewMode}
+          onOwnerModeChange={changeOwnerViewMode}
           onGuide={() => go('guide')}
           onLogout={logout}
         />
@@ -358,7 +396,8 @@ export default function App() {
             onProjectCreated={openProjectAndRefresh}
             onOpenModels={() => go('models')}
             onOpenBilling={openBilling}
-            owner={isOwner}
+            owner={showOwnerTools}
+            previewAsUser={previewAsUser}
             guided={journeyActive}
           />
         ) : activeView === 'models' ? (
@@ -367,6 +406,7 @@ export default function App() {
           <Billing
             userId={userId!}
             neededUsd={billingNeed}
+            previewAsUser={previewAsUser}
             onBackToSwap={() => go(journeyActive ? 'start' : 'swap')}
             onBalanceChange={(next) => {
               setBalance(next);
@@ -389,7 +429,7 @@ export default function App() {
         )}
       </main>
 
-      {isOwner && (
+      {showOwnerTools && (
         <footer className="border-t border-line px-4 sm:px-6 pt-3 pb-24 md:pb-3 text-[11px] text-dim flex flex-wrap gap-x-4 gap-y-1">
           <span className="hidden md:inline">SwapForge v{health?.version ?? '…'}</span>
           {health?.provider && (
@@ -428,7 +468,7 @@ export default function App() {
       {!journeyActive && (
         <MobileNav
           view={activeView}
-          isOwner={isOwner}
+          isOwner={showOwnerTools}
           onChange={(next) => (next === 'billing' ? openBilling() : go(next))}
         />
       )}
@@ -478,12 +518,18 @@ function UserChip({
   name,
   photo,
   owner,
+  canSwitchMode,
+  ownerMode,
+  onOwnerModeChange,
   onGuide,
   onLogout,
 }: {
   name: string;
   photo: string;
   owner: boolean;
+  canSwitchMode: boolean;
+  ownerMode: OwnerViewMode;
+  onOwnerModeChange: (mode: OwnerViewMode) => void;
   onGuide: () => void;
   onLogout: () => void;
 }) {
@@ -519,7 +565,23 @@ function UserChip({
         </span>
         <span className="hidden sm:inline text-dim text-[10px]" aria-hidden>▾</span>
       </button>
-      {open && <div className="absolute right-0 top-[calc(100%+0.4rem)] z-40 w-48 rounded-xl border border-line2 bg-panel shadow-xl p-1.5 sf-in">
+      {open && <div className={`absolute right-0 top-[calc(100%+0.4rem)] z-40 rounded-xl border border-line2 bg-panel shadow-xl p-1.5 sf-in ${canSwitchMode ? 'w-64' : 'w-48'}`}>
+        {canSwitchMode && (
+          <div className="p-1.5 pb-2.5 mb-1 border-b border-line space-y-2">
+            <div>
+              <div className="text-xs font-bold text-ink">Режим кабинета</div>
+              <div className="text-[10px] text-dim mt-0.5">Переключатель доступен только владельцу</div>
+            </div>
+            <OwnerModeSwitch
+              mode={ownerMode}
+              onChange={(next) => {
+                setOpen(false);
+                onOwnerModeChange(next);
+              }}
+              className="flex w-full"
+            />
+          </div>
+        )}
         <button
           type="button"
           onClick={() => {
@@ -541,6 +603,45 @@ function UserChip({
           Выйти
         </button>
       </div>}
+    </div>
+  );
+}
+
+function OwnerModeSwitch({
+  mode,
+  onChange,
+  className = '',
+}: {
+  mode: OwnerViewMode;
+  onChange: (mode: OwnerViewMode) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Режим кабинета владельца"
+      className={`shrink-0 rounded-xl border border-line2 bg-panel2 p-0.5 gap-0.5 ${className}`}
+    >
+      <button
+        type="button"
+        aria-pressed={mode === 'admin'}
+        onClick={() => onChange('admin')}
+        className={`min-h-9 flex-1 rounded-lg px-2.5 text-xs font-bold transition-colors ${
+          mode === 'admin' ? 'bg-lime text-black' : 'text-mut hover:text-ink'
+        }`}
+      >
+        Админка
+      </button>
+      <button
+        type="button"
+        aria-pressed={mode === 'user'}
+        onClick={() => onChange('user')}
+        className={`min-h-9 flex-1 rounded-lg px-2.5 text-xs font-bold transition-colors ${
+          mode === 'user' ? 'bg-lime text-black' : 'text-mut hover:text-ink'
+        }`}
+      >
+        Как клиент
+      </button>
     </div>
   );
 }

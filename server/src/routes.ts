@@ -278,6 +278,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         removeText?: string;
         enhanceFigure?: string;
         wish?: string;
+        preview?: string;
       };
       const currentFlags = parseFlags(p.flags_json);
       const flagsJson = JSON.stringify({
@@ -290,7 +291,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const draft = { ...p, flags_json: flagsJson };
       const est = await buildEstimate(draft);
       // Не-владельцу — только итоговая пользовательская цена, без себестоимости оператора.
-      if (req.user!.role === 'owner') return est;
+      if (req.user!.role === 'owner') {
+        return query.preview === 'user' ? toUserEstimate(est, req.user!.id) : est;
+      }
       const snap = snapshotProject(draft);
       const action = snap.latestGenStatus === 'done' ? 'rerun' : 'first';
       return issueFlowQuote({

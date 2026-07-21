@@ -76,11 +76,13 @@ function intentStartedAt(intent: PaymentIntentInfo): number {
 export default function Billing({
   userId,
   neededUsd,
+  previewAsUser = false,
   onBackToSwap,
   onBalanceChange,
 }: {
   userId: string;
   neededUsd: number | null;
+  previewAsUser?: boolean;
   onBackToSwap: () => void;
   onBalanceChange: (balance: DollarBalanceInfo) => void;
 }) {
@@ -101,7 +103,7 @@ export default function Billing({
       const [b, l, m, payments] = await Promise.all([
         api.billingBalance(),
         api.billingLedger(),
-        api.billingMethods(),
+        api.billingMethods(previewAsUser),
         api.billingPaymentIntents(),
       ]);
       setBalance(b);
@@ -120,7 +122,7 @@ export default function Billing({
       setErr(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [onBalanceChange, userId]);
+  }, [onBalanceChange, previewAsUser, userId]);
 
   useEffect(() => {
     void reload();

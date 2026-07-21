@@ -93,11 +93,14 @@ export function registerBillingRoutes(app: FastifyInstance): void {
 
   // Оставляем URL /packs для совместимости клиента, но пакетов в продукте больше нет.
   app.get('/api/billing/packs', async (req) => {
+    const previewAsUser =
+      req.user?.role === 'owner' && String((req.query as { preview?: unknown } | undefined)?.preview ?? '') === 'user';
+    const billingRole = previewAsUser ? 'user' : req.user?.role;
     return {
       minTopupUsd: config.minTopupUsd,
       maxTopupUsd: config.maxTopupUsd,
       providers: readyProviders()
-        .filter((p) => p.id !== 'cryptopay' || cryptoPayAvailableToRole(req.user?.role))
+        .filter((p) => p.id !== 'cryptopay' || cryptoPayAvailableToRole(billingRole))
         .map((p) => ({
           id: p.id,
           needsEmail: p.needsEmail,
