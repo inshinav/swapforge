@@ -33,4 +33,3 @@ jobs:
         run: npm run test
       - name: Build exact SHA
         run: npm run build
-

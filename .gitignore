@@ -6,3 +6,5 @@ data/
 .env.*
 .DS_Store
 coverage/
+release-evidence/*/
+!release-evidence/README.md

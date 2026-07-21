@@ -19,4 +19,3 @@ const result = db.prepare('PRAGMA quick_check').get();
 if (!result || Object.values(result)[0] !== 'ok') throw new Error('restore drill quick_check failed');
 console.log('OK: clean-host restore drill прошёл');
 NODE
-

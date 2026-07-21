@@ -70,4 +70,3 @@ fi
 restart_service
 trap - EXIT
 echo "$archive"
-
