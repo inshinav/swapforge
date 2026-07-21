@@ -175,12 +175,27 @@ export default function Admin() {
           {loading && overview === null ? (
             <div className="flex justify-center py-10"><Spinner /></div>
           ) : overview && (
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-              <Stat label="пользователей" value={String(overview.summary.users)} />
-              <Stat label="на балансах" value={money(overview.summary.totalBalanceUsd)} accent />
-              <Stat label="зарезервировано" value={money(overview.summary.heldUsd)} />
-              <Stat label="сейчас в работе" value={String(overview.summary.activeRenders)} accent={overview.summary.activeRenders > 0} />
-              <Stat label="готовых роликов" value={String(overview.summary.completedRenders)} />
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                <Stat label="пользователей" value={String(overview.summary.users)} />
+                <Stat label="на балансах" value={money(overview.summary.totalBalanceUsd)} accent />
+                <Stat label="зарезервировано" value={money(overview.summary.heldUsd)} />
+                <Stat label="сейчас в работе" value={String(overview.summary.activeRenders)} accent={overview.summary.activeRenders > 0} />
+                <Stat label="готовых роликов" value={String(overview.summary.completedRenders)} />
+              </div>
+              <div
+                role="status"
+                aria-live="polite"
+                className={`rounded-xl border px-3 py-2 text-xs ${
+                  overview.operations.alerts.length
+                    ? 'border-warn/40 bg-warn/5 text-warn'
+                    : 'border-ok/30 bg-ok/5 text-ok'
+                }`}
+              >
+                {overview.operations.alerts.length
+                  ? overview.operations.alerts.join(' · ')
+                  : `Система в норме · платежей в ожидании ${overview.operations.pendingPayments} · диск ${overview.operations.diskUsedPct}%`}
+              </div>
             </div>
           )}
 

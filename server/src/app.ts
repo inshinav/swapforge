@@ -1,5 +1,6 @@
 // Сборка Fastify-приложения без listen/статики — общая для main() и тестов
 // (тесты гоняют app.inject() против реальных роутов с реальной auth-цепочкой).
+import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
 import { config } from './config';
@@ -14,6 +15,11 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
     // Порт слушает loopback. Доверяем X-Forwarded-For только от локального nginx;
     // прямой клиент не может назначить себе произвольный IP заголовком.
     trustProxy: trustNginxProxy,
+    genReqId: (raw) => {
+      const incoming = raw.headers['x-request-id'];
+      if (typeof incoming === 'string' && /^[A-Za-z0-9._:-]{8,80}$/.test(incoming)) return incoming;
+      return randomUUID();
+    },
   });
 
   await app.register(multipart, {
@@ -25,6 +31,10 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   });
 
   // Аутентификация на каждом запросе + default-deny для /api/* (см. middleware.ts)
+  app.addHook('onRequest', (req, reply, done) => {
+    reply.header('x-request-id', req.id);
+    done();
+  });
   app.addHook('onRequest', attachAuth);
   app.addHook('preHandler', requireApiAuth);
 

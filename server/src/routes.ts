@@ -54,6 +54,7 @@ import type { HealthInfo, PricingInfo } from '../../shared/api-types';
 import type { Analysis } from '../../shared/analysis';
 import { referenceAuditMessage, referenceAuditPause } from './engine/reference-audit';
 import { MAX_PROJECT_REFS, ReferenceLimitError, loadReferenceManifest } from './engine/reference-manifest';
+import { readyProviders } from './billing/provider';
 
 const BUSY = BUSY_STATUSES;
 const VIDEO_MIME: Record<string, string> = {
@@ -190,6 +191,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const base: HealthInfo = {
       ok: true,
       version: config.version,
+      releaseSha: config.releaseSha || null,
       tgBot: config.telegramBotName || null,
       devAuth: config.devAuthBypass && !config.isProduction,
     };
@@ -206,6 +208,43 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       storageCapBytes: config.storageCapBytes,
       diskUsedPct: Math.round((dataBytes / config.storageCapBytes) * 100),
     };
+  });
+
+  // Только для локального deploy/readiness probe. nginx не выпускает этот URL наружу.
+  app.get('/api/ready', async (req, reply) => {
+    let database = true;
+    let storage = true;
+    let ownerCount = 0;
+    try {
+      const db = getDb();
+      db.prepare('SELECT 1').get();
+      ownerCount = (db.prepare(`SELECT COUNT(*) AS n FROM users WHERE role='owner'`).get() as { n: number }).n;
+    } catch {
+      database = false;
+    }
+    try {
+      fs.mkdirSync(config.dataDir, { recursive: true });
+      fs.accessSync(config.dataDir, fs.constants.R_OK | fs.constants.W_OK);
+    } catch {
+      storage = false;
+    }
+    if (ffmpegOk === null) ffmpegOk = await ffmpegAvailable();
+    const checks = {
+      database,
+      storage,
+      ffmpeg: ffmpegOk === true,
+      auth: config.devAuthBypass || (!!config.telegramBotName && !!config.telegramBotToken),
+      owner: config.devAuthBypass ? ownerCount <= 1 : ownerCount === 1,
+      ai: llmKeyPresent() && !!config.wavespeedApiKey,
+      billing: readyProviders().length > 0,
+    };
+    const failed = Object.entries(checks).filter(([, value]) => !value).map(([name]) => name);
+    if (failed.length) req.log.warn({ requestId: req.id, failed }, 'readiness failed');
+    return reply.code(failed.length ? 503 : 200).send({
+      ok: failed.length === 0,
+      version: config.version,
+      releaseSha: config.releaseSha || null,
+    });
   });
 
   // ── Цены и расход (USD оператора — только владельцу) ─────────────────────

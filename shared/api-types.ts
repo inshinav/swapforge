@@ -334,6 +334,16 @@ export interface AdminOverview {
     activeRenders: number;
     completedRenders: number;
   };
+  operations: {
+    pendingPayments: number;
+    quarantinedPayments: number;
+    staleJobs: number;
+    stuckRenders: number;
+    staleHolds: number;
+    failedJobs24h: number;
+    diskUsedPct: number;
+    alerts: string[];
+  };
   users: AdminUserOverview[];
 }
 
@@ -358,6 +368,7 @@ export interface UsageSummary {
 export interface HealthInfo {
   ok: boolean;
   version: string;
+  releaseSha?: string | null;
   /** username auth-бота для Login Widget (null = не сконфигурирован). */
   tgBot: string | null;
   /** Дев-режим входа без Telegram (никогда не true в prod). */

@@ -41,6 +41,8 @@ export const config = {
   maxImageBytes: Number(env('MAX_IMAGE_MB', '20')) * 1024 ** 2,
   maxFrames: Number(env('MAX_FRAMES', '40')),
   version: '2.0.0',
+  /** Exact immutable release SHA written by deploy.sh; empty in local development. */
+  releaseSha: env('SWAPFORGE_RELEASE_SHA'),
   // ── v4: мультитенант ──────────────────────────────────────────────────────
   isProduction: env('NODE_ENV') === 'production',
   /** telegram_id владельца: role='owner', unmetered; обязателен в prod. */

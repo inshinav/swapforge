@@ -15,6 +15,8 @@ declare module 'fastify' {
 /** Публичные /api/*-пути: auth-вход + минимальный health. Вебхуки/legal добавятся этапами. */
 export const PUBLIC_API_PATHS = new Set<string>([
   '/api/health',
+  // Readiness снаружи закрыт nginx; прямой loopback-check деплоя идёт без cookie.
+  '/api/ready',
   '/api/auth/telegram',
   '/api/auth/dev-login',
   // logout чистит СВОЮ httpOnly-cookie — работает и с протухшей сессией

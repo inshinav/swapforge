@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { AdminOverview, AdminUserOverview } from '../../../shared/api-types';
 import { requireOwner } from '../auth/middleware';
+import { config } from '../config';
 import { getDb } from '../db';
+import { dataUsageBytes } from '../storage';
 
 const ACTIVE_GENERATION_STATUSES = ['queued', 'uploading_assets', 'submitted', 'rendering', 'downloading'];
 
@@ -60,8 +62,9 @@ function toAdminUser(row: AdminUserRow): AdminUserOverview {
 
 export function registerAdminRoutes(app: FastifyInstance): void {
   app.get('/api/admin/overview', { preHandler: requireOwner }, async (): Promise<AdminOverview> => {
+    const db = getDb();
     const activePlaceholders = ACTIVE_GENERATION_STATUSES.map(() => '?').join(',');
-    const rows = getDb()
+    const rows = db
       .prepare(
         `WITH ledger_stats AS (
            SELECT user_id, COALESCE(SUM(delta_credits), 0) AS balance_cents,
@@ -117,6 +120,37 @@ export function registerAdminRoutes(app: FastifyInstance): void {
       .all(...ACTIVE_GENERATION_STATUSES) as unknown as AdminUserRow[];
 
     const users = rows.map(toAdminUser);
+    const count = (sql: string, ...params: string[]) =>
+      (db.prepare(sql).get(...params) as { n: number }).n;
+    const pendingPayments = count(
+      `SELECT COUNT(*) AS n FROM payment_intents WHERE status IN ('creating','pending','paid')`,
+    );
+    const quarantinedPayments = count(
+      `SELECT COUNT(*) AS n FROM payment_intents WHERE status='quarantined'`,
+    );
+    const staleJobs = count(
+      `SELECT COUNT(*) AS n FROM jobs WHERE status='running' AND lease_expires_at < datetime('now')`,
+    );
+    const stuckRenders = count(
+      `SELECT COUNT(*) AS n FROM generations
+        WHERE status IN ('queued','uploading_assets','submitted','rendering','downloading')
+          AND created_at < datetime('now','-45 minutes')`,
+    );
+    const staleHolds = count(
+      `SELECT COUNT(*) AS n FROM credit_holds
+        WHERE status='open' AND created_at < datetime('now','-30 minutes')`,
+    );
+    const failedJobs24h = count(
+      `SELECT COUNT(*) AS n FROM jobs
+        WHERE status='failed' AND finished_at >= datetime('now','-24 hours')`,
+    );
+    const diskUsedPct = Math.round((dataUsageBytes() / config.storageCapBytes) * 100);
+    const alerts: string[] = [];
+    if (quarantinedPayments) alerts.push(`Платежи в карантине: ${quarantinedPayments}`);
+    if (staleJobs) alerts.push(`Просроченные lease задач: ${staleJobs}`);
+    if (stuckRenders) alerts.push(`Рендеры без terminal state >45 мин: ${stuckRenders}`);
+    if (staleHolds) alerts.push(`Открытые резервы >30 мин: ${staleHolds}`);
+    if (diskUsedPct >= 80) alerts.push(`Хранилище заполнено на ${diskUsedPct}%`);
     return {
       generatedAt: new Date().toISOString(),
       summary: users.reduce(
@@ -129,6 +163,16 @@ export function registerAdminRoutes(app: FastifyInstance): void {
         }),
         { users: 0, totalBalanceUsd: 0, heldUsd: 0, activeRenders: 0, completedRenders: 0 },
       ),
+      operations: {
+        pendingPayments,
+        quarantinedPayments,
+        staleJobs,
+        stuckRenders,
+        staleHolds,
+        failedJobs24h,
+        diskUsedPct,
+        alerts,
+      },
       users,
     };
   });
