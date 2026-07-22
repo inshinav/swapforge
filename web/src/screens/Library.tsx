@@ -106,6 +106,7 @@ function LibCard({
             {p.worked === true && <Tag tone="ok">✓ сработало</Tag>}
             {p.worked === false && <Tag tone="danger">артефакты</Tag>}
             {busy && <Tag tone="lime">{STATUS_RU[p.status]}</Tag>}
+            {p.renderActive && <Tag tone="lime">рендерится…</Tag>}
             {p.status === 'error' && <Tag tone="danger">ошибка</Tag>}
           </div>
           {p.videoPurged && (

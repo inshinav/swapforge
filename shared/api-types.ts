@@ -240,6 +240,8 @@ export interface ProjectSummary {
   videoPurged: boolean;
   promptVersions: number;
   latestRender: { generationId: string; file: string; rating: number | null } | null;
+  /** Прямо сейчас идёт удалённый рендер (или стоит в очереди) — для параллельных запусков. */
+  renderActive: boolean;
 }
 
 export interface ProjectFull extends ProjectSummary {

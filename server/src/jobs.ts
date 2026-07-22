@@ -1,7 +1,10 @@
-// Durable последовательная очередь локальных CPU/LLM-стадий. Удалённые рендеры
-// живут отдельно: generations сохраняет concurrency=3 и собственное восстановление.
+// Durable очередь локальных CPU/LLM-стадий: до localJobConcurrency джобов
+// ПАРАЛЛЕЛЬНО (разные проекты — уникальный индекс не даёт проекту двух джобов),
+// внутри проекта порядок сохраняется. Удалённые рендеры живут отдельно:
+// generations несёт свою конкурентность (renderConcurrency) и восстановление.
 import { randomUUID } from 'node:crypto';
 import { getDb } from './db';
+import { config } from './config';
 import { tx } from './billing/credits';
 
 export const BUSY_STATUSES = new Set(['storyboarding', 'analyzing', 'generating', 'startframing']);
@@ -32,7 +35,7 @@ interface JobRow {
 
 const factories = new Map<string, DurableFactory>();
 const runtimeJobs = new Map<string, ProjectJobOptions>();
-let running = false;
+let activeRuns = 0;
 let pausedForTests = false;
 const idleWaiters = new Set<() => void>();
 
@@ -52,7 +55,7 @@ function activeCount(): number {
 }
 
 function notifyIdle(): void {
-  if (running || activeCount() > 0) return;
+  if (activeRuns > 0 || activeCount() > 0) return;
   for (const resolve of idleWaiters) resolve();
   idleWaiters.clear();
 }
@@ -179,19 +182,26 @@ async function execute(row: JobRow): Promise<void> {
   }
 }
 
-async function pump(): Promise<void> {
-  if (running || pausedForTests) return;
-  running = true;
-  try {
-    for (;;) {
-      const row = claimNext();
-      if (!row) break;
-      await execute(row);
-    }
-  } finally {
-    running = false;
-    notifyIdle();
+/**
+ * Насос: добирает джобы в свободные слоты (до localJobConcurrency параллельно).
+ * claimNext атомарен, а уникальный индекс jobs(project_id) WHERE queued/running
+ * гарантирует «один джоб на проект» — параллельные слоты всегда о РАЗНЫХ проектах.
+ */
+function pump(): void {
+  if (pausedForTests) return;
+  while (activeRuns < config.localJobConcurrency) {
+    const row = claimNext();
+    if (!row) break;
+    activeRuns++;
+    void execute(row)
+      .catch((e) => console.error(`[jobs] execute упал (${row.id}):`, e instanceof Error ? e.message : e))
+      .finally(() => {
+        activeRuns--;
+        pump(); // слот освободился — добираем следующий
+        notifyIdle();
+      });
   }
+  notifyIdle();
 }
 
 export function enqueueProjectJob(opts: ProjectJobOptions): void {
@@ -204,7 +214,7 @@ export function enqueueProjectJob(opts: ProjectJobOptions): void {
     db.prepare(`UPDATE projects SET status=?, error=NULL WHERE id=?`).run(opts.busyStatus, opts.projectId);
   });
   runtimeJobs.set(id, opts);
-  void pump();
+  pump();
 }
 
 /** Boot recovery: this process is the sole local worker, so old leases can be reclaimed now. */
@@ -217,18 +227,18 @@ export function resumeDurableJobs(): number {
       )
       .run().changes,
   );
-  void pump();
+  pump();
   return recovered;
 }
 
 export function waitForJobsIdle(): Promise<void> {
-  if (!running && activeCount() === 0) return Promise.resolve();
+  if (activeRuns === 0 && activeCount() === 0) return Promise.resolve();
   return new Promise((resolve) => idleWaiters.add(resolve));
 }
 
 export function _pauseJobsForTests(paused: boolean): void {
   pausedForTests = paused;
-  if (!paused) void pump();
+  if (!paused) pump();
 }
 
 export function _discardQueuedJobsForTests(): void {

@@ -85,6 +85,8 @@ export const config = {
   userQueueCap: Number(env('USER_QUEUE_CAP', '2')),
   /** Одновременные удалённые рендеры разных проектов; остальные остаются FIFO. */
   renderConcurrency: Math.max(1, Math.min(8, Number(env('RENDER_CONCURRENCY', '3')) || 3)),
+  /** Параллельные локальные стадии (раскадровка/анализ/промты/кадр) РАЗНЫХ проектов. */
+  localJobConcurrency: Math.max(1, Math.min(4, Number(env('LOCAL_JOB_CONCURRENCY', '2')) || 2)),
   /** Дневные анти-абьюз капы (UTC-сутки). */
   limitProjectsPerDay: Number(env('LIMIT_PROJECTS_PER_DAY', '20')),
   limitClassifyPerDay: Number(env('LIMIT_CLASSIFY_PER_DAY', '60')),

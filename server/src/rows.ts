@@ -88,6 +88,12 @@ export function toSummary(p: DbProject): ProjectSummary {
   const maxV = getDb()
     .prepare(`SELECT COALESCE(MAX(version), 0) AS v FROM prompts WHERE project_id = ?`)
     .get(p.id) as { v: number };
+  const renderActive = !!getDb()
+    .prepare(
+      `SELECT 1 FROM generations WHERE project_id = ?
+        AND status IN ('queued','uploading_assets','submitted','rendering','downloading') LIMIT 1`,
+    )
+    .get(p.id);
   return {
     id: p.id,
     title: p.title,
@@ -101,6 +107,7 @@ export function toSummary(p: DbProject): ProjectSummary {
     videoPurged: p.video_purged === 1,
     promptVersions: maxV.v,
     latestRender: latestRenderOf(p.id),
+    renderActive,
   };
 }
 

@@ -66,6 +66,48 @@ describe('durable local jobs', () => {
     expect(getDb().prepare(`SELECT status FROM projects WHERE id=?`).get(projectId)).toEqual({ status: 'analyzed' });
   });
 
+  it('джобы РАЗНЫХ проектов идут параллельно (до localJobConcurrency), третий ждёт слот', async () => {
+    const db = getDb();
+    const ids = ['par-a', 'par-b', 'par-c'];
+    for (const id of ids) db.prepare(`INSERT INTO projects (id, title) VALUES (?, 'p')`).run(id);
+    let concurrent = 0;
+    let peak = 0;
+    const gates = new Map<string, () => void>();
+    const job = (projectId: string) => ({
+      projectId,
+      label: 'test-parallel',
+      busyStatus: 'analyzing',
+      doneStatus: 'analyzed',
+      errorFallbackStatus: 'storyboarded',
+      fn: async () => {
+        concurrent++;
+        peak = Math.max(peak, concurrent);
+        await new Promise<void>((resolve) => gates.set(projectId, resolve));
+        concurrent--;
+      },
+    });
+    enqueueProjectJob(job('par-a'));
+    enqueueProjectJob(job('par-b'));
+    enqueueProjectJob(job('par-c'));
+    // два слота заняты сразу, третий проект остаётся queued
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(peak).toBe(2);
+    expect(getDb().prepare(`SELECT status FROM jobs WHERE project_id='par-c'`).get()).toEqual({
+      status: 'queued',
+    });
+    gates.get('par-a')!();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    gates.get('par-b')!();
+    // после освобождения слота третий добрался и выполняется
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    gates.get('par-c')!();
+    await waitForJobsIdle();
+    expect(peak).toBe(2); // кап конкуренции не пробит
+    for (const id of ids) {
+      expect(getDb().prepare(`SELECT status FROM projects WHERE id=?`).get(id)).toEqual({ status: 'analyzed' });
+    }
+  });
+
   it('allows only one active local job per project', () => {
     const projectId = 'one-active-project';
     getDb().prepare(`INSERT INTO projects (id, title) VALUES (?, 'p')`).run(projectId);

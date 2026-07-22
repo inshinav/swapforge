@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MAX_PROJECT_REFS, type ProjectFull, type RefInfo } from '@shared/api-types';
+import { MAX_PROJECT_REFS, type ProjectFull, type ProjectSummary, type RefInfo } from '@shared/api-types';
 import { REF_ROLES, type RefRole } from '@shared/taxonomy';
 import { api, csrfToken } from '../api';
 import { Button, Card, ErrorNote, SectionTitle, Spinner, Tag } from '../ui';
@@ -85,6 +85,66 @@ function uploadVideo(file: File, onProgress: (pct: number) => void): Promise<{ i
   });
 }
 
+/**
+ * Параллельные генерации: полоса всех проектов пользователя, которые прямо сейчас
+ * в работе (локальные стадии или рендер). Клик — переключение между ними; текущий
+ * подсвечен. Пока один ролик генерится, можно спокойно запускать следующий.
+ */
+function ActiveRunsStrip({
+  currentId,
+  onOpen,
+}: {
+  currentId: string | null;
+  onOpen: (id: string) => void;
+}) {
+  const [runs, setRuns] = useState<ProjectSummary[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      void api
+        .projects()
+        .then((list) => {
+          if (alive) setRuns(list.filter((p) => p.renderActive || BUSY.includes(p.status)));
+        })
+        .catch(() => {
+          /* полоса вторична — экран покажет свою ошибку */
+        });
+    load();
+    const timer = window.setInterval(load, 6_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [currentId]);
+  if (runs.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-lime/25 bg-lime/5 px-3 py-2 text-xs">
+      <span className="font-bold shrink-0">⚡ В работе: {runs.length}</span>
+      {runs.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          onClick={() => {
+            if (p.id !== currentId) onOpen(p.id);
+          }}
+          className={`min-h-9 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-semibold transition-colors ${
+            p.id === currentId
+              ? 'border-lime/60 bg-lime/10 text-lime'
+              : 'border-line bg-panel hover:border-lime/50 hover:text-lime'
+          }`}
+          title={p.id === currentId ? 'этот проект открыт' : 'открыть этот проект'}
+        >
+          <Spinner size={10} />
+          <span className="max-w-36 truncate">{p.title}</span>
+        </button>
+      ))}
+      <span className="text-dim ml-auto hidden md:inline">
+        генерации идут параллельно — можно запускать следующий ролик
+      </span>
+    </div>
+  );
+}
+
 export default function NewSwap({
   projectId,
   onProjectCreated,
@@ -103,10 +163,12 @@ export default function NewSwap({
   guided?: boolean;
 }) {
   const { proj, err, reload } = useProject(projectId);
+  const strip = <ActiveRunsStrip currentId={projectId} onOpen={onProjectCreated} />;
 
   if (!projectId) {
     return (
       <div className="space-y-4">
+        {strip}
         {!guided && <QuickPath />}
         <UploadZone onCreated={onProjectCreated} guided={guided} />
       </div>
@@ -116,6 +178,7 @@ export default function NewSwap({
     // проект удалили — забываем его и показываем загрузку
     return (
       <div className="space-y-4">
+        {strip}
         <ErrorNote text="Этот проект удалён — начни новый ролик" />
         <UploadZone onCreated={onProjectCreated} guided={guided} />
       </div>
@@ -130,15 +193,18 @@ export default function NewSwap({
     );
 
   return (
-    <ProjectView
-      proj={proj}
-      reload={reload}
-      onProjectCreated={onProjectCreated}
-      onOpenModels={onOpenModels}
-      onOpenBilling={onOpenBilling}
-      owner={owner}
-      previewAsUser={previewAsUser}
-    />
+    <div className="space-y-4">
+      {strip}
+      <ProjectView
+        proj={proj}
+        reload={reload}
+        onProjectCreated={onProjectCreated}
+        onOpenModels={onOpenModels}
+        onOpenBilling={onOpenBilling}
+        owner={owner}
+        previewAsUser={previewAsUser}
+      />
+    </div>
   );
 }
 
@@ -379,7 +445,8 @@ function VideoSection({
           )}
         </div>
         <div className="flex-1 min-w-0">
-          {m && (
+          {/* Number.isFinite: битые/легаси метаданные не должны ронять весь экран белым */}
+          {m && Number.isFinite(m.durationSec) && (
             <div className="flex flex-wrap gap-2 mb-4">
               <Tag tone={longWarn ? 'warn' : 'mut'}>
                 {m.durationSec.toFixed(1)} с{longWarn ? ' · длинный ролик соберём автоматически' : ''}
