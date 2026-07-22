@@ -52,7 +52,7 @@ describe('доктрина v2: opener и режимные блоки', () => {
     expect(DOCTRINE_SYSTEM).toContain('automatically prepends "Edit the input video."');
     expect(DOCTRINE_SYSTEM).toContain('source video is the sole authority for motion');
     expect(DOCTRINE_SYSTEM).toContain('Never address images by number');
-    expect(DOCTRINE_SYSTEM).toContain('does NOT generate or attach a start frame');
+    expect(DOCTRINE_SYSTEM).toContain('start frame is ALWAYS generated and passed as the first reference image');
   });
 
   it('любой формат: роль из анализа, лишние рефы исключены, чужие руки сохраняются', () => {
@@ -70,9 +70,9 @@ describe('доктрина v2: opener и режимные блоки', () => {
     expect(DOCTRINE_SYSTEM).toContain('Never mention resolutions, aspect ratios or formats');
   });
 
-  it('imagePrompt остаётся только необязательной owner-диагностикой', () => {
-    expect(DOCTRINE_SYSTEM).toContain('optional owner diagnostic only');
-    expect(DOCTRINE_SYSTEM).toContain('not part of the normal paid render path');
+  it('imagePrompt — owner-диагностика; платный кадр идёт по детерминированному шаблону', () => {
+    expect(DOCTRINE_SYSTEM).toContain('owner diagnostic');
+    expect(DOCTRINE_SYSTEM).toContain('deterministic service template');
     expect(DOCTRINE_SYSTEM).toContain('AI-generated virtual characters');
     expect(DOCTRINE_SYSTEM).toContain('Keep it under 100 words');
   });
@@ -122,7 +122,7 @@ describe('доктрина v2: opener и режимные блоки', () => {
 describe('энфорсмент длины промтов кодом', () => {
   it('wordCount и компресс-запрос: verbatim-строки и бюджет в инструкции', () => {
     expect(wordCount('  one   two\nthree ')).toBe(3);
-    expect(VIDEO_PROMPT_MAX_WORDS).toBe(110);
+    expect(VIDEO_PROMPT_MAX_WORDS).toBe(180);
     const req = buildCompressionRequest({
       videoPrompt: Array(300).fill('word').join(' '),
       imagePrompt: 'img prompt',

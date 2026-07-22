@@ -13,6 +13,7 @@ import { config } from '../config';
 import { runAnalysis } from './analyze';
 import { runGeneration, buildSeedanceParams, type IterationCtx } from './generate';
 import { generateStartFrame } from './startframe';
+import { buildStartFramePrompt, selectVideoEditRefs } from './video-edit-contract';
 import { nextStageOf, parseFlags, snapshotProject, type FlowFlags } from './orchestrator';
 import { startRender } from './render';
 import { releaseFlowHoldOnFailure } from '../billing/flow';
@@ -187,7 +188,9 @@ export function startGeneration(projectId: string, opts: StartGenerationOpts): v
 
 /**
  * Старт-кадр в очереди (для one-click). В авто-флоу кадр всегда 9:16 (1152x2048):
- * выход рендера фиксирован 9:16, и «reference image 1 = точный первый кадр» обязан совпадать.
+ * выход рендера фиксирован 9:16, и «первый референс = точный первый кадр» обязан совпадать.
+ * Промт детерминированный (buildStartFramePrompt): строгий in-place edit по рецепту
+ * Alex — LLM-imagePrompt остаётся в БД только как диагностика владельца.
  */
 function startframeJob(projectId: string, version: number): ProjectJobOptions {
   return {
@@ -201,17 +204,23 @@ function startframeJob(projectId: string, version: number): ProjectJobOptions {
       const db = getDb();
       const p = loadProject(projectId);
       if (!p.meta_json) throw new Error('Нет метаданных видео');
-      const promptRow = db
-        .prepare(
-          `SELECT text FROM prompts WHERE project_id = ? AND version = ? AND kind = 'image' LIMIT 1`,
-        )
-        .get(projectId, version) as { text: string } | undefined;
-      if (!promptRow) throw new Error('Нет imagePrompt этой версии — сгенерируй промты');
+      const versionExists = db
+        .prepare(`SELECT 1 FROM prompts WHERE project_id = ? AND version = ? LIMIT 1`)
+        .get(projectId, version);
+      if (!versionExists) throw new Error('Нет промтов этой версии — сгенерируй промты');
       const refs = loadRefs(projectId);
       if (refs.length === 0) throw new Error('Нет референсов');
-      await generateStartFrame(projectId, version, promptRow.text, refs, JSON.parse(p.meta_json), {
-        forceNineSixteen: true,
-      });
+      const analysis = p.analysis_json ? (JSON.parse(p.analysis_json) as Analysis) : null;
+      const flags = parseFlags(p.flags_json);
+      const useRefs = analysis ? selectVideoEditRefs(analysis, refs) : refs;
+      await generateStartFrame(
+        projectId,
+        version,
+        buildStartFramePrompt(analysis, refs, flags),
+        useRefs,
+        JSON.parse(p.meta_json),
+        { forceNineSixteen: true },
+      );
     },
     onSuccess: () => advanceFlow(projectId),
     onError: (msg) => releaseFlowHoldOnFailure(projectId, null, `стадия упала: ${msg.slice(0, 120)}`),

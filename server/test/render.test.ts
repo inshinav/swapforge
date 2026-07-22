@@ -177,10 +177,10 @@ describe('рендер: happy path', () => {
     expect(uploadLog).toEqual(['source.mp4', 'start_v1_2026-07-16T00-00-00.png', 'ref_a.jpg']);
     const payload = submitLog[0]!;
     expect(String(payload.prompt)).toContain('Replace only');
-    expect(String(payload.prompt)).toContain('original live-action realism');
+    expect(String(payload.prompt)).toContain('original live footage');
     // LLM-часть промта нумерацию не пишет; серверная якорная строка добавляется после
-    expect(String(payload.prompt)).toContain('exact first frame of this edit');
-    expect(String(payload.prompt)).toContain('pixel-stable');
+    expect(String(payload.prompt)).toContain('exact starting frame of this edit');
+    expect(String(payload.prompt)).toContain('No stiff or robotic motion');
     expect(payload.aspect_ratio).toBe('9:16');
     expect(payload.resolution).toBe('720p');
     expect(payload.generate_audio).toBe(false); // дефолт: дорожка исходника (21.07.2026)

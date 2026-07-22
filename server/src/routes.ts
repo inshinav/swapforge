@@ -41,6 +41,7 @@ import {
   retryGeneration,
   startRender,
 } from './engine/render';
+import { buildStartFramePrompt, selectVideoEditRefs } from './engine/video-edit-contract';
 import {
   FINISH_MODES,
   FinishGateError,
@@ -1328,14 +1329,24 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const version =
       body.version ??
       (db.prepare(`SELECT COALESCE(MAX(version), 0) AS v FROM prompts WHERE project_id = ?`).get(id) as { v: number }).v;
-    const promptRow = db
-      .prepare(`SELECT text FROM prompts WHERE project_id = ? AND version = ? AND kind = 'image' LIMIT 1`)
-      .get(id, version) as { text: string } | undefined;
-    if (!promptRow) return bad(reply, 409, 'Сначала сгенерируй промты (нужен imagePrompt)');
+    const versionExists = db
+      .prepare(`SELECT 1 FROM prompts WHERE project_id = ? AND version = ? LIMIT 1`)
+      .get(id, version);
+    if (!versionExists) return bad(reply, 409, 'Сначала сгенерируй промты');
     const refs = loadReferenceManifest(id).refs;
     if (refs.length === 0) return bad(reply, 409, 'Нет референсов');
+    // Кадр всегда по детерминированному канону (рецепт Alex): строгий in-place edit;
+    // LLM-imagePrompt в БД — только диагностика владельца
+    const analysis = p.analysis_json ? (JSON.parse(p.analysis_json) as Analysis) : null;
+    const useRefs = analysis ? selectVideoEditRefs(analysis, refs) : refs;
     try {
-      const file = await generateStartFrame(id, version, promptRow.text, refs, JSON.parse(p.meta_json));
+      const file = await generateStartFrame(
+        id,
+        version,
+        buildStartFramePrompt(analysis, refs, parseFlags(p.flags_json)),
+        useRefs,
+        JSON.parse(p.meta_json),
+      );
       return { file, version };
     } catch (e) {
       return bad(reply, 502, e instanceof Error ? e.message : String(e));

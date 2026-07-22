@@ -731,7 +731,7 @@ async function runUploadAndSubmit(
   const fresh = loadGen(genId);
   if (!fresh || fresh.status !== 'uploading_assets') return;
 
-  const videoPrompt = `${finalizeVideoEditPrompt(promptRow.text, analysis, refs, parseFlags(p.flags_json))}\n\n${START_FRAME_ANCHOR}`;
+  const videoPrompt = finalizeVideoEditPrompt(promptRow.text, analysis, refs, parseFlags(p.flags_json));
   const predictionId = await ws.submitVideoEdit({
     prompt: videoPrompt,
     video: assets.video.url,
@@ -776,18 +776,13 @@ function longFile(projectId: string, genId: string, file: string): string {
 }
 
 /**
- * Серверная якорная строка (добавляется ПОСЛЕ finalize — LLM её не пишет):
- * первый референс = точный первый кадр редактирования. Пиксельная стабильность
- * лица/экипировки/надписей (текст на технике без якоря плывёт), движение — из исходника.
+ * Строка «первый референс = стартовый кадр» уже входит в детерминированный канон
+ * (video-edit-contract). Сегментам 1+ добавляется только короткое пояснение, что их
+ * стартовый кадр — граница предыдущей готовой части (бесшовный стык).
  */
-const START_FRAME_ANCHOR =
-  'The first supplied reference image is the exact first frame of this edit: start on it and keep the swapped identity, outfit, vehicle design and every printed text, logo and number pixel-stable; follow the source video for all motion, camera, timing and interactions.';
-
 function continuationVideoPrompt(base: string, segment: LongSegmentState, count: number): string {
-  if (segment.index === 0) {
-    return `${base}\n\nPart ${segment.index + 1}/${count}: ${START_FRAME_ANCHOR}`;
-  }
-  return `${base}\n\nContinuity ${segment.index + 1}/${count}: the first supplied reference is the exact boundary frame from the previous output. Use it only to keep appearance continuous; follow this source segment for all motion, camera, timing and interactions.`;
+  if (segment.index === 0) return base;
+  return `${base}\n\nContinuity ${segment.index + 1}/${count}: the starting frame comes from the previous part's last frame — keep the appearance seamless across the cut.`;
 }
 
 function delay(ms: number): Promise<void> {
