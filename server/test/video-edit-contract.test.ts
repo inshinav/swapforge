@@ -7,7 +7,11 @@ import {
   buildStartFramePrompt,
   finalizeVideoEditPrompt,
   furAccents,
+  locationPhrase,
+  mainSubjectPhrase,
   selectVideoEditRefs,
+  vehicleBrandFromRefs,
+  vehicleNoun,
   VIDEO_EDIT_PROMPT_MAX_WORDS,
 } from '../src/engine/video-edit-contract';
 
@@ -81,8 +85,8 @@ describe('direct video-edit contract', () => {
     expect(countWords(prompt)).toBeLessThanOrEqual(VIDEO_EDIT_PROMPT_MAX_WORDS);
     expect(prompt).toContain('exactly as in the source video');
     expect(prompt).toContain('exact starting frame of this edit');
-    expect(prompt).toContain('Replace only the main person');
-    expect(prompt).toContain('replace only the matching vehicle');
+    expect(prompt).toContain('Replace only the main rider');
+    expect(prompt).toContain('replace only the motorcycle');
     expect(prompt).toContain('consistent and recognizable from every angle');
     expect(prompt).toContain('No stiff or robotic motion');
     expect(prompt).toContain('original live footage');
@@ -93,7 +97,7 @@ describe('direct video-edit contract', () => {
   it('техника без подтверждения в кадре не упоминается в промте вовсе', () => {
     const prompt = buildMinimalVideoEditPrompt(analysis([]), refs);
     expect(prompt).not.toContain('vehicle');
-    expect(prompt).toContain('Replace only the main person');
+    expect(prompt).toContain('Replace only the main rider');
   });
 
   it('finalize ВСЕГДА возвращает детерминированный канон — LLM-текст не идёт провайдеру', () => {
@@ -128,13 +132,54 @@ describe('direct video-edit contract', () => {
   });
 });
 
+describe('подстройка канона под ролик и референсы', () => {
+  it('роль субъекта, слово техники и локация берутся из анализа ролика', () => {
+    expect(mainSubjectPhrase(analysis(['left']))).toBe('main rider');
+    expect(vehicleNoun(analysis(['left']))).toBe('motorcycle');
+    expect(locationPhrase(analysis(['left']))).toBe('street');
+    const prompt = buildMinimalVideoEditPrompt(analysis(['left']), refs);
+    expect(prompt).toContain('Replace only the main rider');
+    expect(prompt).toContain('replace only the motorcycle');
+    expect(prompt).toContain('Keep the location (street)');
+    expect(prompt).toContain('person and motorcycle consistent');
+  });
+
+  it('бренд замены достаётся из латинских токенов нот vehicle-рефа (даже в русской ноте)', () => {
+    const brandedRefs: RefInfo[] = [
+      refs[0]!,
+      { id: 'bike', idx: 1, role: 'vehicle', file: 'bike.jpg', note: 'чёрный Kawasaki ZX-6R с розовыми дисками' },
+    ];
+    expect(vehicleBrandFromRefs(brandedRefs)).toBe('Kawasaki ZX-6R');
+    expect(vehicleBrandFromRefs(refs)).toBeNull(); // 'red motorcycle' — не бренд
+    const prompt = buildMinimalVideoEditPrompt(analysis(['left']), brandedRefs);
+    expect(prompt).toContain('with the Kawasaki ZX-6R motorcycle from its reference photos');
+  });
+
+  it('без анализа — нейтральные фолбэки, промт остаётся валидным', () => {
+    expect(mainSubjectPhrase(null)).toBe('main person');
+    expect(vehicleNoun(null)).toBe('vehicle');
+    expect(locationPhrase(null)).toBeNull();
+    const prompt = buildMinimalVideoEditPrompt(null, refs);
+    expect(prompt).toContain('Replace only the main person');
+    expect(prompt).not.toContain('()');
+  });
+
+  it('кривые описания субъекта не протаскивают мусор — срез и фолбэк', () => {
+    const noisy = analysis(['left']);
+    noisy.subjects[0]!.description = 'woman in leather jacket, ~60% of frame height (main)';
+    expect(mainSubjectPhrase(noisy)).toBe('original woman in leather jacket');
+    noisy.subjects[0]!.description = '///###';
+    expect(mainSubjectPhrase(noisy)).toBe('main person');
+  });
+});
+
 describe('детерминированный промт старт-кадра', () => {
   it('строгий in-place edit: кадр = закон, меняются только модель и подтверждённая техника', () => {
     const prompt = buildStartFramePrompt(analysis(['left']), refs);
     expect(prompt).toContain('Edit the first attached image');
     expect(prompt).toContain('exact first frame of the source video');
-    expect(prompt).toContain('Replace only the person with the AI-generated virtual character');
-    expect(prompt).toContain('replace only the matching vehicle');
+    expect(prompt).toContain('Replace only the main rider with the AI-generated virtual character');
+    expect(prompt).toContain('replace only the motorcycle');
     expect(prompt).toContain('pixel-faithful');
     expect(prompt).toContain('All attached images depict AI-generated virtual characters.');
   });

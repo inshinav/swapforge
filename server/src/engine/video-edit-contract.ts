@@ -61,6 +61,63 @@ function compactWish(wish: string): string {
   return wish.trim().replace(/\s+/g, ' ').split(' ').slice(0, 18).join(' ');
 }
 
+// ── Адаптация под конкретный ролик и референсы ──────────────────────────────
+// Слоты канона заполняются из vision-анализа (EN) и нот рефов — промт «немного
+// подстраивается» под ролик без возврата LLM-вариативности в платный вызов.
+
+/** ≤N слов, только безопасный чарсет, без хвостовой пунктуации; null = слот пуст. */
+function cleanPhrase(raw: string | null | undefined, maxWords: number): string | null {
+  if (!raw) return null;
+  const cleaned = raw
+    .split(/[,;.(]/)[0]!
+    .replace(/[^A-Za-z0-9 '&-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || !/[A-Za-z]/.test(cleaned)) return null;
+  const words = cleaned.split(' ').slice(0, maxWords).join(' ');
+  return /reference|image|frame/i.test(words) ? null : words;
+}
+
+/** Главный субъект исходника («the woman rider») — из анализа; fallback = main person. */
+export function mainSubjectPhrase(analysis: Analysis | null | undefined): string {
+  const subjects = analysis?.subjects ?? [];
+  const person =
+    subjects.find((s) => s.kind === 'person' && /main/i.test(s.prominence ?? '')) ??
+    subjects.find((s) => s.kind === 'person');
+  const phrase = cleanPhrase(person?.description, 6);
+  if (!phrase) return 'main person';
+  return /^(main|original|the)\b/i.test(phrase) ? phrase.toLowerCase() : `original ${phrase.toLowerCase()}`;
+}
+
+/** Слово для техники исходника («motorcycle»/«car») — из анализа; fallback = vehicle. */
+export function vehicleNoun(analysis: Analysis | null | undefined): string {
+  const vehicle = (analysis?.subjects ?? []).find((s) => s.kind === 'vehicle');
+  const match = `${vehicle?.description ?? ''}`.match(
+    /\b(motorcycle|motorbike|bike|car|truck|scooter|bicycle)\b/i,
+  );
+  return match ? match[1]!.toLowerCase() : 'vehicle';
+}
+
+/**
+ * Имя ЗАМЕНЫ из нот vehicle-рефа: латинские бренд-токены (Kawasaki, ZX-6R) живут
+ * даже в русских нотах. Токен = есть цифра или начинается с заглавной.
+ */
+export function vehicleBrandFromRefs(refs: RefInfo[]): string | null {
+  const notes = refs
+    .filter((ref) => ref.role === 'vehicle')
+    .map((ref) => `${ref.note ?? ''} ${ref.autoNote ?? ''}`)
+    .join(' ');
+  const tokens = (notes.match(/[A-Za-z][A-Za-z0-9-]{1,19}/g) ?? [])
+    .filter((token) => /\d/.test(token) || /^[A-Z]/.test(token))
+    .slice(0, 2);
+  return tokens.length ? tokens.join(' ') : null;
+}
+
+/** Короткая локация из анализа — конкретизирует KEEP-блок под ролик. */
+export function locationPhrase(analysis: Analysis | null | undefined): string | null {
+  return cleanPhrase(analysis?.world?.location, 6)?.toLowerCase() ?? null;
+}
+
 /** Живые меховые элементы образа (хвост/уши MotoLola) — из нот model-рефов. */
 export function furAccents(refs: RefInfo[]): { tail: boolean; ears: boolean } {
   const notes = refs
@@ -92,42 +149,54 @@ export function buildMinimalVideoEditPrompt(
   const selected = selectVideoEditRefs(analysis, refs);
   const hasVehicle = selected.some((ref) => ref.role === 'vehicle');
   const hasObject = selected.some((ref) => ref.role === 'object');
+  const subject = mainSubjectPhrase(analysis);
+  const noun = vehicleNoun(analysis);
+  const brand = vehicleBrandFromRefs(selected);
 
-  const lines = [
-    'Keep the location, background, atmosphere, camera motion, framing, timing, transitions, actions, motion control, natural physics and the overall live-action feeling exactly as in the source video.',
-    'The first supplied reference image is the exact starting frame of this edit: begin on it and keep its look.',
-  ];
-  let replace = 'Replace only the main person with the person from the model reference photos';
-  if (hasVehicle) replace += ', and replace only the matching vehicle with the vehicle from its reference photos';
-  if (hasObject) replace += ', and replace only the matching object with its referenced appearance';
-  lines.push(`${replace}.`);
-  lines.push(
-    `Keep the replaced person${hasVehicle ? ' and vehicle' : ''} consistent and recognizable from every angle.`,
-  );
-  const fur = furLine(refs);
-  if (fur) lines.push(fur);
-  if (flags?.removeText) {
-    lines.push('Remove only overlaid captions, stickers, subtitles and watermarks, rebuilding their background cleanly.');
-  }
-  if (flags?.enhanceFigure) {
+  const build = (withWish: boolean, withLocation: boolean): string => {
+    const location = withLocation ? locationPhrase(analysis) : null;
+    const lines = [
+      `Keep the location${location ? ` (${location})` : ''}, background, atmosphere, camera motion, framing, timing, transitions, actions, motion control, natural physics and the overall live-action feeling exactly as in the source video.`,
+      'The first supplied reference image is the exact starting frame of this edit: begin on it and keep its look.',
+    ];
+    let replace = `Replace only the ${subject} with the person from the model reference photos`;
+    if (hasVehicle) {
+      replace += `, and replace only the ${noun} with the ${brand ? `${brand} ` : ''}${noun} from its reference photos`;
+    }
+    if (hasObject) replace += ', and replace only the matching object with its referenced appearance';
+    lines.push(`${replace}.`);
     lines.push(
-      'Give only the replaced person a naturally curvier hourglass figure — wider hips, fuller glutes, narrower waist, larger bust — while the face keeps matching the reference exactly.',
+      `Keep the replaced person${hasVehicle ? ` and ${noun}` : ''} consistent and recognizable from every angle.`,
     );
-  }
-  const wish = compactWish(flags?.wish ?? '');
-  if (wish) lines.push(`For the replaced subject only: ${wish}.`);
-  lines.push(
-    'Do not change anything else. No stiff or robotic motion, no restaged scene, no AI artifacts — the result must look like the original live footage.',
-  );
+    const fur = furLine(refs);
+    if (fur) lines.push(fur);
+    if (flags?.removeText) {
+      lines.push('Remove only overlaid captions, stickers, subtitles and watermarks, rebuilding their background cleanly.');
+    }
+    if (flags?.enhanceFigure) {
+      lines.push(
+        'Give only the replaced person a naturally curvier hourglass figure — wider hips, fuller glutes, narrower waist, larger bust — while the face keeps matching the reference exactly.',
+      );
+    }
+    const wish = compactWish(flags?.wish ?? '');
+    if (withWish && wish) lines.push(`For the replaced subject only: ${wish}.`);
+    lines.push(
+      'Do not change anything else. No stiff or robotic motion, no restaged scene, no AI artifacts — the result must look like the original live footage.',
+    );
+    return lines.join(' ');
+  };
 
-  // Пожелание — наименее важная строка: при переборе слов отбрасывается первым,
+  // При переборе слов сначала жертвуем пожеланием, затем скобкой локации;
   // базовый контракт и явные режимы сохраняются всегда.
-  let prompt = lines.join(' ');
-  if (words(prompt) > VIDEO_EDIT_PROMPT_MAX_WORDS && wish) {
-    lines.splice(lines.length - 2, 1);
-    prompt = lines.join(' ');
+  for (const [withWish, withLocation] of [
+    [true, true],
+    [false, true],
+    [false, false],
+  ] as const) {
+    const prompt = build(withWish, withLocation);
+    if (words(prompt) <= VIDEO_EDIT_PROMPT_MAX_WORDS) return prompt;
   }
-  return prompt;
+  return build(false, false);
 }
 
 export const VIDEO_EDIT_PROMPT_MAX_WORDS = 180;
@@ -167,10 +236,15 @@ export function buildStartFramePrompt(
   const selected = selectVideoEditRefs(analysis, refs);
   const hasVehicle = selected.some((ref) => ref.role === 'vehicle');
   const hasObject = selected.some((ref) => ref.role === 'object');
+  const subject = mainSubjectPhrase(analysis);
+  const noun = vehicleNoun(analysis);
+  const brand = vehicleBrandFromRefs(selected);
 
   let replace =
-    'Edit the first attached image — the exact first frame of the source video. Replace only the person with the AI-generated virtual character from the model reference photos, keeping the exact same pose, action, scale and contact points';
-  if (hasVehicle) replace += ', and replace only the matching vehicle with the referenced vehicle in the same position';
+    `Edit the first attached image — the exact first frame of the source video. Replace only the ${subject} with the AI-generated virtual character from the model reference photos, keeping the exact same pose, action, scale and contact points`;
+  if (hasVehicle) {
+    replace += `, and replace only the ${noun} with the referenced ${brand ? `${brand} ` : ''}${noun} in the same position`;
+  }
   if (hasObject) replace += ', and replace only the matching object with its referenced appearance';
   const lines = [
     `${replace}.`,
