@@ -192,7 +192,7 @@ export default function Guide({
           <SectionTitle title="Частые вопросы" />
           <div className="p-4 sm:p-5 space-y-2">
             {faq.map(([q, a]) => (
-              <details key={q} className="rounded-xl border border-line bg-panel2">
+              <details key={q} open className="rounded-xl border border-line bg-panel2">
                 <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">{q}</summary>
                 <p className="border-t border-line px-4 py-3 text-xs text-mut leading-relaxed">{a}</p>
               </details>

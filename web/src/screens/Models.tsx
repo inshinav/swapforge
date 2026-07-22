@@ -329,7 +329,7 @@ function ModelCard({ model, onChanged }: { model: ModelInfo; onChanged: () => vo
               <span className="block mt-1 text-lime">Добавляй фото по одному или несколько сразу — новые файлы дополняют пресет.</span>
             </div>
 
-            <details className="rounded-lg border border-line bg-panel">
+            <details open className="rounded-lg border border-line bg-panel">
               <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-sm font-semibold text-lime">
                 Показать хороший пример
               </summary>

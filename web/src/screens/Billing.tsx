@@ -402,7 +402,7 @@ export default function Billing({
         </div>
       </Card>
 
-      <details className="rounded-xl border border-line bg-panel">
+      <details open className="rounded-xl border border-line bg-panel">
         <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold">История</summary>
         <div className="border-t border-line px-4">
           {ledger === null ? <div className="py-4"><Spinner /></div> : ledger.length === 0 ? (

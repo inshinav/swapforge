@@ -473,7 +473,7 @@ function ReferenceAuditCard({
       </div>
 
       {audit.checks.some((check) => check.missing.length > 0 || check.qualityNotes.length > 0) && (
-        <details className="rounded-lg border border-line bg-panel2">
+        <details open className="rounded-lg border border-line bg-panel2">
           <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">Что проверено по фото</summary>
           <div className="border-t border-line px-3 py-2 space-y-2 text-xs">
             {audit.checks.map((check, index) => (

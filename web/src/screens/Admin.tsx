@@ -518,7 +518,7 @@ function BillingOps() {
             )}
 
             {health.events.length > 0 && (
-              <details className="rounded-xl border border-line bg-panel2">
+              <details open className="rounded-xl border border-line bg-panel2">
                 <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">
                   Последние события оплат ({health.events.length})
                 </summary>

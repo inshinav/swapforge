@@ -199,7 +199,8 @@ function UnderTheHood({
   reload: () => void;
   showRefs?: boolean;
 }) {
-  const [open, setOpen] = useState(() => localStorage.getItem('sf-hood') === '1');
+  // Раскрыто по умолчанию (решение Alex 22.07.2026): скрытых секций нет, закрытие персистится
+  const [open, setOpen] = useState(() => localStorage.getItem('sf-hood') !== '0');
   const toggle = () => {
     setOpen((v) => {
       localStorage.setItem('sf-hood', v ? '0' : '1');
@@ -408,7 +409,7 @@ function VideoSection({
 function StoryboardStrip({ proj }: { proj: ProjectFull }) {
   const scenes = proj.frames.filter((f) => f.kind === 'scene').length;
   return (
-    <details className="rounded-xl border border-line bg-panel2">
+    <details open className="rounded-xl border border-line bg-panel2">
       <summary className="cursor-pointer list-none px-3 py-2 text-xs font-semibold">
         Кадры · {proj.frames.length}{scenes > 0 ? ` · сцен ${scenes}` : ''}
       </summary>
