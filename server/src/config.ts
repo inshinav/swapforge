@@ -99,6 +99,32 @@ export const config = {
   userFinishConcurrent: Number(env('USER_FINISH_CONCURRENT', '2')),
   /** Reality Finish: кап НЕкэшированных превью в день (кэш-хиты бесплатны). */
   limitFinishPreviewPerDay: Number(env('LIMIT_FINISH_PREVIEW_PER_DAY', '120')),
+  // ── Carousel Studio (фича-флаг, выключен по умолчанию; docs/carousel-studio/SPEC.md) ──
+  /** Главный флаг: выключен → роуты не регистрируются, UI-раздел скрыт. */
+  carouselStudio: env('CAROUSEL_STUDIO') === '1',
+  /** Мягкая раскатка: фича видна только владельцу. */
+  carouselOwnerOnly: env('CAROUSEL_STUDIO_OWNER_ONLY') === '1',
+  /** Токен Apify для Reference Miner (акторы IG/TikTok). */
+  apifyToken: env('APIFY_TOKEN'),
+  /** Image-модель каруселей; default — та же, что у стартового кадра. */
+  carouselImageModel: env('CAROUSEL_IMAGE_MODEL') || env('OPENAI_MODEL_IMAGE', 'gpt-image-2'),
+  /** Одновременные генерации каруселей (глобально; на пользователя всегда 1). */
+  carouselConcurrency: Math.max(1, Math.min(4, Number(env('CAROUSEL_CONCURRENCY', '2')) || 2)),
+  /** Максимум слайдов в карусели. */
+  carouselMaxSlides: Math.max(2, Math.min(10, Number(env('CAROUSEL_MAX_SLIDES', '10')) || 10)),
+  /** Размер генерации слайда 4:5 (кратно 16; допустим только у гибких image-моделей). */
+  carouselSlideSize: env('CAROUSEL_SLIDE_SIZE', '1024x1280'),
+  /** Окно ревью needs_review-слайдов: hold открыта, ретраи бесплатны; по TTL — авто-принятие+settle. */
+  carouselReviewTtlMs: Number(env('CAROUSEL_REVIEW_TTL_H', '24')) * 3_600_000,
+  /** Дневные капы Carousel Studio. */
+  limitCarouselsPerDay: Number(env('LIMIT_CAROUSELS_PER_DAY', '10')),
+  limitMinerPerDay: Number(env('LIMIT_MINER_PER_DAY', '3')),
+  /** Себестоимость Apify-рана за 100 постов, USD (Apify вне litellm-манифеста). */
+  minerRunCostUsdPer100: Number(env('MINER_RUN_COST_USD_PER_100', '1')) || 1,
+  /** Пороги vision-QC слайда (0–10): ниже — авто-ретрай, затем needs_review. */
+  carouselQcIdentityMin: Number(env('CAROUSEL_QC_IDENTITY_MIN', '7')),
+  carouselQcArtifactsMin: Number(env('CAROUSEL_QC_ARTIFACTS_MIN', '6')),
+  carouselQcRealismMin: Number(env('CAROUSEL_QC_REALISM_MIN', '6')),
 };
 
 /**

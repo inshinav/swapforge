@@ -18,7 +18,7 @@
 
 ## P0 Foundation
 
-- [ ] P0.1 Ветка + docs `SPEC.md`/`PLAN.md`/`PROGRESS.md` — done: файлы в репо — check: файлы + git log.
+- [x] P0.1 Ветка + docs `SPEC.md`/`PLAN.md`/`PROGRESS.md` — done: файлы в репо — check: файлы + git log.
 - [ ] P0.2 config.ts: флаги `carouselStudio`/`carouselOwnerOnly`, `APIFY_TOKEN`, `CAROUSEL_IMAGE_MODEL`
       (default = openaiImageModel), `CAROUSEL_CONCURRENCY=2`, `CAROUSEL_MAX_SLIDES=10`,
       `CAROUSEL_SLIDE_SIZE=1024x1280`, `CAROUSEL_REVIEW_TTL_H=24`, `LIMIT_CAROUSELS_PER_DAY`,
