@@ -12,6 +12,8 @@ import { cleanupStorageLifecycle, enforceStorageCap, sweepOrphanRefFiles } from 
 import { purgeExpiredSessions } from './auth/sessions';
 import { reconcileOrphanHolds } from './billing/flow';
 import { reconcileDuePaymentIntents } from './billing/payments';
+import { reconcileCarouselHolds } from './engine/carousel/billing';
+import { resumeCarousels } from './engine/carousel/worker';
 import { resumeDurableJobs } from './jobs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +31,10 @@ async function main(): Promise<void> {
   resumeGenerations();
   resumeFinishJobs(); // повисшие Reality Finish обработки → failed (перезапуск дёшев)
   reconcileOrphanHolds(); // осиротевшие open-холды (краш между done и settle) — закрыть
+  if (config.carouselStudio) {
+    reconcileCarouselHolds(); // карусельные холды по статус-матрице SPEC §7
+    resumeCarousels(); // прерванные раны докатываются по пер-слайдовым чекпоинтам
+  }
   void reconcileDuePaymentIntents().catch((e) =>
     console.warn(`[billing] сверка платежей не удалась: ${e instanceof Error ? e.message : e}`),
   );
