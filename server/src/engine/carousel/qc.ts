@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../../config';
 import { getLlm, type ContentPart, type LlmClient } from '../../llm/provider';
+import { carouselTestLlm } from './engines';
 import { CAROUSEL_TASKS, QC_JSON_SCHEMA, QcVerdictZ, type QcVerdict } from '../../../../shared/carousel';
 
 export const QC_SYSTEM = [
@@ -54,7 +55,7 @@ export interface SlideQcInput {
 }
 
 export async function runSlideQc(input: SlideQcInput, llm?: LlmClient): Promise<QcVerdict> {
-  const client = llm ?? (await getLlm());
+  const client = llm ?? carouselTestLlm() ?? (await getLlm());
   const parts: ContentPart[] = [
     { type: 'text', text: `SCENE EXPECTED: ${input.sceneDescription}` },
     { type: 'text', text: 'GENERATED SLIDE:' },
