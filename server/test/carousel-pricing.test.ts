@@ -66,7 +66,9 @@ describe('carousel: прайсинг', () => {
 
     // Манифест без carousel-модели → смета честно null, никакого «бесплатно».
     _resetPricingMemory();
-    const { 'test-carousel-img': _omit, ...withoutCarousel } = MANIFEST;
+    const withoutCarousel = Object.fromEntries(
+      Object.entries(MANIFEST).filter(([m]) => m !== 'test-carousel-img'),
+    );
     const partialFetch = (async () =>
       new Response(JSON.stringify(withoutCarousel), { status: 200 })) as unknown as typeof fetch;
     // Кэш в БД уже содержит полный манифест — подменяем свежей выборкой без модели.
