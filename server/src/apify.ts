@@ -64,6 +64,7 @@ export function createApify(opts: ApifyClientOpts = {}) {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e) {
+      if (e instanceof ApifyError) throw e; // конфиг-ошибки (нет ключа) не «сетевые» и не ретраятся
       throw toNetError(e);
     }
     const text = await res.text();
