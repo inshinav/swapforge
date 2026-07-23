@@ -39,20 +39,22 @@
 
 ## P1 Image pipeline core
 
-- [ ] P1.1 engine/carousel/blocks.ts: UGC-блоки raw/casual/polished, anti-artifact guardrails,
-      identity-блок, format-блок — check: snapshot-тесты.
-- [ ] P1.2 engine/carousel/locations.ts: LocationPack тип + Miami (~12 сцен EN) — done: zod-валидация
+- [x] P1.1 engine/carousel/blocks.ts: UGC-блоки raw/casual/polished, anti-artifact guardrails,
+      identity-блок, format-блок (+RETRY_BOOST) — check: snapshot-тесты.
+- [x] P1.2 engine/carousel/locations.ts: LocationPack тип + Miami (12 сцен EN) — done: zod-валидация
       всех сцен — check: unit.
-- [ ] P1.3 engine/carousel/prompt.ts: `buildSlidePrompt(...)` детерминированная EN-сборка + word-cap —
+- [x] P1.3 engine/carousel/prompt.ts: `buildSlidePrompt(...)` детерминированная EN-сборка + word-cap —
       check: snapshot-тесты.
-- [ ] P1.4 image/openai.ts: edits по образцу startframe (toFile, input_fidelity high + фолбэк,
+- [x] P1.4 image/openai.ts: edits по образцу startframe (toFile, input_fidelity high + фолбэк,
       СВОЯ carousel-лестница модерации + `isModerationRefusal`, size-гард `imageModelFlexible` →
       1024×1536+кроп), `recordUsage({task:'carousel_slide', generationId: slideId, projectId:
       carouselId, userId})` — done: инжект-клиент, юниты ретраи/модерация/size — check: unit.
-- [ ] P1.5 engine/carousel/generate.ts: anchor-цепочка (слайд 1 → QC → anchor; 2..N с anchor),
-      пер-слайд чекпоинты, резюм-безопасность — done: mock-E2E все статусы — check: unit.
-- [ ] P1.6 engine/carousel/qc.ts: vision-QC (schemaName `carousel_qc`), пороги из config, вердикты
-      pass/retry/needs_review/moderated; все вызовы с meta.generationId=slideId + userId — check: unit.
+- [x] P1.5 engine/carousel/generate.ts: anchor-цепочка (слайд 1 → QC → anchor; 2..N с anchor),
+      пер-слайд чекпоинты, резюм-безопасность (+carousel dir-хелперы storage.ts) — done: mock-E2E
+      все статусы — check: unit.
+- [x] P1.6 engine/carousel/qc.ts: vision-QC (schemaName `carousel_qc`), пороги из config, вердикты
+      порогами (sceneMatch мягкий); все вызовы с meta.generationId=slideId + userId — check: unit.
+- [x] P1.G Гейт фазы: typecheck+lint+test(339 server/12 web)+build — зелёные.
 
 ## P2 Job E2E + billing
 
