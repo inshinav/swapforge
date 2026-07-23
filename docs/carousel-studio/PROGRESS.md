@@ -1,15 +1,16 @@
 # Carousel Studio — PROGRESS
 
-> Формат записи: `дата — Px.y — <commit hash> — что сделано (1 строка)` затем строка
-> `NEXT: <точное следующее действие для холодного старта с нулевой памятью>`.
+> Формат записи: `дата — Px.y — <commit hash> — что сделано (1 строка)`; внизу файла — ровно один
+> актуальный `NEXT: <точное следующее действие для холодного старта с нулевой памятью>`.
 > Правила чтения на старте сессии — в PLAN.md «Протокол сборки».
 
 ---
 
 - 2026-07-23 — P0.1 — bda7a90 — ветка feature/carousel-studio, материализованы SPEC.md/PLAN.md/PROGRESS.md из утверждённого плана.
+- 2026-07-23 — P0.2 — bd0a44a — config.ts: карусельная секция env-ключей (флаг выкл по умолчанию); suite 292/292.
+- 2026-07-23 — P0.3 — c25d309 — db.ts: 5 таблиц + индексы (pattern_cards прямой FK, SPEC §8 обновлён); тест carousel-db (5 кейсов); suite 297/297. Правило: git add только явные пути (git add -A подмёл чужие untracked-доки, коммит переделан).
+- 2026-07-23 — P0.4 — b2fd2f2 — shared/carousel.ts: статусы=CHECK БД, CAROUSEL_TASKS (5 имён — единый источник SPEC §7), dual-схемы 5 движков + DTO; тест схем; suite 301/301.
+- 2026-07-23 — P0.5 — 1ea6208 — image/{provider,mock,openai-заглушка} + config.carouselImageProvider (mock = дев-E2E без трат); тест селектора/мока; suite 305/305.
+- 2026-07-23 — P0.6 — (hash этого коммита) — гейт: carouselId-ветка в requireActiveAttempt (fail-closed; чужая hold отвергается через WHERE user_id=владелец карусели), meta.carouselId в llm/provider.ts, маппинг meta.carouselId→projectId в recordUsage обоих LLM-импелов; 7 тестов гейта. ГЕЙТ ФАЗЫ 0: server 312/312, web 12/12, lint, typecheck, build — зелёные.
 
-- 2026-07-23 — P0.2 — bd0a44a — config.ts: карусельная секция env-ключей (флаг выкл по умолчанию); suite 292/292 + typecheck зелёные.
-
-- 2026-07-23 — P0.3 — (hash в след. записи) — db.ts: 5 карусельных таблиц + индексы (pattern_cards с прямым FK на collections вместо collection_items — SPEC §8 обновлён); тест carousel-db.test.ts (5 кейсов: существование, каскады, CHECK, уникальность (carousel_id,idx), санити видео-таблиц); suite 297/297.
-
-NEXT: P0.4 — создать shared/carousel.ts по SPEC §3/§4/§5: статус-юнионы (CarouselStatus, SlideStatus, MiningStatus — строго как CHECK в db.ts), zod-схемы + JSON Schema (dual-паттерн как shared/analysis.ts): CarouselIdeaZ {title, hook, concept, slideCount 2..10, sceneIds[], ugcPreset raw|casual|polished} + IDEAS_JSON_SCHEMA (массив 5 идей, schemaName 'carousel_idea'), StoryboardZ {slides[]: {idx, role hook|context|payoff|cta, sceneId, action, outfit, camera, useProductRef?}} ('carousel_storyboard'), CaptionZ {caption, hashtags[10..15], hookLine} ('carousel_caption'), QcZ {identity 0..10, artifacts 0..10, realism 0..10, sceneMatch bool, notes} ('carousel_qc'), PatternCardZ {hookType, slideCount, slideRoles[], composition[], captionStyle, whyItWorks, nicheTags[]} + DTO для API (CarouselInfo, SlideInfo, CollectionInfo, PatternCardInfo, MiningRunInfo, CarouselQuoteInfo). Тест server/test/carousel-schemas.test.ts (или в shared — но vitest только в server/web: класть в server/test): фикстуры валидируются, битые отклоняются. Check: npm run typecheck && npm run test -w server. Коммит feat(carousel): shared schemas+DTO (P0.4). Тикнуть, записать hash+NEXT про P0.5 (image/provider.ts интерфейс+мок).
+NEXT: P1.1 — создать server/src/engine/carousel/blocks.ts: версионируемые EN-константы промт-блоков по SPEC §2 — (1) UGC_PRESETS: Record<'raw'|'casual'|'polished', string> (candid phone photo, imperfect framing, natural skin texture no beauty-retouch, mixed/available lighting, slight motion blur where natural, casual amateur composition, no studio look, no watermark/text — интенсивность нарастает от polished к raw); (2) ANTI_ARTIFACT_GUARDRAILS (руки/пальцы/текст/лишние конечности/пластиковая кожа — запреты); (3) buildIdentityBlock(modelNote: string, refCount: number) — «Reference image 1..N is the person's identity…» + note дословно; (4) FORMAT_BLOCK(size) — кадрирование 4:5/1:1, no borders/watermarks; (5) MODERATION_TIERS — карусельная лестница смягчения: массив трансформаций UGC-блока (например убрать «natural skin texture» → нейтральная формулировка) для P1.4. Snapshot-тесты в server/test/carousel-blocks.test.ts (фиксируют дословный текст блоков). Check: npm run typecheck && npm run test -w server && npm run lint. Коммит feat(carousel): prompt blocks library (P1.1). Тикнуть P1.1, записать hash+NEXT про P1.2 (locations.ts Miami-пак ~12 сцен по списку SPEC §2).

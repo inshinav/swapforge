@@ -72,7 +72,8 @@ async function complete(
   );
   if (res.usage) {
     recordUsage({
-      projectId: req.meta?.projectId,
+      // carouselId атрибуцируется в ту же колонку scope-id (без FK — переживает удаления)
+      projectId: req.meta?.projectId ?? req.meta?.carouselId,
       generationId: req.meta?.generationId,
       userId: req.meta?.userId,
       task: req.schemaName,

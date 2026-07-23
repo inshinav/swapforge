@@ -225,8 +225,29 @@ export function requireActiveAttempt(input: {
   projectId?: string | null;
   userId?: string | null;
   refFingerprint?: string | null;
+  /** Carousel Studio: скоуп оплаты — открытая hold на carouselId (SPEC §7). */
+  carouselId?: string | null;
 }): string | null {
   const db = getDb();
+  // Карусельная ветка изолирована и не проваливается в проектную (fail-closed на каждом шаге).
+  if (input.carouselId) {
+    const carousel = db
+      .prepare(`SELECT user_id FROM carousel_projects WHERE id=?`)
+      .get(input.carouselId) as { user_id: string } | undefined;
+    if (!carousel) throw new BillingAttemptRequiredError();
+    const cUser = db.prepare(`SELECT role FROM users WHERE id=?`).get(carousel.user_id) as
+      | { role: string }
+      | undefined;
+    if (cUser?.role === 'owner') return null;
+    // Владелец hold обязан совпадать с владельцем карусели — чужая/подложная hold не проходит.
+    const hold = db
+      .prepare(
+        `SELECT id FROM credit_holds WHERE project_id=? AND user_id=? AND status='open' LIMIT 1`,
+      )
+      .get(input.carouselId, carousel.user_id) as { id: string } | undefined;
+    if (!hold) throw new BillingAttemptRequiredError();
+    return hold.id;
+  }
   let userId = input.userId ?? null;
   if (input.projectId) {
     const project = db

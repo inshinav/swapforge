@@ -27,14 +27,15 @@
 - [x] P0.3 db.ts applySchema: `carousel_projects`, `carousel_slides`, `pattern_cards` (прямой FK на
       `collections`), `mining_runs` + индексы (только CREATE IF NOT EXISTS) — done: бут создаёт,
       существующее нетронуто — check: новый db-тест + suite.
-- [ ] P0.4 shared/carousel.ts: статусы, DTO, zod+JSON Schema (dual) Idea/Storyboard/Caption/QC/PatternCard —
+- [x] P0.4 shared/carousel.ts: статусы, DTO, zod+JSON Schema (dual) Idea/Storyboard/Caption/QC/PatternCard —
       done: схемы валидируют фикстуры — check: unit.
-- [ ] P0.5 server/src/image/provider.ts: интерфейс `ImageProvider.edit(...)` + `getImageProvider()` +
+- [x] P0.5 server/src/image/provider.ts: интерфейс `ImageProvider.edit(...)` + `getImageProvider()` +
       mock-провайдер — done: mock гоняется в тестах — check: unit.
-- [ ] P0.6 Гейт: `carouselId` в meta (llm/provider.ts) + ветка в `requireActiveAttempt` (+сверка
+- [x] P0.6 Гейт: `carouselId` в meta (llm/provider.ts) + ветка в `requireActiveAttempt` (+сверка
       hold.user_id===carousel.user_id) + маппинг `meta.carouselId→projectId` в recordUsage-вызовах
       openai.ts/anthropic.ts — done: старое поведение неизменно (suite), новая ветка fail-closed —
       check: тесты гейта (owner/no-hold/open-hold/чужой hold) + ПОЛНЫЙ suite.
+- [x] P0.G Гейт фазы: typecheck+lint+test(312 server/12 web)+build — зелёные.
 
 ## P1 Image pipeline core
 
