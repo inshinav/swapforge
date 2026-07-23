@@ -43,6 +43,16 @@ export function modelRefsDir(id: string): string {
 export function ensureModelDirs(id: string): void {
   fs.mkdirSync(modelRefsDir(id), { recursive: true });
 }
+// ── Carousel Studio (SPEC §10): свой раздел стора, видео-whitelist не расширяется ──
+export function carouselDir(id: string): string {
+  return path.join(config.dataDir, 'carousels', id);
+}
+export function carouselSlidesDir(id: string): string {
+  return path.join(carouselDir(id), 'slides');
+}
+export function ensureCarouselDirs(id: string): void {
+  fs.mkdirSync(carouselSlidesDir(id), { recursive: true });
+}
 export function deleteModelFiles(id: string): void {
   fs.rmSync(modelDir(id), { recursive: true, force: true });
   usageCache = null;

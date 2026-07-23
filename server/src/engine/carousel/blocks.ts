@@ -32,6 +32,12 @@ export const UGC_PRESETS: Record<UgcPreset, string> = {
   ].join(' '),
 };
 
+/** Усиление после провала QC (авто-ретрай, SPEC §5): дописывается в конец промта. */
+export const RETRY_BOOST =
+  'Critical: render the exact same person as in the identity references with a perfectly ' +
+  'accurate face; hands must be anatomically correct with five fingers; keep the photo ' +
+  'looking like a genuine unedited smartphone shot.';
+
 /** Анти-артефакт гардрейлы: всегда в конце промта. */
 export const ANTI_ARTIFACT_GUARDRAILS = [
   'Anatomically correct hands with five fingers each.',
