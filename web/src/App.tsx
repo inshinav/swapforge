@@ -211,9 +211,10 @@ export default function App() {
     !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && showUserExperience;
 
   useEffect(() => {
+    if (session === null) return; // сессия грузится — не выбивать с #carousel до ответа /api/me
     const next = resolveView(view, isOwner, ownerViewMode, carouselEnabled);
     if (next !== view) go(next);
-  }, [carouselEnabled, go, isOwner, ownerViewMode, view]);
+  }, [carouselEnabled, go, isOwner, ownerViewMode, session, view]);
 
   useEffect(() => {
     if (!journeyActive || journeyRouted) return;

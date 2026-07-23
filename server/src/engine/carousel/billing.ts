@@ -58,8 +58,18 @@ export function placeCarouselHold(userId: string, scopeId: string, credits: numb
 /** Квота генерации для показа пользователю (кредиты → «$» = кредиты/100). */
 export function carouselQuoteInfo(userId: string, slideCount: number): CarouselQuoteInfo {
   const q = buildCarouselQuote(slideCount);
-  const { available } = creditBalance(userId);
   const priceCents = q.totalUsd === null ? null : priceCredits(q.totalUsd);
+  // Владелец unmetered (как в видео-пайплайне): цена справочно, баланс-гейта нет.
+  if (isOwner(userId)) {
+    return {
+      priceUsd: priceCents === null ? -1 : priceCents / 100,
+      balanceUsd: 0,
+      enough: priceCents !== null,
+      shortfallUsd: 0,
+      approximate: q.approximate,
+    };
+  }
+  const { available } = creditBalance(userId);
   const enough = priceCents !== null && priceCents <= available;
   return {
     priceUsd: priceCents === null ? -1 : priceCents / 100,
