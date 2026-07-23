@@ -46,7 +46,7 @@ function seedSlideWithPng(width: number, height: number): { carouselId: string; 
 describe('carousel: финализация слайда', () => {
   it('фильтр детерминирован: cover+кроп+sRGB', () => {
     expect(finalizeFilter('4:5')).toBe(
-      'scale=1080:1350:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1350,format=yuvj420p',
+      'scale=1080:1350:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1350,noise=alls=5:allf=t,format=yuvj420p',
     );
     expect(finalizeFilter('1:1')).toContain('1080:1080');
   });

@@ -20,7 +20,16 @@ import {
   withIdeationHold,
 } from './engine/carousel/billing';
 import { openHoldForProject, priceCredits } from './billing/credits';
-import { deleteCarouselFiles, safeCarouselPath } from './storage';
+import {
+  carouselRefsDir,
+  deleteCarouselFiles,
+  ensureCarouselDirs,
+  invalidateUserUsage,
+  safeCarouselPath,
+  safeCarouselRefPath,
+} from './storage';
+import { modelRefsDir } from './storage';
+import { pipeline as streamPipeline } from 'node:stream/promises';
 import { getScene, listLocationPacks } from './engine/carousel/locations';
 import { buildStoredZip } from './zip-store';
 import { sendCarouselToTelegram } from './telegram/notify';
@@ -32,6 +41,7 @@ import {
   CarouselIdeaZ,
   StoryboardZ,
   type CarouselInfo,
+  type CarouselRefInfo,
   type SlideInfo,
 } from '../../shared/carousel';
 
@@ -111,6 +121,22 @@ function toSlideInfo(s: SlideRow): SlideInfo {
   };
 }
 
+function carouselRefsOf(carouselId: string): CarouselRefInfo[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, kind, file, note, source, idx FROM carousel_refs WHERE carousel_id=? ORDER BY kind ASC, idx ASC, rowid ASC`,
+    )
+    .all(carouselId) as Array<{
+    id: string;
+    kind: 'look' | 'prop';
+    file: string;
+    note: string;
+    source: 'upload' | 'model_ref';
+    idx: number;
+  }>;
+  return rows;
+}
+
 function toCarouselInfo(row: CarouselRow, slides: SlideRow[]): CarouselInfo {
   return {
     id: row.id,
@@ -124,6 +150,8 @@ function toCarouselInfo(row: CarouselRow, slides: SlideRow[]): CarouselInfo {
     storyboard: parseJson(row.storyboard_json),
     caption: parseJson(row.caption_json),
     slides: slides.map(toSlideInfo),
+    lookNote: (row as CarouselRow & { look_note?: string }).look_note ?? '',
+    refs: carouselRefsOf(row.id),
     reviewDeadline: row.review_deadline,
     error: row.error,
     createdAt: row.created_at,
@@ -255,6 +283,136 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
       .run(id);
     enqueueCarouselRun(id);
     return { ok: true, queuePosition: carouselQueuePosition(id) };
+  });
+
+  // ── P8: лук и пропсы (правки до генерации) ──
+
+  const IMAGE_MIME_EXT: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+  };
+
+  function editableCarousel(req: FastifyRequest, reply: FastifyReply): CarouselRow | undefined {
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) {
+      void bad(reply, 404, 'Карусель не найдена');
+      return undefined;
+    }
+    if (!['draft', 'storyboard', 'failed'].includes(row.status)) {
+      void bad(reply, 409, 'Лук и пропсы правятся до запуска генерации');
+      return undefined;
+    }
+    return row;
+  }
+
+  app.patch('/api/carousel/projects/:id/look', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const row = editableCarousel(req, reply);
+    if (!row) return;
+    const note = (((req.body ?? {}) as { note?: string }).note ?? '').slice(0, 600);
+    getDb()
+      .prepare(`UPDATE carousel_projects SET look_note=?, updated_at=datetime('now') WHERE id=?`)
+      .run(note, row.id);
+    return { ok: true };
+  });
+
+  app.post('/api/carousel/projects/:id/refs', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const row = editableCarousel(req, reply);
+    if (!row) return;
+    const count = (
+      getDb().prepare(`SELECT COUNT(*) AS c FROM carousel_refs WHERE carousel_id=?`).get(row.id) as { c: number }
+    ).c;
+    if (count >= 6) return bad(reply, 422, 'Максимум 6 фото лука и пропсов');
+    const part = await req.file({ limits: { fileSize: config.maxImageBytes } });
+    if (!part) return bad(reply, 400, 'Нет файла — приложи фото (jpg/png/webp)');
+    const ext = IMAGE_MIME_EXT[part.mimetype];
+    if (!ext) {
+      part.file.resume();
+      return bad(reply, 415, 'Поддерживаются jpg/png/webp');
+    }
+    const kindRaw = String((part.fields as Record<string, { value?: unknown } | undefined>).kind?.value ?? 'prop');
+    const kind = kindRaw === 'look' ? 'look' : 'prop';
+    const note = String((part.fields as Record<string, { value?: unknown } | undefined>).note?.value ?? '').slice(0, 300);
+    ensureCarouselDirs(row.id);
+    const file = `${kind}_${randomUUID().slice(0, 8)}${ext}`;
+    const dest = path.join(carouselRefsDir(row.id), file);
+    try {
+      await streamPipeline(part.file, fs.createWriteStream(dest));
+    } catch (e) {
+      fs.rmSync(dest, { force: true });
+      throw e;
+    }
+    if (part.file.truncated) {
+      fs.rmSync(dest, { force: true });
+      return bad(reply, 413, `Файл больше ${Math.round(config.maxImageBytes / 1024 ** 2)}МБ`);
+    }
+    getDb()
+      .prepare(`INSERT INTO carousel_refs (id, carousel_id, kind, file, note, source, idx) VALUES (?, ?, ?, ?, ?, 'upload', ?)`)
+      .run(randomUUID(), row.id, kind, file, note, count);
+    invalidateUserUsage(req.user!.id);
+    return { refs: carouselRefsOf(row.id) };
+  });
+
+  // Пропс из рефов модели (мотоцикл/шлем уже загружены в конструкторе): файл КОПИРУЕТСЯ —
+  // карусель самодостаточна, удаление модели её не ломает (зеркало applyModelVariant).
+  app.post('/api/carousel/projects/:id/refs/from-model', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const row = editableCarousel(req, reply);
+    if (!row) return;
+    const refId = ((req.body ?? {}) as { modelRefId?: string }).modelRefId;
+    if (!refId || !row.model_id) return bad(reply, 422, 'Укажи реф модели');
+    const modelRef = getDb()
+      .prepare(
+        `SELECT r.file, r.role, r.note, r.auto_note FROM model_refs r JOIN models m ON m.id=r.model_id
+          WHERE r.id=? AND r.model_id=? AND m.user_id=?`,
+      )
+      .get(refId, row.model_id, req.user!.id) as
+      | { file: string; role: string; note: string; auto_note: string }
+      | undefined;
+    if (!modelRef) return bad(reply, 404, 'Реф модели не найден');
+    if (modelRef.role === 'model') return bad(reply, 422, 'Identity-листы уже участвуют — выбери технику или объект');
+    const count = (
+      getDb().prepare(`SELECT COUNT(*) AS c FROM carousel_refs WHERE carousel_id=?`).get(row.id) as { c: number }
+    ).c;
+    if (count >= 6) return bad(reply, 422, 'Максимум 6 фото лука и пропсов');
+    const src = path.join(modelRefsDir(row.model_id), modelRef.file);
+    if (!fs.existsSync(src)) return bad(reply, 404, 'Файл рефа не найден');
+    ensureCarouselDirs(row.id);
+    const file = `prop_${randomUUID().slice(0, 8)}${path.extname(modelRef.file).toLowerCase()}`;
+    fs.copyFileSync(src, path.join(carouselRefsDir(row.id), file));
+    getDb()
+      .prepare(`INSERT INTO carousel_refs (id, carousel_id, kind, file, note, source, idx) VALUES (?, ?, 'prop', ?, ?, 'model_ref', ?)`)
+      .run(randomUUID(), row.id, file, (modelRef.note || modelRef.auto_note).slice(0, 300), count);
+    invalidateUserUsage(req.user!.id);
+    return { refs: carouselRefsOf(row.id) };
+  });
+
+  app.delete('/api/carousel/projects/:id/refs/:refId', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const row = editableCarousel(req, reply);
+    if (!row) return;
+    const { refId } = req.params as { id: string; refId: string };
+    const ref = getDb()
+      .prepare(`SELECT file FROM carousel_refs WHERE id=? AND carousel_id=?`)
+      .get(refId, row.id) as { file: string } | undefined;
+    if (!ref) return bad(reply, 404, 'Реф не найден');
+    getDb().prepare(`DELETE FROM carousel_refs WHERE id=?`).run(refId);
+    fs.rmSync(path.join(carouselRefsDir(row.id), ref.file), { force: true });
+    return { refs: carouselRefsOf(row.id) };
+  });
+
+  app.get('/api/carousel/:id/ref/:file', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id, file } = req.params as { id: string; file: string };
+    if (!getOwnedCarousel(req.user!.id, id)) return bad(reply, 404, 'Не найдено');
+    const full = safeCarouselRefPath(id, file);
+    if (!full) return bad(reply, 404, 'Файл не найден');
+    reply.header('Cache-Control', 'private, max-age=86400');
+    reply.type(MEDIA_CT[path.extname(full).toLowerCase()] ?? 'application/octet-stream');
+    return reply.send(fs.createReadStream(full));
   });
 
   // ── Движки (SPEC §4): синхронные микро-холды, цена видна на кнопке ──

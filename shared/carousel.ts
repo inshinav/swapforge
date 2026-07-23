@@ -81,8 +81,11 @@ export const StoryboardSlideZ = z.object({
   outfit: z.string(),
   /** Камера/кадрирование (EN). */
   camera: z.string(),
-  /** Нужен ли product/outfit-референс пользователя на этом слайде. */
+  /** Нужен ли product/outfit-референс пользователя на этом слайде (legacy P2). */
   useProductRef: z.boolean(),
+  /** P8: что из пропсов в кадре (EN, '' = ничего) — триггерит prop-рефы слайда.
+   *  default('') сохраняет валидность раскадровок, записанных до P8. */
+  propNote: z.string().default(''),
 });
 export type StoryboardSlide = z.infer<typeof StoryboardSlideZ>;
 
@@ -158,6 +161,16 @@ export interface CarouselQuoteInfo {
   approximate: boolean;
 }
 
+/** P8: лук/пропс карусели (фото-реф + заметка; RU в заметке допустим). */
+export interface CarouselRefInfo {
+  id: string;
+  kind: 'look' | 'prop';
+  file: string;
+  note: string;
+  source: 'upload' | 'model_ref';
+  idx: number;
+}
+
 export interface CarouselInfo {
   id: string;
   title: string;
@@ -170,6 +183,9 @@ export interface CarouselInfo {
   storyboard: Storyboard | null;
   caption: Caption | null;
   slides: SlideInfo[];
+  /** P8: описание лука руками + фото-рефы лука и пропсов. */
+  lookNote: string;
+  refs: CarouselRefInfo[];
   /** Дедлайн ревью-окна (ISO) в статусе qc_review, иначе null. */
   reviewDeadline: string | null;
   error: string | null;
@@ -245,6 +261,7 @@ export const STORYBOARD_JSON_SCHEMA = obj({
       outfit: str,
       camera: str,
       useProductRef: bool,
+      propNote: str,
     }),
     { minItems: 2, maxItems: 10 },
   ),

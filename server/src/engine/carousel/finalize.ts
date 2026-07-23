@@ -9,10 +9,10 @@ import { carouselSlidesDir } from '../../storage';
 
 export const FINAL_SIZES = { '4:5': { w: 1080, h: 1350 }, '1:1': { w: 1080, h: 1080 } } as const;
 
-/** ffmpeg-фильтр: масштаб с покрытием + центр-кроп + sRGB. */
+/** ffmpeg-фильтр: масштаб с покрытием + центр-кроп + лёгкое сенсорное зерно (P8, телефонность) + sRGB. */
 export function finalizeFilter(aspect: keyof typeof FINAL_SIZES): string {
   const { w, h } = FINAL_SIZES[aspect];
-  return `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h},format=yuvj420p`;
+  return `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h},noise=alls=5:allf=t,format=yuvj420p`;
 }
 
 /**

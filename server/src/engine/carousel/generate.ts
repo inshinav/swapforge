@@ -8,7 +8,7 @@ import { getDb } from '../../db';
 import { config } from '../../config';
 import { getImageProvider, type ImageProvider } from '../../image/provider';
 import type { LlmClient } from '../../llm/provider';
-import { carouselSlidesDir, ensureCarouselDirs, minerDir, modelRefsDir } from '../../storage';
+import { carouselRefsDir, carouselSlidesDir, ensureCarouselDirs, minerDir, modelRefsDir } from '../../storage';
 
 import { StoryboardZ, type Storyboard, type StoryboardSlide, type UgcPreset } from '../../../../shared/carousel';
 import { buildSlidePrompt } from './prompt';
@@ -103,6 +103,26 @@ function collectModelRefs(carousel: CarouselRow): {
   };
 }
 
+/** P8: лук (первое фото) и пропсы (до 2) карусели — файлы в carouselRefsDir. */
+function collectCarouselRefs(carouselId: string): {
+  lookPath: string | null;
+  propPaths: string[];
+} {
+  const rows = getDb()
+    .prepare(
+      `SELECT kind, file FROM carousel_refs WHERE carousel_id=? ORDER BY kind ASC, idx ASC, rowid ASC`,
+    )
+    .all(carouselId) as Array<{ kind: 'look' | 'prop'; file: string }>;
+  const dir = carouselRefsDir(carouselId);
+  const exists = (f: string) => fs.existsSync(path.join(dir, f));
+  const look = rows.find((r) => r.kind === 'look' && exists(r.file)) ?? null;
+  const props = rows.filter((r) => r.kind === 'prop' && exists(r.file)).slice(0, 2);
+  return {
+    lookPath: look ? path.join(dir, look.file) : null,
+    propPaths: props.map((r) => path.join(dir, r.file)),
+  };
+}
+
 /** Идемпотентно создаёт чекпоинт-строки слайдов под storyboard (resume-safe). */
 export function ensureSlideRows(carouselId: string, storyboard: Storyboard): void {
   const db = getDb();
@@ -141,6 +161,7 @@ export async function generateCarouselSlides(carouselId: string, deps: CarouselR
   const storyboard = StoryboardZ.parse(JSON.parse(carousel.storyboard_json));
   const preset = ugcPresetOf(carousel);
   const model = collectModelRefs(carousel);
+  const extras = collectCarouselRefs(carouselId);
   const provider = deps.provider ?? (await getImageProvider());
   ensureCarouselDirs(carouselId);
   ensureSlideRows(carouselId, storyboard);
@@ -173,6 +194,7 @@ export async function generateCarouselSlides(carouselId: string, deps: CarouselR
       scenePromptScene: scene,
       preset,
       model,
+      extras,
       anchorPath: isAnchorSlide ? null : anchorPath,
       provider,
       qcLlm: deps.qcLlm,
@@ -197,6 +219,7 @@ interface OneSlideInput {
   scenePromptScene: NonNullable<ReturnType<typeof getScene>>;
   preset: UgcPreset;
   model: ReturnType<typeof collectModelRefs>;
+  extras: ReturnType<typeof collectCarouselRefs>;
   anchorPath: string | null;
   provider: ImageProvider;
   qcLlm?: LlmClient;
@@ -205,16 +228,30 @@ interface OneSlideInput {
 async function generateOneSlide(
   input: OneSlideInput,
 ): Promise<{ status: 'done' | 'needs_review' | 'moderated' | 'failed'; filePath: string | null }> {
-  const { carousel, slide, sb, preset, model, anchorPath, provider } = input;
-  const useProduct = sb.useProductRef && model.productPath !== null;
+  const { carousel, slide, sb, preset, model, extras, anchorPath, provider } = input;
+  // P8: пропсы слайда — карусельные prop-рефы при propNote; legacy-фолбэк: модельный
+  // vehicle/object-реф при useProductRef, если карусельных пропсов нет.
+  const wantsProps = sb.propNote.trim().length > 0 && extras.propPaths.length > 0;
+  const legacyProduct =
+    !wantsProps && extras.propPaths.length === 0 && sb.useProductRef && model.productPath !== null;
   const imagePaths = [...model.identityPaths];
   let anchorRefIndex: number | undefined;
+  let lookRefIndex: number | undefined;
+  let propsFirstIndex: number | undefined;
   let productRefIndex: number | undefined;
   if (anchorPath) {
     imagePaths.push(anchorPath);
     anchorRefIndex = imagePaths.length;
   }
-  if (useProduct && model.productPath) {
+  if (extras.lookPath) {
+    imagePaths.push(extras.lookPath);
+    lookRefIndex = imagePaths.length;
+  }
+  if (wantsProps) {
+    propsFirstIndex = imagePaths.length + 1;
+    imagePaths.push(...extras.propPaths);
+  }
+  if (legacyProduct && model.productPath) {
     imagePaths.push(model.productPath);
     productRefIndex = imagePaths.length;
   }
@@ -230,6 +267,9 @@ async function generateOneSlide(
     ugcPreset: preset,
     aspect: '4:5',
     anchorRefIndex,
+    lookRefIndex,
+    propsFirstIndex,
+    propsCount: wantsProps ? extras.propPaths.length : undefined,
     productRefIndex,
     productNote: model.productNote,
   });

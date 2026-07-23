@@ -9,18 +9,24 @@ import {
   StoryboardZ,
   type Storyboard,
 } from '../../../../shared/carousel';
-import { carouselCtx, carouselTestLlm, patternHintsBlock, personaNote, scenesBrief } from './engines';
+import { carouselCtx, carouselTestLlm, lookAndPropsBrief, patternHintsBlock, personaNote, scenesBrief } from './engines';
 
 export const STORYBOARD_SYSTEM = [
-  'You are a shot planner for a UGC photo carousel of an AI persona.',
-  'You receive the chosen idea, the persona and the available scenes.',
+  'You are a shot planner for a UGC photo carousel of an AI persona — it must feel exactly like',
+  'a real Instagram model\'s feed content shot on a phone.',
+  'You receive the chosen idea, the persona, the available scenes, optionally THE LOOK and PROPS.',
   'Produce the storyboard strictly matching the idea\'s slideCount. Rules:',
   '- slide 1 is the HOOK and the anchor: slides 2..N must be shootable in the same look;',
-  '- action/outfit/camera are in ENGLISH — they go verbatim into image prompts;',
-  '- action = what the person is doing (concrete, candid); camera = who/how is shooting',
-  '  (arm-length selfie, friend POV, low angle, mirror shot...);',
-  '- outfit stays CONSISTENT across slides unless the idea explicitly changes it;',
-  '- sceneId only from the provided ids; useProductRef=true only where the product must appear;',
+  '- action/outfit/camera/propNote are in ENGLISH — they go verbatim into image prompts;',
+  '- action = what the person is doing (concrete, candid, mid-motion beats static posing);',
+  '- camera: VARY angles across slides like real IG models do — arm-length selfie, mirror selfie,',
+  '  friend POV from behind, low-angle full body, over-the-shoulder, walking candid; never the',
+  '  same camera twice in a row;',
+  '- outfit: if THE LOOK is provided, every slide uses exactly it; otherwise stay consistent;',
+  '- propNote: on slides where an available prop is in frame, describe it in English',
+  '  (e.g. "sitting on her orange Kawasaki, helmet in hand"); leave "" on other slides;',
+  '- useProductRef: legacy flag, set true only when propNote is non-empty;',
+  '- sceneId only from the provided ids;',
   '- anchorNote: what slide 1 locks for the rest (outfit, hair, light, color grade).',
   'JSON only.',
 ].join('\n');
@@ -47,6 +53,7 @@ export async function runStoryboardEngine(
         `IDEA (title/hook/concept in Russian, execute in English):\n${JSON.stringify(idea)}\n\n` +
         `PERSONA: ${personaNote(ctx) || 'young female lifestyle creator'}\n\n` +
         `AVAILABLE SCENES (${ctx.location_pack}):\n${scenesBrief(ctx)}` +
+        lookAndPropsBrief(ctx) +
         patternHintsBlock(input.patternHints ?? []),
     },
   ];

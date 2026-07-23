@@ -491,6 +491,9 @@ function CarouselWizard({
       </div>
 
       {(c.status === 'draft' || c.status === 'storyboard') && (
+        <LookStep carousel={c} onChanged={() => void reload()} />
+      )}
+      {(c.status === 'draft' || c.status === 'storyboard') && (
         <IdeaStep carousel={c} prices={prices} onChanged={() => void reload()} onOpenBilling={onOpenBilling} />
       )}
       {(c.status === 'draft' || c.status === 'storyboard') && c.idea && (
@@ -506,6 +509,170 @@ function CarouselWizard({
         <ProgressAndResult carousel={c} prices={prices} onChanged={() => void reload()} onOpenBilling={onOpenBilling} />
       )}
     </div>
+  );
+}
+
+/** P8: лук (описание + фото) и пропсы (мотоцикл/шлем — свои или из модели). */
+function LookStep({ carousel, onChanged }: { carousel: CarouselInfo; onChanged: () => void }) {
+  const [note, setNote] = useState(carousel.lookNote);
+  const [noteBusy, setNoteBusy] = useState(false);
+  const [upBusy, setUpBusy] = useState<'look' | 'prop' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [modelRefs, setModelRefs] = useState<Array<{ id: string; file: string; note: string; role: string }>>([]);
+
+  useEffect(() => setNote(carousel.lookNote), [carousel.lookNote]);
+
+  useEffect(() => {
+    if (!carousel.modelId) return;
+    api
+      .models()
+      .then((models) => {
+        const m = models.find((x) => x.id === carousel.modelId);
+        setModelRefs((m?.refs ?? []).filter((r) => r.role !== 'model').map((r) => ({ id: r.id, file: r.file, note: r.note, role: r.role })));
+      })
+      .catch(() => setModelRefs([]));
+  }, [carousel.modelId]);
+
+  const saveNote = async () => {
+    setNoteBusy(true);
+    setError(null);
+    try {
+      await api.carouselLookSave(carousel.id, note);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNoteBusy(false);
+    }
+  };
+
+  const upload = async (kind: 'look' | 'prop', file: File | undefined) => {
+    if (!file) return;
+    setUpBusy(kind);
+    setError(null);
+    try {
+      await api.carouselRefUpload(carousel.id, file, kind, '');
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUpBusy(null);
+    }
+  };
+
+  const addFromModel = async (modelRefId: string) => {
+    setError(null);
+    try {
+      await api.carouselRefFromModel(carousel.id, modelRefId);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const looks = carousel.refs.filter((r) => r.kind === 'look');
+  const props = carousel.refs.filter((r) => r.kind === 'prop');
+
+  return (
+    <Card>
+      <SectionTitle
+        step="1a"
+        title="Лук и что в кадре"
+        hint="опиши образ и добавь фото — слайды будут строго по ним"
+      />
+      <div className="p-4 space-y-3">
+        {error && <ErrorNote text={error} />}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            className="flex-1 rounded-lg border border-line2 bg-panel2 px-3 py-2 text-sm"
+            placeholder="Лук словами: «белое льняное платье, распущенные волосы, золотая цепочка»"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <Button busy={noteBusy} disabled={note === carousel.lookNote} onClick={() => void saveNote()}>
+            Сохранить лук
+          </Button>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <div className="text-xs text-mut">Фото лука (одежда возьмётся с него) · {looks.length}/1</div>
+            <div className="flex flex-wrap gap-2">
+              {looks.map((r) => (
+                <RefThumb key={r.id} carouselId={carousel.id} r={r} onDelete={() => void api.carouselRefDelete(carousel.id, r.id).then(onChanged)} />
+              ))}
+              {looks.length < 1 && (
+                <UploadTile busy={upBusy === 'look'} onPick={(f) => void upload('look', f)} label="+ фото лука" />
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs text-mut">Пропсы в кадре: мотоцикл, шлем… · {props.length}/2</div>
+            <div className="flex flex-wrap gap-2">
+              {props.map((r) => (
+                <RefThumb key={r.id} carouselId={carousel.id} r={r} onDelete={() => void api.carouselRefDelete(carousel.id, r.id).then(onChanged)} />
+              ))}
+              {props.length < 2 && (
+                <UploadTile busy={upBusy === 'prop'} onPick={(f) => void upload('prop', f)} label="+ свой пропс" />
+              )}
+            </div>
+            {modelRefs.length > 0 && props.length < 2 && (
+              <div className="flex flex-wrap gap-1.5">
+                {modelRefs.map((r) => (
+                  <Button key={r.id} className="!min-h-8 !px-2 !py-1 text-xs" onClick={() => void addFromModel(r.id)}>
+                    + {r.note ? r.note.slice(0, 24) : r.role === 'vehicle' ? 'техника модели' : 'объект модели'}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function RefThumb({
+  carouselId,
+  r,
+  onDelete,
+}: {
+  carouselId: string;
+  r: CarouselInfo['refs'][number];
+  onDelete: () => void;
+}) {
+  return (
+    <div className="relative w-20">
+      <img
+        src={api.carouselRefUrl(carouselId, r.file)}
+        alt={r.note || r.kind}
+        className="w-20 h-24 object-cover rounded-lg border border-line"
+      />
+      <button
+        type="button"
+        aria-label="Убрать"
+        className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-panel border border-line text-mut text-xs leading-none hover:text-danger"
+        onClick={onDelete}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function UploadTile({
+  busy,
+  label,
+  onPick,
+}: {
+  busy: boolean;
+  label: string;
+  onPick: (f: File | undefined) => void;
+}) {
+  return (
+    <label className="w-20 h-24 rounded-lg border border-dashed border-line2 flex items-center justify-center text-[11px] text-mut hover:border-lime/50 hover:text-lime cursor-pointer text-center px-1">
+      {busy ? <Spinner size={14} /> : label}
+      <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(e) => onPick(e.target.files?.[0])} />
+    </label>
   );
 }
 
@@ -803,6 +970,15 @@ function StoryboardStep({
                         className="mt-1 w-full rounded-lg border border-line2 bg-panel px-2 py-1.5"
                         value={s.camera}
                         onChange={(e) => setSlide(i, { camera: e.target.value })}
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="text-mut text-xs">Пропс в кадре (EN, пусто = без пропсов)</span>
+                      <input
+                        className="mt-1 w-full rounded-lg border border-line2 bg-panel px-2 py-1.5"
+                        placeholder="sitting on her orange Kawasaki, helmet in hand"
+                        value={s.propNote}
+                        onChange={(e) => setSlide(i, { propNote: e.target.value, useProductRef: e.target.value.trim().length > 0 })}
                       />
                     </label>
                   </div>

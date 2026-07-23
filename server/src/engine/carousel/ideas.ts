@@ -8,7 +8,7 @@ import {
   IDEAS_JSON_SCHEMA,
   type CarouselIdeas,
 } from '../../../../shared/carousel';
-import { carouselCtx, carouselTestLlm, patternHintsBlock, personaNote, scenesBrief } from './engines';
+import { carouselCtx, carouselTestLlm, lookAndPropsBrief, patternHintsBlock, personaNote, scenesBrief } from './engines';
 
 export const IDEAS_SYSTEM = [
   'You are a creative director for UGC photo carousels of an AI persona on Instagram.',
@@ -41,6 +41,7 @@ export async function runIdeaEngine(input: IdeaEngineInput, llm?: LlmClient): Pr
       text:
         `PERSONA: ${personaNote(ctx) || 'young female lifestyle creator (no detailed notes)'}\n\n` +
         `AVAILABLE SCENES (${ctx.location_pack}):\n${scenesBrief(ctx)}` +
+        lookAndPropsBrief(ctx) +
         (input.wish?.trim() ? `\n\nCREATOR'S WISH: ${input.wish.trim().slice(0, 500)}` : '') +
         patternHintsBlock(input.patternHints ?? []),
     },

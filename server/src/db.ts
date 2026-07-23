@@ -404,6 +404,17 @@ export function applySchema(d: DatabaseSync): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS carousel_refs (
+      id TEXT PRIMARY KEY,
+      carousel_id TEXT NOT NULL REFERENCES carousel_projects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('look','prop')),
+      file TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'upload' CHECK (source IN ('upload','model_ref')),
+      idx INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS collections (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -448,6 +459,7 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_carousel_holds_open_join ON credit_holds(project_id, status);
     CREATE INDEX IF NOT EXISTS idx_carousel_projects_claim ON carousel_projects(status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_slides_pos ON carousel_slides(carousel_id, idx);
+    CREATE INDEX IF NOT EXISTS idx_carousel_refs_carousel ON carousel_refs(carousel_id, kind, idx);
     CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_pattern_cards_collection ON pattern_cards(collection_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_mining_runs_collection ON mining_runs(collection_id, created_at);
@@ -457,6 +469,9 @@ export function applySchema(d: DatabaseSync): void {
   // Страховка для dev-БД, где carousel_projects создана до появления колонки
   // (вызов строго ПОСЛЕ CREATE TABLE выше — на свежей БД таблица уже есть).
   ensureColumn(d, 'carousel_projects', 'review_deadline', `review_deadline TEXT`);
+  // P8: текст лука (описание образа руками владельца карусели; RU допустим —
+  // движки переваривают, слайд-промты остаются EN через outfit/propNote).
+  ensureColumn(d, 'carousel_projects', 'look_note', `look_note TEXT NOT NULL DEFAULT ''`);
 }
 
 export function getDb(): DatabaseSync {

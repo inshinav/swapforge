@@ -13,7 +13,7 @@ import {
 
 describe('carousel: промт-блоки', () => {
   it('дословный текст блоков зафиксирован (менять только с BLOCKS_VERSION+1)', () => {
-    expect(BLOCKS_VERSION).toBe(1);
+    expect(BLOCKS_VERSION).toBe(2);
     expect({
       UGC_PRESETS,
       ANTI_ARTIFACT_GUARDRAILS,
@@ -28,8 +28,8 @@ describe('carousel: промт-блоки', () => {
 
   it('каждый пресет — UGC-телефонник без студии/вотермарок; интенсивность различна', () => {
     for (const text of Object.values(UGC_PRESETS)) {
-      expect(text.toLowerCase()).toContain('smartphone');
-      expect(text).toContain('No studio look, no watermark, no text overlay.');
+      expect(text.toLowerCase()).toMatch(/iphone|phone/);
+      expect(text).toContain('no watermark, no text overlay');
     }
     expect(UGC_PRESETS.raw).toContain('visible pores');
     expect(UGC_PRESETS.polished).not.toContain('motion blur');
@@ -53,7 +53,7 @@ describe('carousel: промт-блоки', () => {
     const ladder = carouselModerationLadder(prompt);
     expect(ladder.length).toBe(3);
     expect(ladder[0]).toBe(prompt);
-    expect(ladder[1]).toContain('Natural realistic appearance.');
+    expect(ladder[1]).toContain('Natural realistic appearance');
     expect(ladder[1]).not.toContain('no beauty retouch');
     expect(ladder[2]).toContain('match the person exactly');
     // Гардрейлы и нота не пострадали ни на одном тире.

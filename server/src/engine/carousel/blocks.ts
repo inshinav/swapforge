@@ -3,32 +3,36 @@
 // как доктрина видео-пайплайна. Меняешь текст блока → поднимай BLOCKS_VERSION.
 import type { UgcPreset } from '../../../../shared/carousel';
 
-export const BLOCKS_VERSION = 1;
+export const BLOCKS_VERSION = 2;
 
-/** UGC-реализм: интенсивность «любительности» нарастает от polished к raw. */
+/**
+ * UGC-реализм v2 (P8): жёсткий инстаграм-нативный телефонник — как реально снимают
+ * IG-модели. Интенсивность «любительности» нарастает от polished к raw.
+ */
 export const UGC_PRESETS: Record<UgcPreset, string> = {
   raw: [
-    'Candid unposed smartphone snapshot, shot in one take.',
-    'Imperfect framing with a slight tilt, subject not perfectly centered.',
-    'Natural skin texture with visible pores, absolutely no beauty retouch.',
-    'Harsh mixed available lighting exactly as found, no fill light.',
-    'Slight motion blur and minor focus miss where natural.',
-    'Cluttered real-life background, nothing staged or cleaned up.',
-    'No studio look, no watermark, no text overlay.',
+    'Looks exactly like a real Instagram model\'s casual phone content, shot on an iPhone.',
+    'Candid unposed snapshot taken in one quick take, slight hand-held tilt.',
+    'Imperfect framing, subject not perfectly centered, a bit of the scene cut off.',
+    'Natural skin texture with visible pores and tiny imperfections, absolutely no beauty retouch.',
+    'Harsh mixed available lighting exactly as found, phone HDR look, no fill light.',
+    'Slight motion blur and minor focus miss where natural, mild sensor grain.',
+    'Cluttered real-life background with ordinary details, nothing staged.',
+    'No professional photography look, no studio light, no perfect bokeh, no watermark, no text overlay.',
   ].join(' '),
   casual: [
-    'Candid smartphone photo taken by a friend.',
-    'Casual amateur composition, believable everyday moment.',
-    'Natural skin texture, no beauty retouch.',
-    'Mixed available lighting, true-to-life colors.',
+    'Looks exactly like a real Instagram model\'s feed photo, shot on an iPhone by a friend.',
+    'Candid believable everyday moment, casual amateur composition.',
+    'Natural skin texture, no beauty retouch, true-to-life phone colors with mild HDR.',
+    'Mixed available lighting, soft natural shadows, faint sensor grain.',
     'Slight motion blur where natural.',
-    'No studio look, no watermark, no text overlay.',
+    'No professional photography look, no studio light, no perfect bokeh, no watermark, no text overlay.',
   ].join(' '),
   polished: [
-    'Well-composed smartphone photo, still authentic and personal.',
-    'Natural retouch-free skin, flattering available light.',
-    'Tidy but real environment, believable lifestyle moment.',
-    'No studio look, no watermark, no text overlay.',
+    'Looks like a top Instagram model\'s well-curated feed photo, still clearly shot on a phone.',
+    'Flattering available light, tidy but real environment, believable lifestyle moment.',
+    'Natural retouch-free skin, authentic phone color rendering.',
+    'No professional studio look, no perfect bokeh, no watermark, no text overlay.',
   ].join(' '),
 };
 
@@ -78,6 +82,27 @@ export function buildProductBlock(productRefIndex: number, note: string): string
   return trimmed ? `${base} ${trimmed}` : base;
 }
 
+/** P8: фото лука — одежда/образ берётся с него, а не выдумывается. */
+export function buildLookBlock(lookRefIndex: number): string {
+  return (
+    `Reference image ${lookRefIndex} shows the exact outfit and styling (the look): ` +
+    'dress the person in this exact outfit with the same materials, colors and fit.'
+  );
+}
+
+/** P8: пропсы в кадре (мотоцикл, шлем и т.п.) — ровно как на референсах. */
+export function buildPropsBlock(firstPropIndex: number, count: number, propNote: string): string {
+  const range =
+    count === 1
+      ? `Reference image ${firstPropIndex} shows a prop`
+      : `Reference images ${firstPropIndex}-${firstPropIndex + count - 1} show props`;
+  const note = propNote.trim();
+  return (
+    `${range} that must appear in the shot exactly as shown (same model, colors and details).` +
+    (note ? ` In this shot: ${note}` : '')
+  );
+}
+
 /** Формат кадра. */
 export function formatBlock(aspect: '4:5' | '1:1'): string {
   return aspect === '4:5'
@@ -92,11 +117,20 @@ export function formatBlock(aspect: '4:5' | '1:1'): string {
  * Тир 0 = исходный промт; максимум смягчений = CAROUSEL_MODERATION_TIERS.length.
  */
 const TIER_TRANSFORMS: Array<Array<{ find: RegExp; replace: string }>> = [
-  // Тир 1: нейтрализуем формулировки про кожу.
+  // Тир 1: нейтрализуем формулировки про кожу (строки v2!).
   [
-    { find: /Natural skin texture with visible pores, absolutely no beauty retouch\./g, replace: 'Natural realistic appearance.' },
-    { find: /Natural skin texture, no beauty retouch\./g, replace: 'Natural realistic appearance.' },
-    { find: /Natural retouch-free skin, flattering available light\./g, replace: 'Natural appearance, flattering available light.' },
+    {
+      find: /Natural skin texture with visible pores and tiny imperfections, absolutely no beauty retouch\./g,
+      replace: 'Natural realistic appearance.',
+    },
+    {
+      find: /Natural skin texture, no beauty retouch, true-to-life phone colors with mild HDR\./g,
+      replace: 'Natural realistic appearance, true-to-life phone colors.',
+    },
+    {
+      find: /Natural retouch-free skin, authentic phone color rendering\./g,
+      replace: 'Natural appearance, authentic phone color rendering.',
+    },
   ],
   // Тир 2: обобщаем описание тела в identity-блоке.
   [{ find: /match the face, hair and body exactly/g, replace: 'match the person exactly' }],

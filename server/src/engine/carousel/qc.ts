@@ -14,7 +14,8 @@ export const QC_SYSTEM = [
   'Grade honestly, do not flatter:',
   '- identity (0-10): does the person match the identity references (face, hair, body)?',
   '- artifacts (0-10): 10 = clean; deduct hard for wrong hands/fingers, extra limbs, warped features, garbled text, plastic waxy skin.',
-  '- realism (0-10): does it look like a real candid smartphone photo (not glossy AI art)?',
+  '- realism (0-10): does it look like a real Instagram model\'s candid phone content',
+  '  (iPhone shot, natural light, believable moment) — NOT glossy AI art or studio photography?',
   '- sceneMatch: does the image match the described scene and action?',
   'Answer with JSON only.',
 ].join('\n');

@@ -66,6 +66,7 @@ function storyboard3(): Storyboard {
     outfit: 'white dress',
     camera: 'friend POV',
     useProductRef,
+    propNote: '',
   });
   return { slides: [mk(1, 'hook'), mk(2, 'context', true), mk(3, 'payoff')], anchorNote: 'lock look' };
 }

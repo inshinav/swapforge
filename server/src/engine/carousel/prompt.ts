@@ -6,14 +6,16 @@ import {
   ANTI_ARTIFACT_GUARDRAILS,
   buildAnchorBlock,
   buildIdentityBlock,
+  buildLookBlock,
   buildProductBlock,
+  buildPropsBlock,
   formatBlock,
   UGC_PRESETS,
 } from './blocks';
 import type { LocationScene } from './locations';
 
 /** Мягкий кап: длиннее — не ошибка, но сигнал распухшего storyboard-поля. */
-export const SLIDE_PROMPT_SOFT_MAX_WORDS = 260;
+export const SLIDE_PROMPT_SOFT_MAX_WORDS = 320;
 
 export interface SlidePromptInput {
   slide: StoryboardSlide;
@@ -25,9 +27,14 @@ export interface SlidePromptInput {
   aspect: '4:5' | '1:1';
   /** Номер референса-якоря (слайды 2..N); undefined для якорного слайда. */
   anchorRefIndex?: number;
-  /** Номер product-референса и его заметка (если слайд использует product). */
+  /** Номер product-референса и его заметка (legacy-путь без карусельных рефов). */
   productRefIndex?: number;
   productNote?: string;
+  /** P8: номер фото лука (одежда берётся с него). */
+  lookRefIndex?: number;
+  /** P8: пропсы (мотоцикл/шлем...): первый номер + сколько подряд. */
+  propsFirstIndex?: number;
+  propsCount?: number;
 }
 
 export function wordCount(text: string): number {
@@ -38,6 +45,10 @@ export function buildSlidePrompt(input: SlidePromptInput): string {
   const parts: string[] = [];
   parts.push(buildIdentityBlock(input.modelNote, input.identityRefCount));
   if (input.anchorRefIndex !== undefined) parts.push(buildAnchorBlock(input.anchorRefIndex));
+  if (input.lookRefIndex !== undefined) parts.push(buildLookBlock(input.lookRefIndex));
+  if (input.propsFirstIndex !== undefined && (input.propsCount ?? 0) > 0) {
+    parts.push(buildPropsBlock(input.propsFirstIndex, input.propsCount!, input.slide.propNote));
+  }
   if (input.productRefIndex !== undefined) {
     parts.push(buildProductBlock(input.productRefIndex, input.productNote ?? ''));
   }

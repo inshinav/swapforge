@@ -15,6 +15,7 @@ const slide: StoryboardSlide = {
   outfit: 'white linen dress, straw hat',
   camera: 'candid phone photo taken by a friend a few steps behind',
   useProductRef: false,
+    propNote: '',
 };
 
 describe('carousel: сборщик промта', () => {

@@ -29,6 +29,7 @@ import type {
   CarouselIdeas,
   CarouselInfo,
   CarouselQuoteInfo,
+  CarouselRefInfo,
   CollectionInfo,
   MiningRunInfo,
   PatternCardInfo,
@@ -356,6 +357,32 @@ export const api = {
     ),
   carouselGenerate: (id: string) =>
     post(u(`api/carousel/projects/${id}/generate`)).then((r) => j<{ ok: true; queuePosition: number }>(r)),
+  carouselLookSave: (id: string, note: string) =>
+    fetch(u(`api/carousel/projects/${id}/look`), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify({ note }),
+    }).then((r) => j<{ ok: true }>(r)),
+  carouselRefUpload: (id: string, file: File, kind: 'look' | 'prop', note: string) => {
+    const fd = new FormData();
+    fd.set('kind', kind);
+    fd.set('note', note);
+    fd.set('file', file);
+    return fetch(u(`api/carousel/projects/${id}/refs`), {
+      method: 'POST',
+      headers: csrfHeader(),
+      body: fd,
+    }).then((r) => j<{ refs: CarouselRefInfo[] }>(r));
+  },
+  carouselRefFromModel: (id: string, modelRefId: string) =>
+    post(u(`api/carousel/projects/${id}/refs/from-model`), { modelRefId }).then((r) =>
+      j<{ refs: CarouselRefInfo[] }>(r),
+    ),
+  carouselRefDelete: (id: string, refId: string) =>
+    fetch(u(`api/carousel/projects/${id}/refs/${refId}`), { method: 'DELETE', headers: csrfHeader() }).then(
+      (r) => j<{ refs: CarouselRefInfo[] }>(r),
+    ),
+  carouselRefUrl: (id: string, file: string) => u(`api/carousel/${id}/ref/${encodeURIComponent(file)}`),
   carouselSlideAction: (id: string, slideId: string, action: 'accept' | 'retry') =>
     post(u(`api/carousel/projects/${id}/slides/${slideId}/${action}`)).then((r) => j<{ ok: true }>(r)),
   carouselFileUrl: (id: string, file: string) => u(`api/carousel/${id}/file/${encodeURIComponent(file)}`),

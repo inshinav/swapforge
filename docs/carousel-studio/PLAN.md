@@ -126,3 +126,19 @@
 - [x] P7.3 E2E-смоук в preview-браузере на mock-провайдере, фиксы — check: ручной прогон.
 - [x] P7.4 Финал: typecheck+lint+test+build + `bash deploy/launch-gate.sh`, PROGRESS финал,
       план включения флага (owner-only → все) — check: команды зелёные.
+
+## P8 Луки, пропсы, UGC-boost (запрос Alex 23.07.2026)
+
+- [x] P8.1 Схема+стор: таблица carousel_refs (kind look|prop, file, note, source upload|model_ref) аддитивно;
+      файлы в carouselDir/refs; копирование vehicle/object-рефов модели как пропсов (самодостаточность).
+- [x] P8.2 API: upload/delete/list карусельных рефов (multipart ≤MAX_IMAGE_MB), выбор модельных рефов,
+      look_note на карусели; DTO в CarouselInfo — check: inject-тесты.
+- [x] P8.3 Схема storyboard: +propNote (EN, что из пропсов в кадре; zod default '' — старые json живы),
+      движки идей/раскадровки получают ЛУК (note+факт фото) и СПИСОК ПРОПСОВ, чередуют инста-ракурсы.
+- [x] P8.4 Генерация: рефы слайда = identity(≤2)+anchor+look(≤1)+props(≤2 при propNote), кап 6;
+      блоки buildLookBlock/buildPropsBlock; нумерация промта = порядок массива — check: unit+снапшоты.
+- [x] P8.5 UGC-boost: blocks v2 (iPhone-look, mirror/arm-length selfie, анти-глянец), storyboard-система
+      про разнообразие ракурсов как у инста-моделей, QC-критерий IG-нативности, лёгкое зерно в finalize.
+- [x] P8.6 UI: секция «Лук и что в кадре» (текст лука, фото лука, чекбоксы рефов модели, upload пропсов),
+      бейджи пропсов в раскадровке — check: web unit.
+- [x] P8.G Гейт: полный прогон + деплой + прод-смок.

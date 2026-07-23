@@ -50,8 +50,23 @@ export function carouselDir(id: string): string {
 export function carouselSlidesDir(id: string): string {
   return path.join(carouselDir(id), 'slides');
 }
+/** P8: луки и пропсы карусели (свои файлы; модельные копируются сюда — самодостаточность). */
+export function carouselRefsDir(id: string): string {
+  return path.join(carouselDir(id), 'refs');
+}
 export function ensureCarouselDirs(id: string): void {
   fs.mkdirSync(carouselSlidesDir(id), { recursive: true });
+  fs.mkdirSync(carouselRefsDir(id), { recursive: true });
+}
+export function safeCarouselRefPath(carouselId: string, file: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
+  const full = path.join(carouselRefsDir(carouselId), file);
+  if (!full.startsWith(carouselDir(carouselId))) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
 }
 /** Reference Miner: thumb-кэш подборок (данные для показа, НИКОГДА не рефы генерации). */
 export function minerDir(collectionId: string): string {

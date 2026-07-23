@@ -24,17 +24,47 @@ export interface CarouselCtxRow {
   idea_json: string | null;
   storyboard_json: string | null;
   slide_count: number;
+  look_note: string;
 }
 
 export function carouselCtx(carouselId: string): CarouselCtxRow {
   const row = getDb()
     .prepare(
-      `SELECT id, user_id, model_id, variant_id, location_pack, idea_json, storyboard_json, slide_count
+      `SELECT id, user_id, model_id, variant_id, location_pack, idea_json, storyboard_json, slide_count,
+              COALESCE(look_note, '') AS look_note
          FROM carousel_projects WHERE id=?`,
     )
     .get(carouselId) as CarouselCtxRow | undefined;
   if (!row) throw new Error('Карусель не найдена');
   return row;
+}
+
+/**
+ * P8: блок ЛУК+ПРОПСЫ для движков. Заметки владельца могут быть на русском —
+ * движки переваривают их и пишут outfit/propNote слайдов на английском.
+ */
+export function lookAndPropsBrief(ctx: CarouselCtxRow): string {
+  const refs = getDb()
+    .prepare(`SELECT kind, note FROM carousel_refs WHERE carousel_id=? ORDER BY kind ASC, idx ASC`)
+    .all(ctx.id) as Array<{ kind: 'look' | 'prop'; note: string }>;
+  const lookPhotos = refs.filter((r) => r.kind === 'look').length;
+  const props = refs.filter((r) => r.kind === 'prop');
+  const lines: string[] = [];
+  if (ctx.look_note.trim() || lookPhotos > 0) {
+    lines.push(
+      `THE LOOK (owner-defined outfit/styling${lookPhotos > 0 ? ', reference photo attached at generation' : ''}): ` +
+        (ctx.look_note.trim() || 'see reference photo') +
+        ' — every slide MUST use this exact look; write the outfit field accordingly in English.',
+    );
+  }
+  if (props.length > 0) {
+    lines.push(
+      'AVAILABLE PROPS (photo references attached at generation; use where the story benefits, ' +
+        'fill propNote in English on slides where a prop is in frame, leave "" elsewhere):\n' +
+        props.map((p, i) => `- prop ${i + 1}: ${p.note.trim() || 'see photo'}`).join('\n'),
+    );
+  }
+  return lines.length ? `\n\n${lines.join('\n\n')}` : '';
 }
 
 /** Persona-нота: note/auto_note identity-рефов модели (пусто — не фатально для идей). */
