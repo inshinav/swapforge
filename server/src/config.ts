@@ -108,6 +108,8 @@ export const config = {
   apifyToken: env('APIFY_TOKEN'),
   /** Image-модель каруселей; default — та же, что у стартового кадра. */
   carouselImageModel: env('CAROUSEL_IMAGE_MODEL') || env('OPENAI_MODEL_IMAGE', 'gpt-image-2'),
+  /** Вендор генерации слайдов: 'openai' | 'mock' (детерминированный, для тестов/дев-E2E без трат). */
+  carouselImageProvider: env('CAROUSEL_IMAGE_PROVIDER', 'openai') as 'openai' | 'mock',
   /** Одновременные генерации каруселей (глобально; на пользователя всегда 1). */
   carouselConcurrency: Math.max(1, Math.min(4, Number(env('CAROUSEL_CONCURRENCY', '2')) || 2)),
   /** Максимум слайдов в карусели. */
