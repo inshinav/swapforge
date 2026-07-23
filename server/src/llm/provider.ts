@@ -15,8 +15,13 @@ export interface StructuredRequest {
   maxTokens?: number;
   /** Цепочка моделей: первая — основная, дальше авто-фолбэки при сбое (см. config.modelChainFor). */
   models?: string[];
-  /** Привязка расхода к проекту/генерации (usage_events). */
-  meta?: { projectId?: string | null; generationId?: string | null; userId?: string | null };
+  /** Привязка расхода к проекту/генерации (usage_events); carouselId — скоуп Carousel Studio. */
+  meta?: {
+    projectId?: string | null;
+    generationId?: string | null;
+    userId?: string | null;
+    carouselId?: string | null;
+  };
 }
 
 export interface LlmClient {

@@ -11,7 +11,19 @@ import { planVideoSegments, type VideoSegmentPlan } from './engine/segments';
 import type { EstimateInfo, EstimateTaskRow, FlowAction, FrameInfo, VideoMeta } from '../../shared/api-types';
 import type { Analysis } from '../../shared/analysis';
 
-export type UsageTask = 'video_analysis' | 'prompt_pair' | 'start_frame' | 'classify_ref' | 'describe_ref';
+export type UsageTask =
+  | 'video_analysis'
+  | 'prompt_pair'
+  | 'start_frame'
+  | 'classify_ref'
+  | 'describe_ref'
+  // Carousel Studio (SPEC §7: ключ == schemaName == recordUsage.task)
+  | 'carousel_slide'
+  | 'carousel_qc'
+  | 'carousel_idea'
+  | 'carousel_storyboard'
+  | 'carousel_caption'
+  | 'carousel_pattern';
 
 const STAGE_TASK: Partial<Record<StageName, UsageTask>> = {
   analyze: 'video_analysis',
@@ -30,13 +42,25 @@ export const SEED_TOKENS: Record<UsageTask, { tin: number; tout: number }> = {
   classify_ref: { tin: 1_000, tout: 60 },
   // одна high-detail картинка листа + компактная RU-нота на выходе
   describe_ref: { tin: 2_500, tout: 250 },
+  // Carousel Studio: слайд ~ старт-кадр; QC = слайд high + 1-2 рефа low + короткий JSON
+  carousel_slide: { tin: 3_400, tout: 5_700 },
+  carousel_qc: { tin: 2_500, tout: 400 },
+  carousel_idea: { tin: 1_500, tout: 1_200 },
+  carousel_storyboard: { tin: 1_500, tout: 1_500 },
+  carousel_caption: { tin: 800, tout: 600 },
+  // миниатюра поста high + метаданные → структурная карточка
+  carousel_pattern: { tin: 2_000, tout: 500 },
 };
 
-function taskModel(task: UsageTask): string {
+export function taskModel(task: UsageTask): string {
   if (task === 'start_frame') return config.openaiImageModel;
+  if (task === 'carousel_slide') return config.carouselImageModel;
+  if (task === 'carousel_qc') return modelChainFor('analyze')[0]!;
+  if (task === 'carousel_pattern') return modelChainFor('analyze')[0]!;
   if (task === 'video_analysis') return modelChainFor('analyze')[0]!;
   if (task === 'classify_ref') return modelChainFor('classify')[0]!;
   if (task === 'describe_ref') return modelChainFor('describe')[0]!;
+  // prompt_pair и карусельные idea/storyboard/caption — топ-tier генерации
   return modelChainFor('generate')[0]!;
 }
 
@@ -75,6 +99,9 @@ function ourModels(): string[] {
       ...modelChainFor('generate'),
       ...modelChainFor('classify'),
       config.openaiImageModel,
+      // Carousel Studio: модель слайдов обязана быть в фильтре манифеста —
+      // незнакомая модель = цена null = cost_usd NULL = settle 0 (SPEC §7)
+      config.carouselImageModel,
     ]),
   ];
 }

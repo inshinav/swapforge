@@ -183,6 +183,11 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const counts = getDb()
       .prepare(`SELECT COUNT(*) AS projects FROM projects WHERE user_id = ?`)
       .get(req.user.id) as { projects: number };
-    return { user: req.user, counts: { projects: counts.projects } };
+    return {
+      user: req.user,
+      counts: { projects: counts.projects },
+      carouselStudio:
+        config.carouselStudio && (!config.carouselOwnerOnly || req.user.role === 'owner'),
+    };
   });
 }

@@ -1,0 +1,18 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`carousel: промт-блоки > дословный текст блоков зафиксирован (менять только с BLOCKS_VERSION+1) 1`] = `
+{
+  "ANTI_ARTIFACT_GUARDRAILS": "Anatomically correct hands with five fingers each. No extra limbs, no warped facial features, no duplicated body parts. No plastic waxy AI-glossy skin. No text, no captions, no logos, no watermarks anywhere in the image. No borders or frames.",
+  "UGC_PRESETS": {
+    "casual": "Candid smartphone photo taken by a friend. Casual amateur composition, believable everyday moment. Natural skin texture, no beauty retouch. Mixed available lighting, true-to-life colors. Slight motion blur where natural. No studio look, no watermark, no text overlay.",
+    "polished": "Well-composed smartphone photo, still authentic and personal. Natural retouch-free skin, flattering available light. Tidy but real environment, believable lifestyle moment. No studio look, no watermark, no text overlay.",
+    "raw": "Candid unposed smartphone snapshot, shot in one take. Imperfect framing with a slight tilt, subject not perfectly centered. Natural skin texture with visible pores, absolutely no beauty retouch. Harsh mixed available lighting exactly as found, no fill light. Slight motion blur and minor focus miss where natural. Cluttered real-life background, nothing staged or cleaned up. No studio look, no watermark, no text overlay.",
+  },
+  "anchor": "Reference image 3 is the previous slide of this photo carousel: keep the same person, same outfit, same hairstyle, same location palette, same lighting and the same color grade fully consistent with it.",
+  "format11": "Square 1:1 framing, full-bleed, composed for an Instagram feed carousel.",
+  "format45": "Vertical 4:5 portrait framing, full-bleed, composed for an Instagram feed carousel.",
+  "identity1": "Reference image 1 is the identity of the person: match the face, hair and body exactly. Tall redhead, CAPS: burn scar on left wrist.",
+  "identity2": "Reference images 1-2 are the identity of the same person from different angles: match the face, hair and body exactly.",
+  "product": "Reference image 4 is a product/outfit item that must appear in the shot exactly as shown. White Kawasaki ZX-6R.",
+}
+`;

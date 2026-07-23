@@ -484,6 +484,8 @@ export interface BillingHealthInfo {
 export interface MeInfo {
   user: AuthUser;
   counts: { projects: number };
+  /** Carousel Studio доступна этому пользователю (флаг + owner-only раскатка). */
+  carouselStudio?: boolean;
 }
 
 /** Payload Telegram Login Widget (data-onauth) — уходит на POST /api/auth/telegram как есть. */

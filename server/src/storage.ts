@@ -43,6 +43,113 @@ export function modelRefsDir(id: string): string {
 export function ensureModelDirs(id: string): void {
   fs.mkdirSync(modelRefsDir(id), { recursive: true });
 }
+// ── Carousel Studio (SPEC §10): свой раздел стора, видео-whitelist не расширяется ──
+export function carouselDir(id: string): string {
+  return path.join(config.dataDir, 'carousels', id);
+}
+export function carouselSlidesDir(id: string): string {
+  return path.join(carouselDir(id), 'slides');
+}
+export function ensureCarouselDirs(id: string): void {
+  fs.mkdirSync(carouselSlidesDir(id), { recursive: true });
+}
+/** Reference Miner: thumb-кэш подборок (данные для показа, НИКОГДА не рефы генерации). */
+export function minerDir(collectionId: string): string {
+  return path.join(config.dataDir, 'miner', collectionId);
+}
+export function ensureMinerDir(collectionId: string): void {
+  fs.mkdirSync(minerDir(collectionId), { recursive: true });
+}
+export function safeMinerThumbPath(collectionId: string, file: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
+  const full = path.join(minerDir(collectionId), file);
+  if (!full.startsWith(minerDir(collectionId))) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
+}
+/** TTL-свип thumb-кэша майнера (30 дней): карточки живут в БД, миниатюры — кэш. */
+export function sweepMinerThumbs(maxAgeDays = 30): number {
+  const root = path.join(config.dataDir, 'miner');
+  if (!fs.existsSync(root)) return 0;
+  const cutoff = Date.now() - maxAgeDays * 24 * 3_600_000;
+  let removed = 0;
+  for (const col of fs.readdirSync(root)) {
+    const dir = path.join(root, col);
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const full = path.join(dir, f);
+      try {
+        if (fs.statSync(full).mtimeMs < cutoff) {
+          fs.rmSync(full, { force: true });
+          removed++;
+        }
+      } catch {
+        /* гонка удаления — не страшно */
+      }
+    }
+  }
+  return removed;
+}
+
+/** Безопасное имя файла слайда (клон safeModelRefPath — без путей от пользователя). */
+export function safeCarouselPath(carouselId: string, file: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
+  const full = path.join(carouselSlidesDir(carouselId), file);
+  if (!full.startsWith(carouselDir(carouselId))) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
+}
+export function deleteCarouselFiles(id: string): void {
+  fs.rmSync(carouselDir(id), { recursive: true, force: true });
+  usageCache = null;
+}
+
+/**
+ * Эвикция каруселей (SPEC §10): keep-last-N на юзера, зеркало cleanupInvisibleProjects.
+ * Защищены активные раны, ревью-окно и любые open-холды. Без этого карусельные байты
+ * входят в глобальный кап, но невидимы существующим чисткам — под давлением диска
+ * вытеснялись бы чужие видео.
+ */
+export function cleanupCarousels(userId?: string, keep = 20): string[] {
+  const db = getDb();
+  const users = userId
+    ? [{ id: userId }]
+    : (db.prepare(`SELECT id FROM users`).all() as Array<{ id: string }>);
+  const deleted: string[] = [];
+  for (const user of users) {
+    const rows = db
+      .prepare(`SELECT id FROM carousel_projects WHERE user_id=? ORDER BY created_at DESC, rowid DESC`)
+      .all(user.id) as Array<{ id: string }>;
+    for (const row of rows.slice(Math.max(0, keep))) {
+      const protectedRow = db
+        .prepare(
+          `SELECT 1 WHERE EXISTS (
+             SELECT 1 FROM carousel_projects WHERE id=? AND status IN ('generating','qc_review')
+           ) OR EXISTS (
+             SELECT 1 FROM credit_holds WHERE project_id=? AND status='open'
+           )`,
+        )
+        .get(row.id, row.id);
+      if (protectedRow) continue;
+      db.prepare(`DELETE FROM carousel_projects WHERE id=?`).run(row.id);
+      deleteCarouselFiles(row.id);
+      deleted.push(row.id);
+    }
+    if (deleted.length) invalidateUserUsage(user.id);
+  }
+  return deleted;
+}
 export function deleteModelFiles(id: string): void {
   fs.rmSync(modelDir(id), { recursive: true, force: true });
   usageCache = null;
@@ -346,6 +453,12 @@ export function cleanupStorageLifecycle(userId?: string): StorageCleanupResult {
   const purgedResults = enforceLatestResultLimit(userId);
   const deletedProjects = cleanupInvisibleProjects(userId);
   const transientFiles = sweepTransientProjectFiles();
+  const deletedCarousels = cleanupCarousels(userId);
+  if (deletedCarousels.length) {
+    console.log(`[rotation] карусели за пределами библиотеки удалены: ${deletedCarousels.length}`);
+  }
+  const sweptThumbs = sweepMinerThumbs();
+  if (sweptThumbs) console.log(`[rotation] протухших миниатюр майнера удалено: ${sweptThumbs}`);
   enforceStorageCap();
   return { purgedResults, deletedProjects, transientFiles };
 }
@@ -369,6 +482,10 @@ export function userUsageBytes(userId: string, force = false): number {
   for (const p of projects) bytes += dirSize(projectDir(p.id));
   const models = db.prepare(`SELECT id FROM models WHERE user_id = ?`).all(userId) as Array<{ id: string }>;
   for (const m of models) bytes += dirSize(modelDir(m.id));
+  const carousels = db
+    .prepare(`SELECT id FROM carousel_projects WHERE user_id = ?`)
+    .all(userId) as Array<{ id: string }>;
+  for (const c of carousels) bytes += dirSize(carouselDir(c.id));
   userUsageCache.set(userId, { at: Date.now(), bytes });
   return bytes;
 }

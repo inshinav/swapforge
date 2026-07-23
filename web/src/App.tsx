@@ -8,15 +8,16 @@ import Models from './screens/Models';
 import Billing from './screens/Billing';
 import Guide from './screens/Guide';
 import Admin from './screens/Admin';
+import CarouselStudio from './screens/CarouselStudio';
 import { JourneyBar, JourneyHome, type JourneyStatus, type JourneyTarget } from './screens/Onboarding';
 import { Spinner } from './ui';
 
-type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide' | 'admin';
+type View = 'start' | 'swap' | 'models' | 'library' | 'billing' | 'guide' | 'admin' | 'carousel';
 export type OwnerViewMode = 'admin' | 'user';
 /** null = сессия ещё проверяется; 'anon' = не залогинен. */
 type Session = MeInfo | 'anon' | null;
 
-const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide', 'admin']);
+const VIEW_HASHES = new Set<View>(['start', 'swap', 'models', 'library', 'billing', 'guide', 'admin', 'carousel']);
 const OWNER_VIEW_MODE_KEY = 'sf-owner-view-mode';
 
 interface JourneyPrefs {
@@ -65,7 +66,14 @@ export function readOwnerViewMode(storage: Pick<Storage, 'getItem'>): OwnerViewM
   return storage.getItem(OWNER_VIEW_MODE_KEY) === 'user' ? 'user' : 'admin';
 }
 
-export function resolveView(view: View, isOwner: boolean, ownerMode: OwnerViewMode): View {
+export function resolveView(
+  view: View,
+  isOwner: boolean,
+  ownerMode: OwnerViewMode,
+  carouselEnabled = false,
+): View {
+  // Флаг выключен → #carousel не резолвится (SPEC §0.1)
+  if (view === 'carousel' && !carouselEnabled) return 'swap';
   if (!isOwner && view === 'admin') return 'swap';
   if (isOwner && ownerMode === 'user' && view === 'admin') return 'swap';
   if (isOwner && ownerMode === 'admin' && (view === 'billing' || view === 'start')) return 'admin';
@@ -196,15 +204,17 @@ export default function App() {
     go('billing');
   }, [go]);
 
-  const activeView = resolveView(view, isOwner, ownerViewMode);
+  const carouselEnabled = typeof session === 'object' && session !== null && !!session.carouselStudio;
+  const activeView = resolveView(view, isOwner, ownerViewMode, carouselEnabled);
   const journeyStatus = journeyData ? buildJourneyStatus(journeyData, journeyPrefs) : null;
   const journeyActive =
     !!journeyStatus && journeyStatus.current !== 'done' && !journeyPrefs.skipped && showUserExperience;
 
   useEffect(() => {
-    const next = resolveView(view, isOwner, ownerViewMode);
+    if (session === null) return; // сессия грузится — не выбивать с #carousel до ответа /api/me
+    const next = resolveView(view, isOwner, ownerViewMode, carouselEnabled);
     if (next !== view) go(next);
-  }, [go, isOwner, ownerViewMode, view]);
+  }, [carouselEnabled, go, isOwner, ownerViewMode, session, view]);
 
   useEffect(() => {
     if (!journeyActive || journeyRouted) return;
@@ -348,6 +358,11 @@ export default function App() {
           <TabBtn active={activeView === 'library'} onClick={() => go('library')}>
             Работы
           </TabBtn>
+          {carouselEnabled && (
+            <TabBtn active={activeView === 'carousel'} onClick={() => go('carousel')}>
+              Карусели
+            </TabBtn>
+          )}
           {showOwnerTools && (
             <TabBtn active={activeView === 'admin'} onClick={() => go('admin')}>
               Админ
@@ -464,6 +479,8 @@ export default function App() {
           />
         ) : activeView === 'models' ? (
           <Models guided={journeyStatus?.current === 'model'} onProgressChange={loadJourney} />
+        ) : activeView === 'carousel' ? (
+          <CarouselStudio onOpenBilling={openBilling} onOpenModels={() => go('models')} />
         ) : activeView === 'billing' ? (
           <Billing
             userId={userId!}
@@ -478,6 +495,7 @@ export default function App() {
           />
         ) : activeView === 'guide' ? (
           <Guide
+            carouselEnabled={carouselEnabled}
             onOpenModels={() => go('models')}
             onOpenSwap={() => go('swap')}
             onDone={journeyActive ? () => {
@@ -532,6 +550,7 @@ export default function App() {
         <MobileNav
           view={activeView}
           isOwner={showOwnerTools}
+          carouselEnabled={carouselEnabled}
           onChange={(next) => (next === 'billing' ? openBilling() : go(next))}
         />
       )}
@@ -542,16 +561,19 @@ export default function App() {
 function MobileNav({
   view,
   isOwner,
+  carouselEnabled,
   onChange,
 }: {
   view: View;
   isOwner: boolean;
+  carouselEnabled: boolean;
   onChange: (view: View) => void;
 }) {
   const items: Array<{ view: View; icon: string; label: string }> = [
     { view: 'swap', icon: '⚡', label: 'Создать' },
     { view: 'models', icon: '◇', label: 'Пресеты' },
     { view: 'library', icon: '▦', label: 'Работы' },
+    ...(carouselEnabled ? [{ view: 'carousel' as const, icon: '▤', label: 'Карусели' }] : []),
     ...(isOwner ? [{ view: 'admin' as const, icon: '◎', label: 'Админ' }] : []),
   ];
   return (

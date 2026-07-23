@@ -26,3 +26,18 @@ describe('owner cabinet modes', () => {
     expect(resolveView('admin', true, 'admin')).toBe('admin');
   });
 });
+
+describe('carousel studio gating', () => {
+  it('без флага #carousel не резолвится (в т.ч. по умолчанию), с флагом — открывается', () => {
+    expect(resolveView('carousel', false, 'user')).toBe('swap');
+    expect(resolveView('carousel', false, 'user', false)).toBe('swap');
+    expect(resolveView('carousel', true, 'admin', false)).toBe('swap');
+    expect(resolveView('carousel', false, 'user', true)).toBe('carousel');
+    expect(resolveView('carousel', true, 'admin', true)).toBe('carousel');
+  });
+
+  it('флаг не ломает существующие виды', () => {
+    expect(resolveView('swap', false, 'user', true)).toBe('swap');
+    expect(resolveView('admin', false, 'user', true)).toBe('swap');
+  });
+});

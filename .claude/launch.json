@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "swapforge-carousel-api",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "watch", "server/src/dev-carousel.ts"],
+      "port": 4315
+    },
+    {
+      "name": "swapforge-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "-w", "web"],
+      "port": 5195,
+      "url": "http://localhost:5195"
+    }
+  ]
+}

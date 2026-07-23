@@ -23,6 +23,17 @@ import type {
   TgWidgetPayload,
   UsageSummary,
 } from '@shared/api-types';
+import type {
+  Caption,
+  CarouselIdea,
+  CarouselIdeas,
+  CarouselInfo,
+  CarouselQuoteInfo,
+  CollectionInfo,
+  MiningRunInfo,
+  PatternCardInfo,
+  Storyboard,
+} from '@shared/carousel';
 
 // База приложения ('/swapforge/'): API и медиа всегда под ней — nginx срезает префикс.
 // URL строим АБСОЛЮТНЫМ от location.origin: если страница открыта ссылкой вида
@@ -34,22 +45,27 @@ const u = (p: string) => `${window.location.origin}${appBase}${p}`;
 /** Ошибка API со статусом: 401 = «не залогинен», UI разводит по-разному. */
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Разобранное JSON-тело ошибки (аддитивно; напр. shortfallUsd у 402 карусели). */
+  body?: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
+    let parsed: unknown;
     try {
       const body = (await r.json()) as { error?: string };
+      parsed = body;
       if (body.error) msg = body.error;
     } catch {
       /* не-JSON ответ */
     }
-    throw new ApiError(r.status, msg);
+    throw new ApiError(r.status, msg, parsed);
   }
   return r.json() as Promise<T>;
 }
@@ -298,4 +314,79 @@ export const api = {
 
   mediaUrl: (id: string, sub: 'frames' | 'refs' | 'src' | 'start' | 'renders' | 'finish', file: string) =>
     u(`api/projects/${id}/media/${sub}/${encodeURIComponent(file)}`),
+
+  // ── Carousel Studio (за фича-флагом; роуты 404 при выключенном) ──────────
+  carouselPacks: () =>
+    fetch(u('api/carousel/packs')).then((r) =>
+      j<{ packs: Array<{ id: string; name: string; scenes: Array<{ id: string; name: string }> }> }>(r),
+    ),
+  carouselIdeationPrices: () =>
+    fetch(u('api/carousel/ideation-prices')).then((r) =>
+      j<{ ideasUsd: number | null; storyboardUsd: number | null; captionUsd: number | null }>(r),
+    ),
+  carouselList: () =>
+    fetch(u('api/carousel/projects')).then((r) => j<{ carousels: CarouselInfo[] }>(r)),
+  carouselCreate: (body: { modelId: string; variantId: string; slideCount?: number; title?: string }) =>
+    post(u('api/carousel/projects'), body).then((r) => j<{ carousel: CarouselInfo }>(r)),
+  carouselGet: (id: string) =>
+    fetch(u(`api/carousel/projects/${id}`)).then((r) =>
+      j<{ carousel: CarouselInfo; queuePosition: number }>(r),
+    ),
+  carouselDelete: (id: string) =>
+    fetch(u(`api/carousel/projects/${id}`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
+      j<{ ok: true }>(r),
+    ),
+  carouselIdeas: (id: string, opts?: { wish?: string; patternCardIds?: string[] }) =>
+    post(u(`api/carousel/projects/${id}/ideas`), opts ?? {}).then((r) => j<CarouselIdeas>(r)),
+  carouselPickIdea: (id: string, idea: CarouselIdea) =>
+    post(u(`api/carousel/projects/${id}/idea`), { idea }).then((r) => j<{ ok: true }>(r)),
+  carouselStoryboardGen: (id: string) =>
+    post(u(`api/carousel/projects/${id}/storyboard`)).then((r) => j<{ storyboard: Storyboard }>(r)),
+  carouselStoryboardSave: (id: string, storyboard: Storyboard) =>
+    fetch(u(`api/carousel/projects/${id}/storyboard`), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify({ storyboard }),
+    }).then((r) => j<{ storyboard: Storyboard }>(r)),
+  carouselCaption: (id: string, language?: 'en' | 'ru') =>
+    post(u(`api/carousel/projects/${id}/caption`), { language }).then((r) => j<{ caption: Caption }>(r)),
+  carouselQuote: (id: string, slides?: number) =>
+    fetch(u(`api/carousel/projects/${id}/quote${slides ? `?slides=${slides}` : ''}`)).then((r) =>
+      j<{ quote: CarouselQuoteInfo }>(r),
+    ),
+  carouselGenerate: (id: string) =>
+    post(u(`api/carousel/projects/${id}/generate`)).then((r) => j<{ ok: true; queuePosition: number }>(r)),
+  carouselSlideAction: (id: string, slideId: string, action: 'accept' | 'retry') =>
+    post(u(`api/carousel/projects/${id}/slides/${slideId}/${action}`)).then((r) => j<{ ok: true }>(r)),
+  carouselFileUrl: (id: string, file: string) => u(`api/carousel/${id}/file/${encodeURIComponent(file)}`),
+  carouselExportUrl: (id: string) => u(`api/carousel/projects/${id}/export.zip`),
+  carouselSendTg: (id: string) =>
+    post(u(`api/carousel/projects/${id}/send-tg`)).then((r) => j<{ ok: true }>(r)),
+
+  // ── Reference Miner («Подборки») ─────────────────────────────────────────
+  minerCollections: () =>
+    fetch(u('api/miner/collections')).then((r) => j<{ collections: CollectionInfo[] }>(r)),
+  minerCreate: (body: { name: string; usernames: string[]; limit?: number }) =>
+    post(u('api/miner/collections'), body).then((r) => j<{ collection: CollectionInfo }>(r)),
+  minerDelete: (id: string) =>
+    fetch(u(`api/miner/collections/${id}`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
+      j<{ ok: true }>(r),
+    ),
+  minerGet: (id: string) =>
+    fetch(u(`api/miner/collections/${id}`)).then((r) =>
+      j<{ collection: CollectionInfo; runs: MiningRunInfo[]; cards: PatternCardInfo[] }>(r),
+    ),
+  minerQuote: (limit?: number) =>
+    fetch(u(`api/miner/quote${limit ? `?limit=${limit}` : ''}`)).then((r) =>
+      j<{ priceUsd: number | null }>(r),
+    ),
+  minerMine: (id: string) => post(u(`api/miner/collections/${id}/mine`)).then((r) => j<{ runId: string }>(r)),
+  minerCardPatch: (cardId: string, body: { liked?: boolean; archived?: boolean }) =>
+    fetch(u(`api/miner/cards/${cardId}`), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ ok: true }>(r)),
+  minerThumbUrl: (collectionId: string, file: string) =>
+    u(`api/miner/collections/${collectionId}/thumb/${encodeURIComponent(file)}`),
 };
