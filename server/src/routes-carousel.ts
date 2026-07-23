@@ -10,15 +10,16 @@ import { config } from './config';
 import { getOwnedModel } from './models';
 import { carouselQueuePosition, enqueueCarouselRun } from './engine/carousel/worker';
 import {
+  acceptSlide,
   carouselQuoteInfo,
   HoldConflictError,
   InsufficientCreditsError,
   startGenerationHold,
+  withIdeationHold,
 } from './engine/carousel/billing';
 import { openHoldForProject, priceCredits } from './billing/credits';
 import { deleteCarouselFiles, safeCarouselPath } from './storage';
 import { getScene, listLocationPacks } from './engine/carousel/locations';
-import { withIdeationHold } from './engine/carousel/billing';
 import { runIdeaEngine } from './engine/carousel/ideas';
 import { runStoryboardEngine } from './engine/carousel/storyboard';
 import { runCaptionEngine } from './engine/carousel/caption';
@@ -399,6 +400,46 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
       .prepare(`UPDATE carousel_projects SET caption_json=?, updated_at=datetime('now') WHERE id=?`)
       .run(JSON.stringify(caption), id);
     return { caption };
+  });
+
+  // ── Ревью-окно (SPEC §5): accept/retry только пока hold открыта ──
+
+  app.post('/api/carousel/projects/:id/slides/:slideId/accept', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id, slideId } = req.params as { id: string; slideId: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (row.status !== 'qc_review') return bad(reply, 409, 'Слайды принимаются только в окне ревью');
+    if (!acceptSlide(id, slideId)) return bad(reply, 409, 'Слайд не в статусе needs_review');
+    return { ok: true };
+  });
+
+  app.post('/api/carousel/projects/:id/slides/:slideId/retry', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id, slideId } = req.params as { id: string; slideId: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (row.status !== 'qc_review') return bad(reply, 409, 'Ретраи доступны только в окне ревью');
+    const slide = getDb()
+      .prepare(`SELECT status, manual_retries FROM carousel_slides WHERE id=? AND carousel_id=?`)
+      .get(slideId, id) as { status: string; manual_retries: number } | undefined;
+    if (!slide || slide.status !== 'needs_review') return bad(reply, 409, 'Слайд не в статусе needs_review');
+    if (slide.manual_retries >= 2) {
+      return bad(reply, 409, 'Лимит ручных ретраев исчерпан (2) — прими слайд или удали его из экспорта');
+    }
+    // Слайд обратно в pending; ран докатит его по чекпоинтам под ТОЙ ЖЕ hold (SPEC §5/§7).
+    getDb()
+      .prepare(
+        `UPDATE carousel_slides SET status='pending', file=NULL, final_file=NULL,
+                manual_retries=manual_retries+1, auto_retries=0, updated_at=datetime('now')
+          WHERE id=?`,
+      )
+      .run(slideId);
+    getDb()
+      .prepare(`UPDATE carousel_projects SET status='generating', review_deadline=NULL, updated_at=datetime('now') WHERE id=?`)
+      .run(id);
+    enqueueCarouselRun(id);
+    return { ok: true };
   });
 
   app.get('/api/carousel/:id/file/:file', async (req, reply) => {

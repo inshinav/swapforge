@@ -101,6 +101,11 @@ describe('carousel: роуты', () => {
     await app.close();
   });
 
+  it('/api/me отдаёт carouselStudio=true при включённом флаге', async () => {
+    const me = await app.inject({ method: 'GET', url: '/api/me', headers: authed(userA) });
+    expect((me.json() as { carouselStudio?: boolean }).carouselStudio).toBe(true);
+  });
+
   it('аноним → 401; список пустой у нового юзера; паки отдаются', async () => {
     expect((await app.inject({ method: 'GET', url: '/api/carousel/projects' })).statusCode).toBe(401);
     const list = await app.inject({ method: 'GET', url: '/api/carousel/projects', headers: authed(userB) });

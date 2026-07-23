@@ -206,6 +206,28 @@ export function reconcileCarouselHolds(): { released: number; settled: number; a
   return { released, settled, autoAccepted };
 }
 
+/** Принять один слайд; если needs_review не осталось — карусель done + settle. */
+export function acceptSlide(carouselId: string, slideId: string): boolean {
+  const db = getDb();
+  const n = db
+    .prepare(
+      `UPDATE carousel_slides SET status='done', accepted=1, updated_at=datetime('now')
+        WHERE id=? AND carousel_id=? AND status='needs_review'`,
+    )
+    .run(slideId, carouselId) as { changes: number | bigint };
+  if (Number(n.changes ?? 0) === 0) return false;
+  const left = db
+    .prepare(`SELECT COUNT(*) AS c FROM carousel_slides WHERE carousel_id=? AND status='needs_review'`)
+    .get(carouselId) as { c: number };
+  if (left.c === 0) {
+    db.prepare(
+      `UPDATE carousel_projects SET status='done', review_deadline=NULL, updated_at=datetime('now') WHERE id=?`,
+    ).run(carouselId);
+    settleCarousel(carouselId);
+  }
+  return true;
+}
+
 /** TTL ревью истёк: needs_review → done (accepted), карусель done, settle. */
 export function autoAcceptReview(carouselId: string): number {
   const db = getDb();
