@@ -3,7 +3,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { VideoMeta, FrameInfo } from '../../shared/api-types';
 
-function run(
+// export аддитивно для Carousel Studio (финализация слайдов) — поведение не менялось.
+export function run(
   cmd: string,
   args: string[],
   timeoutMs = 180_000,

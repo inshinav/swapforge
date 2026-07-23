@@ -13,6 +13,7 @@ import { StoryboardZ, type Storyboard, type StoryboardSlide, type UgcPreset } fr
 import { buildSlidePrompt } from './prompt';
 import { getScene } from './locations';
 import { qcPasses, runSlideQc } from './qc';
+import { finalizeSlideFile } from './finalize';
 import { RETRY_BOOST } from './blocks';
 import { variantRefs } from '../../models';
 
@@ -269,6 +270,8 @@ async function generateOneSlide(
     setSlide(slide.id, { qc_json: JSON.stringify(verdict) });
     if (qcPasses(verdict)) {
       setSlide(slide.id, { status: 'done' });
+      // Best-effort доводка до 1080×1350: провал не роняет слайд (экспорт отдаст raw).
+      await finalizeSlideFile(carousel.id, slide.id).catch(() => null);
       return { status: 'done', filePath };
     }
     if (attemptNo === 1) {
