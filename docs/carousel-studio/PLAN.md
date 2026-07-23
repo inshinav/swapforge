@@ -86,15 +86,15 @@
 
 ## P4 Web UI
 
-- [ ] P4.1 Флаг в HealthInfo→App.tsx: view 'carousel', пункт «Карусели» (MobileNav+TabBtn), скрыт без
+- [x] P4.1 Флаг в HealthInfo→App.tsx: view 'carousel', пункт «Карусели» (MobileNav+TabBtn), скрыт без
       флага, **#carousel-хэш тоже гейтится** — check: App.test + -w web.
-- [ ] P4.2 screens/Carousel.tsx: список + создание (модель/вариант); loading/empty/error — check: web unit.
-- [ ] P4.3 Мастер: идеи (цена на кнопке) → выбор → редактор раскадровки → квота+старт
+- [x] P4.2 screens/Carousel.tsx: список + создание (модель/вариант); loading/empty/error — check: web unit.
+- [x] P4.3 Мастер: идеи (цена на кнопке) → выбор → редактор раскадровки → квота+старт
       (shortfall→onOpenBilling) — check: web unit.
-- [ ] P4.4 Прогресс: поллинг-хук (клон useProject), пер-слайд стэппер, QC-бейджи, needs_review
+- [x] P4.4 Прогресс: поллинг-хук (клон useProject), пер-слайд стэппер, QC-бейджи, needs_review
       (принять/ретрай K=2), частичные исходы — check: web unit.
-- [ ] P4.5 Результат: галерея, подпись (копия), заглушки экспорт/TG (активация в P6) — check: web unit.
-- [ ] P4.G Гейт фазы: полный прогон + локальный E2E на dev-сервере с mock-провайдером (preview-браузер).
+- [x] P4.5 Результат: галерея, подпись (копия), заглушки экспорт/TG (активация в P6) — check: web unit.
+- [x] P4.G Гейт фазы: полный прогон + локальный E2E на dev-сервере с mock-провайдером (preview-браузер).
 
 ## P5 Reference Miner
 
