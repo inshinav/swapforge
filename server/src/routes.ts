@@ -10,6 +10,7 @@ import { registerModelRoutes } from './routes-models';
 import { registerBillingRoutes } from './billing/routes';
 import { registerAdminRoutes } from './admin/routes';
 import { registerCarouselRoutes } from './routes-carousel';
+import { registerMinerRoutes } from './routes-miner';
 import { openHoldForProject, tx } from './billing/credits';
 import { forceReleaseProjectHold, releaseHoldForDeletedProject, toUserEstimate } from './billing/flow';
 import { confirmFlowQuote, issueFlowQuote, markAttemptRunning } from './billing/attempts';
@@ -192,7 +193,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerBillingRoutes(app);
   registerAdminRoutes(app);
   // Carousel Studio: фича-флаг выключен → роуты не существуют (404), UI скрыт (SPEC §0.1)
-  if (config.carouselStudio) registerCarouselRoutes(app);
+  if (config.carouselStudio) {
+    registerCarouselRoutes(app);
+    registerMinerRoutes(app);
+  }
 
   // Юридические страницы: серверный HTML вне SPA (явный роут выигрывает у fallback-а)
   app.get('/legal/:slug', async (req, reply) => {

@@ -22,7 +22,8 @@ export type UsageTask =
   | 'carousel_qc'
   | 'carousel_idea'
   | 'carousel_storyboard'
-  | 'carousel_caption';
+  | 'carousel_caption'
+  | 'carousel_pattern';
 
 const STAGE_TASK: Partial<Record<StageName, UsageTask>> = {
   analyze: 'video_analysis',
@@ -47,12 +48,15 @@ export const SEED_TOKENS: Record<UsageTask, { tin: number; tout: number }> = {
   carousel_idea: { tin: 1_500, tout: 1_200 },
   carousel_storyboard: { tin: 1_500, tout: 1_500 },
   carousel_caption: { tin: 800, tout: 600 },
+  // миниатюра поста high + метаданные → структурная карточка
+  carousel_pattern: { tin: 2_000, tout: 500 },
 };
 
 export function taskModel(task: UsageTask): string {
   if (task === 'start_frame') return config.openaiImageModel;
   if (task === 'carousel_slide') return config.carouselImageModel;
   if (task === 'carousel_qc') return modelChainFor('analyze')[0]!;
+  if (task === 'carousel_pattern') return modelChainFor('analyze')[0]!;
   if (task === 'video_analysis') return modelChainFor('analyze')[0]!;
   if (task === 'classify_ref') return modelChainFor('classify')[0]!;
   if (task === 'describe_ref') return modelChainFor('describe')[0]!;

@@ -295,10 +295,23 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
     if (!['draft', 'storyboard'].includes(row.status)) {
       return bad(reply, 409, 'Идеи доступны до запуска генерации');
     }
-    const wish = ((req.body ?? {}) as { wish?: string }).wish;
+    const body = (req.body ?? {}) as { wish?: string; patternCardIds?: string[] };
+    // Few-shot из СВОИХ PatternCards: только structure_json — контент источника
+    // в карточках не хранится по построению (SPEC §3, легальный гард).
+    let patternHints: string[] = [];
+    if (Array.isArray(body.patternCardIds) && body.patternCardIds.length > 0) {
+      const ids = body.patternCardIds.slice(0, 5);
+      const rows = getDb()
+        .prepare(
+          `SELECT pc.structure_json FROM pattern_cards pc JOIN collections c ON c.id=pc.collection_id
+            WHERE c.user_id=? AND pc.id IN (${ids.map(() => '?').join(',')})`,
+        )
+        .all(req.user!.id, ...ids) as Array<{ structure_json: string }>;
+      patternHints = rows.map((r) => r.structure_json);
+    }
     const ideas = await ideationCall(reply, () =>
       withIdeationHold({ carouselId: id, userId: req.user!.id, task: 'carousel_idea' }, (opId) =>
-        runIdeaEngine({ carouselId: id, userId: req.user!.id, opId, wish }),
+        runIdeaEngine({ carouselId: id, userId: req.user!.id, opId, wish: body.wish, patternHints }),
       ),
     );
     if (!ideas) return;

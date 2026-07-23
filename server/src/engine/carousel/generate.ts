@@ -8,7 +8,8 @@ import { getDb } from '../../db';
 import { config } from '../../config';
 import { getImageProvider, type ImageProvider } from '../../image/provider';
 import type { LlmClient } from '../../llm/provider';
-import { carouselSlidesDir, ensureCarouselDirs, modelRefsDir } from '../../storage';
+import { carouselSlidesDir, ensureCarouselDirs, minerDir, modelRefsDir } from '../../storage';
+
 import { StoryboardZ, type Storyboard, type StoryboardSlide, type UgcPreset } from '../../../../shared/carousel';
 import { buildSlidePrompt } from './prompt';
 import { getScene } from './locations';
@@ -24,6 +25,22 @@ export class CarouselRunError extends Error {
     this.name = 'CarouselRunError';
   }
 }
+
+/**
+ * Легальный guardrail (SPEC §0.5/§3): замайненные изображения — только показ в подборке.
+ * Любой путь из miner-кэша среди референсов генерации = фатальная ошибка рана.
+ */
+export function assertNoMinedPaths(paths: string[]): void {
+  const minerRoot = path.resolve(minerDir(''));
+  for (const p of paths) {
+    if (path.resolve(p).startsWith(minerRoot)) {
+      throw new CarouselRunError(
+        'Замайненные изображения нельзя использовать как референсы генерации — только структура/идеи (SPEC §3)',
+      );
+    }
+  }
+}
+
 
 interface CarouselRow {
   id: string;
@@ -201,6 +218,9 @@ async function generateOneSlide(
     imagePaths.push(model.productPath);
     productRefIndex = imagePaths.length;
   }
+
+  // Полный набор референсов собран — легальный гард перед платным вызовом.
+  assertNoMinedPaths(imagePaths);
 
   const basePrompt = buildSlidePrompt({
     slide: sb,

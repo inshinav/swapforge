@@ -11,7 +11,10 @@ export type DailyLimitKind =
   | 'describe'
   | 'manual_llm'
   | 'finish'
-  | 'finish_preview';
+  | 'finish_preview'
+  // Carousel Studio (usage_counters без CHECK — новые kinds аддитивны)
+  | 'carousel'
+  | 'miner';
 
 /** 'YYYY-MM-DD' (UTC) — сбрасывается в 00:00 UTC. */
 export function dayKey(nowMs = Date.now()): string {

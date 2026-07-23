@@ -53,6 +53,52 @@ export function carouselSlidesDir(id: string): string {
 export function ensureCarouselDirs(id: string): void {
   fs.mkdirSync(carouselSlidesDir(id), { recursive: true });
 }
+/** Reference Miner: thumb-кэш подборок (данные для показа, НИКОГДА не рефы генерации). */
+export function minerDir(collectionId: string): string {
+  return path.join(config.dataDir, 'miner', collectionId);
+}
+export function ensureMinerDir(collectionId: string): void {
+  fs.mkdirSync(minerDir(collectionId), { recursive: true });
+}
+export function safeMinerThumbPath(collectionId: string, file: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
+  const full = path.join(minerDir(collectionId), file);
+  if (!full.startsWith(minerDir(collectionId))) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
+}
+/** TTL-свип thumb-кэша майнера (30 дней): карточки живут в БД, миниатюры — кэш. */
+export function sweepMinerThumbs(maxAgeDays = 30): number {
+  const root = path.join(config.dataDir, 'miner');
+  if (!fs.existsSync(root)) return 0;
+  const cutoff = Date.now() - maxAgeDays * 24 * 3_600_000;
+  let removed = 0;
+  for (const col of fs.readdirSync(root)) {
+    const dir = path.join(root, col);
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const full = path.join(dir, f);
+      try {
+        if (fs.statSync(full).mtimeMs < cutoff) {
+          fs.rmSync(full, { force: true });
+          removed++;
+        }
+      } catch {
+        /* гонка удаления — не страшно */
+      }
+    }
+  }
+  return removed;
+}
+
 /** Безопасное имя файла слайда (клон safeModelRefPath — без путей от пользователя). */
 export function safeCarouselPath(carouselId: string, file: string): string | null {
   if (!/^[A-Za-z0-9._-]+$/.test(file) || file.includes('..')) return null;
@@ -411,6 +457,8 @@ export function cleanupStorageLifecycle(userId?: string): StorageCleanupResult {
   if (deletedCarousels.length) {
     console.log(`[rotation] карусели за пределами библиотеки удалены: ${deletedCarousels.length}`);
   }
+  const sweptThumbs = sweepMinerThumbs();
+  if (sweptThumbs) console.log(`[rotation] протухших миниатюр майнера удалено: ${sweptThumbs}`);
   enforceStorageCap();
   return { purgedResults, deletedProjects, transientFiles };
 }
