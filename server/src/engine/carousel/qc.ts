@@ -3,7 +3,7 @@
 // существующий llm-слой с carousel-scope метой (атрибуция затрат на слайд обязательна).
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from '../../config';
+import { config, modelChainFor } from '../../config';
 import { getLlm, type ContentPart, type LlmClient } from '../../llm/provider';
 import { carouselTestLlm } from './engines';
 import { CAROUSEL_TASKS, QC_JSON_SCHEMA, QcVerdictZ, type QcVerdict } from '../../../../shared/carousel';
@@ -69,6 +69,9 @@ export async function runSlideQc(input: SlideQcInput, llm?: LlmClient): Promise<
     schemaName: CAROUSEL_TASKS.qc,
     schema: QC_JSON_SCHEMA,
     maxTokens: 700,
+    // analyze-tier обязателен: без models вызов уходит на дефолт gpt-5.5, API возвращает
+    // snapshot-имя вне litellm-кэша → cost_usd NULL → недосчёт settle (найдено прод-приёмкой)
+    models: modelChainFor('analyze'),
     meta: { carouselId: input.carouselId, userId: input.userId, generationId: input.slideId },
   });
   return QcVerdictZ.parse(raw);

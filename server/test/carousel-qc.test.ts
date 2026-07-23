@@ -57,6 +57,8 @@ describe('carousel: QC', () => {
     const req = captured!;
     expect(req.system).toBe(QC_SYSTEM);
     expect(req.schemaName).toBe('carousel_qc');
+    // Без models вызов падает на дефолт-модель со snapshot-именем вне прайс-кэша → cost NULL.
+    expect(req.models?.[0]).toBe('gpt-5.6-terra');
     expect(req.meta).toEqual({ carouselId: 'car-9', userId: 'usr-9', generationId: 'sl-9' });
     const images = req.parts.filter((p) => p.type === 'image');
     expect(images).toHaveLength(3);
