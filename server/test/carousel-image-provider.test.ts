@@ -10,6 +10,16 @@ process.env.CAROUSEL_IMAGE_PROVIDER = 'mock';
 const { getImageProvider, setImageProviderForTests } = await import('../src/image/provider');
 const { MOCK_MODERATION_MARKER, mockImageProvider } = await import('../src/image/mock');
 
+// Референс на диске для toFile-стримов openai-провайдера.
+const refPath = path.join(process.env.DATA_DIR!, 'ref.png');
+fs.writeFileSync(
+  refPath,
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64',
+  ),
+);
+
 const req = {
   prompt: 'candid phone photo, girl on South Beach',
   imagePaths: [],
@@ -45,10 +55,72 @@ describe('carousel: ImageProvider', () => {
     expect(res.b64).toBe('');
   });
 
-  it('openai-заглушка падает с понятной ошибкой до P1.4', async () => {
-    setImageProviderForTests(null);
-    const { openaiImageProvider } = await import('../src/image/openai');
-    await expect(openaiImageProvider.edit(req)).rejects.toThrow(/P1\.4/);
-    setImageProviderForTests(null);
+  it('openai: happy path — b64, usage-строка с carousel-scope атрибуцией', async () => {
+    const { createOpenaiImageProvider } = await import('../src/image/openai');
+    const { getDb } = await import('../src/db');
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = createOpenaiImageProvider(async (p) => {
+      calls.push(p);
+      return { data: [{ b64_json: 'QUJD' }], usage: { input_tokens: 10, output_tokens: 4000 } };
+    });
+    const res = await provider.edit({ ...req, imagePaths: [refPath], meta: { carouselId: 'car-1', userId: 'usr-1', slideId: 'sl-1' } });
+    expect(res.b64).toBe('QUJD');
+    expect(res.moderated).toBeUndefined();
+    expect(calls[0]?.input_fidelity).toBe('high');
+    const row = getDb()
+      .prepare(`SELECT project_id, generation_id, user_id, task FROM usage_events WHERE project_id='car-1'`)
+      .get() as { project_id: string; generation_id: string; user_id: string; task: string };
+    expect(row).toEqual({ project_id: 'car-1', generation_id: 'sl-1', user_id: 'usr-1', task: 'carousel_slide' });
+  });
+
+  it('openai: фолбэк без input_fidelity для модели без параметра', async () => {
+    const { createOpenaiImageProvider } = await import('../src/image/openai');
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = createOpenaiImageProvider(async (p) => {
+      calls.push(p);
+      if ('input_fidelity' in p) throw new Error('Unknown parameter: input_fidelity');
+      return { data: [{ b64_json: 'QUJD' }], usage: {} };
+    });
+    const res = await provider.edit({ ...req, imagePaths: [refPath] });
+    expect(res.b64).toBe('QUJD');
+    expect(calls).toHaveLength(2);
+    expect('input_fidelity' in calls[1]!).toBe(false);
+  });
+
+  it('openai: лестница модерации — смягчённый промт проходит; полный отказ → moderated', async () => {
+    const { createOpenaiImageProvider } = await import('../src/image/openai');
+    const { UGC_PRESETS } = await import('../src/engine/carousel/blocks');
+    const seen: string[] = [];
+    const softening = createOpenaiImageProvider(async (p) => {
+      seen.push(String(p.prompt));
+      if (String(p.prompt).includes('no beauty retouch')) throw new Error('rejected by content policy');
+      return { data: [{ b64_json: 'QUJD' }], usage: {} };
+    });
+    const res = await softening.edit({ ...req, prompt: `scene ${UGC_PRESETS.casual}`, imagePaths: [refPath] });
+    expect(res.moderated).toBeUndefined();
+    expect(seen.length).toBeGreaterThan(1);
+
+    const alwaysRefuse = createOpenaiImageProvider(async () => {
+      throw new Error('moderation blocked');
+    });
+    const blocked = await alwaysRefuse.edit({ ...req, prompt: `scene ${UGC_PRESETS.casual}`, imagePaths: [refPath] });
+    expect(blocked.moderated).toBe(true);
+    expect(blocked.b64).toBe('');
+  });
+
+  it('openai: не-модерационная ошибка пробрасывается по-русски', async () => {
+    const { createOpenaiImageProvider } = await import('../src/image/openai');
+    const provider = createOpenaiImageProvider(async () => {
+      throw new Error('connection reset');
+    });
+    await expect(provider.edit({ ...req, imagePaths: [refPath] })).rejects.toThrow(/Images API/);
+  });
+
+  it('effectiveSlideSize: гибкой модели — как есть, негибкой — фикс-тройка', async () => {
+    const { effectiveSlideSize } = await import('../src/image/openai');
+    expect(effectiveSlideSize('1024x1280', 'gpt-image-2')).toBe('1024x1280');
+    expect(effectiveSlideSize('1024x1280', 'gpt-image-1')).toBe('1024x1536');
+    expect(effectiveSlideSize('1024x1024', 'gpt-image-1')).toBe('1024x1024');
+    expect(effectiveSlideSize('1280x1024', 'gpt-image-1')).toBe('1536x1024');
   });
 });
