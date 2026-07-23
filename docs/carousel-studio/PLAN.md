@@ -98,17 +98,17 @@
 
 ## P5 Reference Miner
 
-- [ ] P5.1 server/src/apify.ts: createApify({fetchImpl}) по шаблону wavespeed (run→poll→dataset) —
+- [x] P5.1 server/src/apify.ts: createApify({fetchImpl}) по шаблону wavespeed (run→poll→dataset) —
       check: unit (fake fetch).
-- [ ] P5.2 mining run: mining_runs строка, воркер с персистом apify_run_id, resume, hold/settle
+- [x] P5.2 mining run: mining_runs строка, воркер с персистом apify_run_id, resume, hold/settle
       (reused→409); seed v1 = только аккаунты — check: unit.
-- [ ] P5.3 engine/miner/virality.ts: чистый фильтр (ER/likes/свежесть/топ-N) — check: табличные тесты.
-- [ ] P5.4 engine/miner/patterns.ts: vision→PatternCard (структура-only, запрет уникальных деталей,
+- [x] P5.3 engine/miner/virality.ts: чистый фильтр (ER/likes/свежесть/топ-N) — check: табличные тесты.
+- [x] P5.4 engine/miner/patterns.ts: vision→PatternCard (структура-only, запрет уникальных деталей,
       подписи источника вне контекста), thumb-кэш TTL — check: unit.
-- [ ] P5.5 Роуты подборок: CRUD, mine (лимит+hold), лента — inject-тесты tenancy/лимитов — check: unit.
-- [ ] P5.6 UI «Подборки»: запуск (цена), лента PatternCards (thumb+атрибуция), «Использовать в идеях» —
+- [x] P5.5 Роуты подборок: CRUD, mine (лимит+hold), лента — inject-тесты tenancy/лимитов — check: unit.
+- [x] P5.6 UI «Подборки»: запуск (цена), лента PatternCards (thumb+атрибуция), «Использовать в идеях» —
       check: web unit.
-- [ ] P5.7 Легальные гарды кодом: reject mined-путей в генерации (unit доказывает), caption-изоляция —
+- [x] P5.7 Легальные гарды кодом: reject mined-путей в генерации (unit доказывает), caption-изоляция —
       check: unit.
 
 ## P6 Экспорт и Telegram
