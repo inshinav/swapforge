@@ -489,6 +489,13 @@ function CarouselStatusTag({ status }: { status: CarouselInfo['status'] }) {
   return <Tag tone={m.tone}>{m.label}</Tag>;
 }
 
+/** Превью-лист лука (варианта): первый model-role реф этого варианта, иначе shared. */
+function lookThumb(model: ModelInfo, variantId: string): string | null {
+  const own = model.refs.find((r) => r.role === 'model' && r.variantId === variantId);
+  const shared = model.refs.find((r) => r.role === 'model' && r.variantId === null);
+  return own?.file ?? shared?.file ?? null;
+}
+
 function CreateCard({ onCreated, onOpenModels }: { onCreated: (id: string) => void; onOpenModels: () => void }) {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [modelId, setModelId] = useState('');
@@ -496,11 +503,19 @@ function CreateCard({ onCreated, onOpenModels }: { onCreated: (id: string) => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.models().then(setModels).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  const reloadModels = useCallback(async () => {
+    const ms = await api.models();
+    setModels(ms);
+    return ms;
   }, []);
 
+  useEffect(() => {
+    void reloadModels().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [reloadModels]);
+
   const model = models?.find((m) => m.id === modelId) ?? null;
+  // Луки = варианты модели с готовым identity-листом (role=model).
+  const looks = (model?.variants ?? []).filter((v) => model && lookThumb(model, v.id) !== null);
 
   const create = async () => {
     setBusy(true);
@@ -517,7 +532,7 @@ function CreateCard({ onCreated, onOpenModels }: { onCreated: (id: string) => vo
 
   return (
     <Card glow>
-      <SectionTitle step="1" title="Новая карусель" hint="фото-карусель для IG с твоей моделью" />
+      <SectionTitle step="1" title="Новая карусель" hint="выбери модель и лук — образ со всех ракурсов" />
       <div className="p-4 space-y-3">
         {models !== null && models.length === 0 ? (
           <div className="space-y-2">
@@ -526,51 +541,164 @@ function CreateCard({ onCreated, onOpenModels }: { onCreated: (id: string) => vo
           </div>
         ) : (
           <>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <label className="block text-sm">
-                <span className="text-mut text-xs">Модель</span>
-                <select
-                  className="mt-1 w-full rounded-lg border border-line2 bg-panel2 px-3 py-2"
-                  value={modelId}
-                  onChange={(e) => {
-                    setModelId(e.target.value);
-                    setVariantId('');
+            <label className="block text-sm max-w-xs">
+              <span className="text-mut text-xs">Модель</span>
+              <select
+                className="mt-1 w-full rounded-lg border border-line2 bg-panel2 px-3 py-2"
+                value={modelId}
+                onChange={(e) => {
+                  setModelId(e.target.value);
+                  setVariantId('');
+                }}
+              >
+                <option value="">— выбери —</option>
+                {(models ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </label>
+            {model && (
+              <div className="space-y-2">
+                <div className="text-xs text-mut">Лук — образ и лицо берутся с выбранного листа:</div>
+                <LookGallery
+                  model={model}
+                  looks={looks}
+                  selected={variantId}
+                  onSelect={setVariantId}
+                  onAdded={async (newVariantId) => {
+                    await reloadModels();
+                    setVariantId(newVariantId);
                   }}
-                >
-                  <option value="">— выбери —</option>
-                  {(models ?? []).map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm">
-                <span className="text-mut text-xs">Вариант (образ)</span>
-                <select
-                  className="mt-1 w-full rounded-lg border border-line2 bg-panel2 px-3 py-2"
-                  value={variantId}
-                  onChange={(e) => setVariantId(e.target.value)}
-                  disabled={!model}
-                >
-                  <option value="">— выбери —</option>
-                  {(model?.variants ?? []).map((v) => (
-                    <option key={v.id} value={v.id}>{v.title}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
+                  onError={setError}
+                />
+              </div>
+            )}
             {error && <ErrorNote text={error} />}
             <div className="flex flex-wrap items-center gap-3">
               <Button kind="primary" busy={busy} disabled={!modelId || !variantId} onClick={() => void create()}>
                 Создать карусель
               </Button>
               <span className="text-xs text-mut">
-                лук (образ+фото) и пропсы (мотоцикл, шлем…) добавишь следующим шагом
+                пропсы (мотоцикл, шлем…) и уточнение лука — следующим шагом
               </span>
             </div>
           </>
         )}
       </div>
     </Card>
+  );
+}
+
+/** Наглядная галерея луков (вариантов) с превью-листами + добавление своих (P10). */
+function LookGallery({
+  model,
+  looks,
+  selected,
+  onSelect,
+  onAdded,
+  onError,
+}: {
+  model: ModelInfo;
+  looks: Array<{ id: string; title: string }>;
+  selected: string;
+  onSelect: (variantId: string) => void;
+  onAdded: (variantId: string) => Promise<void>;
+  onError: (msg: string | null) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!newName.trim() || !file) return;
+    setBusy(true);
+    onError(null);
+    try {
+      const { id: variantId } = await api.addModelVariant(model.id, newName.trim());
+      await api.addModelRef(model.id, file, 'model', variantId, '');
+      await onAdded(variantId);
+      setAdding(false);
+      setNewName('');
+      setFile(null);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+      {looks.map((v) => {
+        const thumb = lookThumb(model, v.id);
+        const on = selected === v.id;
+        return (
+          <button
+            key={v.id}
+            type="button"
+            onClick={() => onSelect(v.id)}
+            className={`group relative rounded-xl overflow-hidden border-2 transition-colors ${
+              on ? 'border-lime' : 'border-line hover:border-lime/40'
+            }`}
+          >
+            <div className="aspect-[3/4] bg-bg">
+              {thumb && (
+                <img src={api.modelFileUrl(model.id, thumb)} alt={v.title} className="w-full h-full object-cover" />
+              )}
+            </div>
+            <div className={`px-1.5 py-1 text-[11px] font-semibold truncate ${on ? 'text-lime bg-lime/10' : 'text-mut'}`}>
+              {v.title}
+            </div>
+            {on && (
+              <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-lime text-black text-xs flex items-center justify-center">
+                ✓
+              </div>
+            )}
+          </button>
+        );
+      })}
+      {adding ? (
+        <div className="col-span-3 sm:col-span-4 rounded-xl border border-line2 bg-panel2 p-3 space-y-2">
+          <div className="text-sm font-semibold">Новый лук</div>
+          <input
+            className="w-full rounded-lg border border-line2 bg-panel px-3 py-2 text-sm"
+            placeholder="Название лука: «спорт half-zip оранжевые»"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <div className="flex items-center gap-2">
+            <label className="inline-flex items-center gap-2 rounded-lg border border-line2 bg-panel px-3 py-2 text-sm cursor-pointer hover:border-lime/50">
+              {file ? file.name.slice(0, 24) : 'Выбрать лист (фото со всех ракурсов)'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+          </div>
+          <div className="text-[11px] text-mut">
+            Лучше всего — character sheet: лицо крупным планом + фигура спереди/сбоку/сзади на одном листе.
+          </div>
+          <div className="flex gap-2">
+            <Button kind="primary" busy={busy} disabled={!newName.trim() || !file} onClick={() => void submit()}>
+              Сохранить лук
+            </Button>
+            <Button onClick={() => setAdding(false)}>Отмена</Button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="rounded-xl border border-dashed border-line2 aspect-[3/4] flex flex-col items-center justify-center gap-1 text-mut hover:border-lime/50 hover:text-lime text-xs"
+        >
+          <span className="text-2xl leading-none">+</span>
+          Новый лук
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -704,8 +832,8 @@ function LookStep({ carousel, onChanged }: { carousel: CarouselInfo; onChanged: 
     <Card>
       <SectionTitle
         step="1a"
-        title="Лук и что в кадре"
-        hint="опиши образ и добавь фото — слайды будут строго по ним"
+        title="Уточнить образ и пропсы"
+        hint="основной лук — с выбранного листа; тут можно добавить деталь и что в кадре"
       />
       <div className="p-4 space-y-3">
         {error && <ErrorNote text={error} />}
