@@ -154,9 +154,9 @@ ZIP: `slide-01.jpg … slide-NN.jpg` (1080×1350 / 1080×1080, sRGB, ≤4MB/сл
 draft→storyboard→generating→qc_review→done/failed, идея/раскадровка/подпись JSON, location_pack,
 quote-снапшот, run-id), `carousel_slides` (project, idx, статус
 pending→generating→qc→done|needs_review|moderated|failed, prompt JSON, файлы, anchor-флаг, qc JSON,
-счётчики ретраев), `pattern_cards`, `collections` + `collection_items`, `mining_runs` (seed, статус,
-apify_run_id, статистика, cost). Существующие таблицы не меняются (кроме оговорённых аддитивных
-касаний §9-таблицы плана).
+счётчики ретраев), `collections`, `pattern_cards` (прямой FK `collection_id` — подборка 1:N карточки,
+join-таблица не нужна в v1), `mining_runs` (seed, статус, apify_run_id, статистика, cost).
+Существующие таблицы не меняются (кроме оговорённых аддитивных касаний §9-таблицы плана).
 
 ## §9 API и UI
 

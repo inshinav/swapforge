@@ -357,6 +357,101 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events(user_id, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_holds_attempt ON credit_holds(attempt_id) WHERE attempt_id IS NOT NULL;
   `);
+
+  // ── Carousel Studio (docs/carousel-studio/SPEC.md §8; только аддитивные CREATE) ──
+  // model_id/variant_id без FK: карусель переживает удаление модели (identity уже потреблена).
+  // Статус рендера карусели живёт ТОЛЬКО здесь + в carousel_slides; таблицы видео-пайплайна
+  // (projects/generations/jobs) карусель не трогает.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS carousel_projects (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      model_id TEXT,
+      variant_id TEXT,
+      title TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','storyboard','generating','qc_review','done','failed')),
+      idea_json TEXT,
+      storyboard_json TEXT,
+      caption_json TEXT,
+      location_pack TEXT NOT NULL DEFAULT 'miami',
+      slide_count INTEGER NOT NULL DEFAULT 6,
+      quote_json TEXT,
+      run_id TEXT,
+      hold_id TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS carousel_slides (
+      id TEXT PRIMARY KEY,
+      carousel_id TEXT NOT NULL REFERENCES carousel_projects(id) ON DELETE CASCADE,
+      idx INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','generating','qc','done','needs_review','moderated','failed')),
+      prompt_json TEXT,
+      file TEXT,
+      final_file TEXT,
+      is_anchor INTEGER NOT NULL DEFAULT 0,
+      qc_json TEXT,
+      auto_retries INTEGER NOT NULL DEFAULT 0,
+      manual_retries INTEGER NOT NULL DEFAULT 0,
+      accepted INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS collections (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      seed_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'ready',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pattern_cards (
+      id TEXT PRIMARY KEY,
+      collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      source_url TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      author TEXT NOT NULL DEFAULT '',
+      virality_json TEXT NOT NULL DEFAULT '{}',
+      structure_json TEXT NOT NULL DEFAULT '{}',
+      thumb_file TEXT,
+      niche_tags_json TEXT NOT NULL DEFAULT '[]',
+      liked INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS mining_runs (
+      id TEXT PRIMARY KEY,
+      collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      seed_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued','running','filtering','vision','done','failed')),
+      apify_run_id TEXT,
+      stats_json TEXT,
+      cost_usd REAL,
+      hold_id TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_carousel_projects_user ON carousel_projects(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_carousel_projects_claim ON carousel_projects(status, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_slides_pos ON carousel_slides(carousel_id, idx);
+    CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_pattern_cards_collection ON pattern_cards(collection_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_mining_runs_collection ON mining_runs(collection_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_mining_runs_active ON mining_runs(status, created_at)
+      WHERE status IN ('queued','running','filtering','vision');
+  `);
 }
 
 export function getDb(): DatabaseSync {

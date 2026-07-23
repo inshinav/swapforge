@@ -19,13 +19,13 @@
 ## P0 Foundation
 
 - [x] P0.1 Ветка + docs `SPEC.md`/`PLAN.md`/`PROGRESS.md` — done: файлы в репо — check: файлы + git log.
-- [ ] P0.2 config.ts: флаги `carouselStudio`/`carouselOwnerOnly`, `APIFY_TOKEN`, `CAROUSEL_IMAGE_MODEL`
+- [x] P0.2 config.ts: флаги `carouselStudio`/`carouselOwnerOnly`, `APIFY_TOKEN`, `CAROUSEL_IMAGE_MODEL`
       (default = openaiImageModel), `CAROUSEL_CONCURRENCY=2`, `CAROUSEL_MAX_SLIDES=10`,
       `CAROUSEL_SLIDE_SIZE=1024x1280`, `CAROUSEL_REVIEW_TTL_H=24`, `LIMIT_CAROUSELS_PER_DAY`,
       `LIMIT_MINER_PER_DAY`, `MINER_RUN_COST_USD_PER_100`, QC-пороги — done: дефолты выкл/консервативные,
       существующие ключи не тронуты — check: typecheck + suite.
-- [ ] P0.3 db.ts applySchema: `carousel_projects`, `carousel_slides`, `pattern_cards`, `collections`,
-      `collection_items`, `mining_runs` + индексы (только CREATE IF NOT EXISTS) — done: бут создаёт,
+- [x] P0.3 db.ts applySchema: `carousel_projects`, `carousel_slides`, `pattern_cards` (прямой FK на
+      `collections`), `mining_runs` + индексы (только CREATE IF NOT EXISTS) — done: бут создаёт,
       существующее нетронуто — check: новый db-тест + suite.
 - [ ] P0.4 shared/carousel.ts: статусы, DTO, zod+JSON Schema (dual) Idea/Storyboard/Caption/QC/PatternCard —
       done: схемы валидируют фикстуры — check: unit.
