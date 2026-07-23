@@ -113,16 +113,16 @@
 
 ## P6 Экспорт и Telegram
 
-- [ ] P6.1 zip-store.ts (STORED, без deps) + GET .../export.zip — done: тест распаковывает и сверяет —
+- [x] P6.1 zip-store.ts (STORED, без deps) + GET .../export.zip — done: тест распаковывает и сверяет —
       check: unit.
-- [ ] P6.2 telegram/notify.ts (sendMediaGroup 2–10 / sendPhoto-фолбэк / sendChatAction-прекол,
+- [x] P6.2 telegram/notify.ts (sendMediaGroup 2–10 / sendPhoto-фолбэк / sendChatAction-прекол,
       403→RU-подсказка) + «В Telegram» + уведомление о готовности — check: unit (fake fetch).
 
 ## P7 Hardening & launch
 
-- [ ] P7.1 Дневные лимиты (kinds carousel/miner) + admin-сводка + carousel-aware порог алерта холдов —
+- [x] P7.1 Дневные лимиты (kinds carousel/miner) + admin-сводка + carousel-aware порог алерта холдов —
       check: unit.
-- [ ] P7.2 Раздел в гайде (RU) + легал-примечание про майнинг — check: build.
-- [ ] P7.3 E2E-смоук в preview-браузере на mock-провайдере, фиксы — check: ручной прогон.
-- [ ] P7.4 Финал: typecheck+lint+test+build + `bash deploy/launch-gate.sh`, PROGRESS финал,
+- [x] P7.2 Раздел в гайде (RU) + легал-примечание про майнинг — check: build.
+- [x] P7.3 E2E-смоук в preview-браузере на mock-провайдере, фиксы — check: ручной прогон.
+- [x] P7.4 Финал: typecheck+lint+test+build + `bash deploy/launch-gate.sh`, PROGRESS финал,
       план включения флага (owner-only → все) — check: команды зелёные.
