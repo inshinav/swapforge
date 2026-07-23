@@ -8,6 +8,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getDb } from './db';
 import { config } from './config';
 import { getOwnedModel } from './models';
+import { consumeDailyLimit } from './limits';
+import { requireOwner } from './auth/middleware';
 import { carouselQueuePosition, enqueueCarouselRun } from './engine/carousel/worker';
 import {
   acceptSlide,
@@ -228,6 +230,12 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
     }
     const slideCount = (parseJson<{ slides: unknown[] }>(row.storyboard_json)?.slides ?? []).length;
     if (slideCount < 2) return bad(reply, 409, 'В раскадровке меньше двух слайдов');
+    if (req.user!.role !== 'owner') {
+      const lim = consumeDailyLimit(req.user!.id, 'carousel', config.limitCarouselsPerDay);
+      if (!lim.allowed) {
+        return bad(reply, 429, `Дневной лимит каруселей исчерпан (${config.limitCarouselsPerDay}) — возвращайся завтра`);
+      }
+    }
     try {
       startGenerationHold(id, req.user!.id, slideCount);
     } catch (e) {
@@ -455,6 +463,40 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
       .run(id);
     enqueueCarouselRun(id);
     return { ok: true };
+  });
+
+  // ── Наблюдаемость владельца (SPEC §10). Алерт «резервы >30 мин» в админке НЕ трогаем:
+  // легитимные раны шумят — принятое решение, источник шума виден в этой сводке. ──
+  app.get('/api/carousel/admin/summary', { preHandler: requireOwner }, async () => {
+    const db = getDb();
+    const byStatus = db
+      .prepare(
+        `SELECT status, COUNT(*) AS c FROM carousel_projects
+          WHERE created_at >= datetime('now', '-1 day') GROUP BY status`,
+      )
+      .all() as Array<{ status: string; c: number }>;
+    const costToday = db
+      .prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage_events
+          WHERE task LIKE 'carousel_%' AND created_at >= datetime('now', '-1 day')`,
+      )
+      .get() as { s: number };
+    const openHolds = db
+      .prepare(
+        `SELECT COUNT(*) AS c, COALESCE(SUM(h.credits), 0) AS credits
+           FROM credit_holds h JOIN carousel_projects c2 ON c2.id = h.project_id
+          WHERE h.status = 'open'`,
+      )
+      .get() as { c: number; credits: number };
+    const miningToday = db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM mining_runs WHERE created_at >= datetime('now', '-1 day')`,
+      )
+      .get() as { c: number };
+    return {
+      day: { byStatus, costUsd: costToday.s, miningRuns: miningToday.c },
+      openCarouselHolds: { count: openHolds.c, credits: openHolds.credits },
+    };
   });
 
   // ── Экспорт и доставка (SPEC §6) ──

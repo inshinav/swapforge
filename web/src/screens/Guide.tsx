@@ -59,12 +59,15 @@ export default function Guide({
   onOpenModels,
   onOpenSwap,
   onLoginCta,
+  carouselEnabled = false,
 }: {
   onDone?: () => void;
   onOpenModels?: () => void;
   onOpenSwap?: () => void;
   /** Анонимный просмотр до входа: вместо действий кабинета — призыв войти. */
   onLoginCta?: () => void;
+  /** Секция «Карусели» видна только при включённой фиче (SPEC §0.1). */
+  carouselEnabled?: boolean;
 }) {
   const anonymous = !!onLoginCta;
   return (
@@ -201,6 +204,27 @@ export default function Guide({
         </Card>
       </div>
 
+      {carouselEnabled && (
+        <Card>
+          <SectionTitle title="Карусели (новое)" hint="фото-карусели для IG с твоей моделью" />
+          <div className="p-4 sm:p-5 space-y-2 text-sm text-mut">
+            <p>
+              Раздел «Карусели» собирает фото-карусель с твоей моделью: выбираешь модель, получаешь идеи,
+              правишь раскадровку по сценам Майами — и получаешь 2–10 согласованных UGC-слайдов с подписью.
+              Слайды идут по одному (первый — якорь образа), 3 слайда ≈ 5–10 минут. Цена видна до запуска,
+              неудачные и замодерированные слайды не списываются.
+            </p>
+            <p>
+              «Подборки» анализируют вирусные карусели выбранных аккаунтов и превращают их в структурные
+              паттерны (тип хука, роли слайдов, композиция) — их можно подмешивать в идеи.
+            </p>
+            <p className="text-xs">
+              Юридическая заметка: майнер адаптирует структуру и идеи чужих постов — изображения и тексты
+              подписей источников никогда не копируются и не используются в генерации.
+            </p>
+          </div>
+        </Card>
+      )}
       <Card>
         <div className="p-4 sm:p-5 flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="text-sm font-semibold flex-1">Готов попробовать?</div>

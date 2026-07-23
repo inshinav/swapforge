@@ -495,6 +495,7 @@ export default function App() {
           />
         ) : activeView === 'guide' ? (
           <Guide
+            carouselEnabled={carouselEnabled}
             onOpenModels={() => go('models')}
             onOpenSwap={() => go('swap')}
             onDone={journeyActive ? () => {
