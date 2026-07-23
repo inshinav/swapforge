@@ -29,6 +29,9 @@ import type {
   CarouselIdeas,
   CarouselInfo,
   CarouselQuoteInfo,
+  CollectionInfo,
+  MiningRunInfo,
+  PatternCardInfo,
   Storyboard,
 } from '@shared/carousel';
 
@@ -333,8 +336,8 @@ export const api = {
     fetch(u(`api/carousel/projects/${id}`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
       j<{ ok: true }>(r),
     ),
-  carouselIdeas: (id: string, wish?: string) =>
-    post(u(`api/carousel/projects/${id}/ideas`), { wish }).then((r) => j<CarouselIdeas>(r)),
+  carouselIdeas: (id: string, opts?: { wish?: string; patternCardIds?: string[] }) =>
+    post(u(`api/carousel/projects/${id}/ideas`), opts ?? {}).then((r) => j<CarouselIdeas>(r)),
   carouselPickIdea: (id: string, idea: CarouselIdea) =>
     post(u(`api/carousel/projects/${id}/idea`), { idea }).then((r) => j<{ ok: true }>(r)),
   carouselStoryboardGen: (id: string) =>
@@ -356,4 +359,31 @@ export const api = {
   carouselSlideAction: (id: string, slideId: string, action: 'accept' | 'retry') =>
     post(u(`api/carousel/projects/${id}/slides/${slideId}/${action}`)).then((r) => j<{ ok: true }>(r)),
   carouselFileUrl: (id: string, file: string) => u(`api/carousel/${id}/file/${encodeURIComponent(file)}`),
+
+  // ── Reference Miner («Подборки») ─────────────────────────────────────────
+  minerCollections: () =>
+    fetch(u('api/miner/collections')).then((r) => j<{ collections: CollectionInfo[] }>(r)),
+  minerCreate: (body: { name: string; usernames: string[]; limit?: number }) =>
+    post(u('api/miner/collections'), body).then((r) => j<{ collection: CollectionInfo }>(r)),
+  minerDelete: (id: string) =>
+    fetch(u(`api/miner/collections/${id}`), { method: 'DELETE', headers: csrfHeader() }).then((r) =>
+      j<{ ok: true }>(r),
+    ),
+  minerGet: (id: string) =>
+    fetch(u(`api/miner/collections/${id}`)).then((r) =>
+      j<{ collection: CollectionInfo; runs: MiningRunInfo[]; cards: PatternCardInfo[] }>(r),
+    ),
+  minerQuote: (limit?: number) =>
+    fetch(u(`api/miner/quote${limit ? `?limit=${limit}` : ''}`)).then((r) =>
+      j<{ priceUsd: number | null }>(r),
+    ),
+  minerMine: (id: string) => post(u(`api/miner/collections/${id}/mine`)).then((r) => j<{ runId: string }>(r)),
+  minerCardPatch: (cardId: string, body: { liked?: boolean; archived?: boolean }) =>
+    fetch(u(`api/miner/cards/${cardId}`), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...csrfHeader() },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ ok: true }>(r)),
+  minerThumbUrl: (collectionId: string, file: string) =>
+    u(`api/miner/collections/${collectionId}/thumb/${encodeURIComponent(file)}`),
 };

@@ -9,6 +9,8 @@ import type {
   CarouselIdea,
   CarouselInfo,
   CarouselQuoteInfo,
+  CollectionInfo,
+  PatternCardInfo,
   SlideInfo,
   Storyboard,
 } from '@shared/carousel';
@@ -112,6 +114,7 @@ export default function CarouselStudio({
         }}
         onOpenModels={onOpenModels}
       />
+      <CollectionsCard />
       <Card>
         <SectionTitle title="Мои карусели" hint="последние 50" />
         <div className="p-4 space-y-2">
@@ -139,6 +142,214 @@ export default function CarouselStudio({
           )}
         </div>
       </Card>
+    </div>
+  );
+}
+
+/** «Подборки» (SPEC §3): майнинг вирусных референсов → структурные PatternCards. */
+function CollectionsCard() {
+  const [collections, setCollections] = useState<CollectionInfo[] | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ cards: PatternCardInfo[]; runStatus: string | null } | null>(null);
+  const [name, setName] = useState('');
+  const [usernames, setUsernames] = useState('');
+  const [minePrice, setMinePrice] = useState<number | null>(null);
+  const [busy, setBusy] = useState<'create' | 'mine' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setCollections((await api.minerCollections()).collections);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (expanded) {
+      void load();
+      api.minerQuote().then((r) => setMinePrice(r.priceUsd)).catch(() => setMinePrice(null));
+    }
+  }, [expanded, load]);
+
+  const loadDetail = useCallback(async (id: string) => {
+    try {
+      const res = await api.minerGet(id);
+      setDetail({ cards: res.cards, runStatus: res.runs[0]?.status ?? null });
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!openId) {
+      setDetail(null);
+      return;
+    }
+    void loadDetail(openId);
+  }, [loadDetail, openId]);
+
+  // Поллинг статуса активного рана.
+  useEffect(() => {
+    if (!openId || !detail?.runStatus || !['queued', 'running', 'filtering', 'vision'].includes(detail.runStatus)) return;
+    const t = setInterval(() => void loadDetail(openId), 3000);
+    return () => clearInterval(t);
+  }, [detail?.runStatus, loadDetail, openId]);
+
+  const create = async () => {
+    setBusy('create');
+    setError(null);
+    try {
+      const list = usernames.split(/[,\s]+/).filter(Boolean);
+      await api.minerCreate({ name, usernames: list });
+      setName('');
+      setUsernames('');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const mine = async (id: string) => {
+    setBusy('mine');
+    setError(null);
+    try {
+      await api.minerMine(id);
+      await loadDetail(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card>
+      <SectionTitle
+        title="Подборки"
+        hint="вирусные референсы → структурные паттерны для идей"
+        right={<Button onClick={() => setExpanded((v) => !v)}>{expanded ? 'Свернуть' : 'Открыть'}</Button>}
+      />
+      {expanded && (
+        <div className="p-4 space-y-3">
+          {error && <ErrorNote text={error} />}
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              className="flex-1 rounded-lg border border-line2 bg-panel2 px-3 py-2 text-sm"
+              placeholder="Имя подборки"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <input
+              className="flex-1 rounded-lg border border-line2 bg-panel2 px-3 py-2 text-sm"
+              placeholder="Аккаунты через запятую (@user1, @user2)"
+              value={usernames}
+              onChange={(e) => setUsernames(e.target.value)}
+            />
+            <Button kind="primary" busy={busy === 'create'} disabled={!name || !usernames} onClick={() => void create()}>
+              Создать
+            </Button>
+          </div>
+          {collections === null ? (
+            <div className="flex justify-center py-4"><Spinner /></div>
+          ) : collections.length === 0 ? (
+            <Empty icon="◈" title="Подборок нет" sub="Собери первую: аккаунты-источники → виральные паттерны" />
+          ) : (
+            collections.map((c) => (
+              <div key={c.id} className="rounded-xl border border-line bg-panel2">
+                <button
+                  type="button"
+                  className="w-full text-left px-4 py-3 flex items-center gap-3"
+                  onClick={() => setOpenId(openId === c.id ? null : c.id)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold truncate">{c.name}</div>
+                    <div className="text-xs text-mut">{c.cardCount} карточек</div>
+                  </div>
+                  <Tag tone={c.cardCount > 0 ? 'lime' : 'mut'}>{openId === c.id ? '▴' : '▾'}</Tag>
+                </button>
+                {openId === c.id && (
+                  <div className="px-4 pb-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        kind="primary"
+                        busy={busy === 'mine'}
+                        disabled={!!detail?.runStatus && ['queued', 'running', 'filtering', 'vision'].includes(detail.runStatus)}
+                        onClick={() => void mine(c.id)}
+                      >
+                        Майнить · {priceLabel(minePrice)}
+                      </Button>
+                      {detail?.runStatus && ['queued', 'running', 'filtering', 'vision'].includes(detail.runStatus) && (
+                        <Tag tone="lime">майнинг: {detail.runStatus}</Tag>
+                      )}
+                    </div>
+                    {detail && detail.cards.length > 0 && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {detail.cards.map((card) => (
+                          <PatternCardTile key={card.id} collectionId={c.id} card={card} onChanged={() => void loadDetail(c.id)} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+          <div className="text-xs text-mut">
+            Майнер адаптирует структуру и идеи вирусных постов — изображения и подписи источников никогда не копируются.
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function PatternCardTile({
+  collectionId,
+  card,
+  onChanged,
+}: {
+  collectionId: string;
+  card: PatternCardInfo;
+  onChanged: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-line bg-panel overflow-hidden">
+      <div className="aspect-square bg-bg">
+        {card.thumbFile ? (
+          <img src={api.minerThumbUrl(collectionId, card.thumbFile)} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-dim">◈</div>
+        )}
+      </div>
+      <div className="p-2 space-y-1">
+        <div className="text-[11px] text-mut truncate">
+          @{card.author} · ER {(card.virality.er * 100).toFixed(1)}%
+        </div>
+        <div className="text-[11px] truncate" title={card.structure.hookType}>{card.structure.hookType}</div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className={`text-xs px-1.5 py-0.5 rounded border ${card.liked ? 'border-lime/40 text-lime' : 'border-line2 text-mut'}`}
+            onClick={() => void api.minerCardPatch(card.id, { liked: !card.liked }).then(onChanged)}
+          >
+            ♥
+          </button>
+          <a
+            className="text-[11px] text-mut hover:text-lime truncate"
+            href={card.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            источник ↗
+          </a>
+        </div>
+      </div>
     </div>
   );
 }
@@ -333,13 +544,46 @@ function IdeaStep({
   const [busy, setBusy] = useState(false);
   const [pickBusy, setPickBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [likedCards, setLikedCards] = useState<string[]>([]);
+  const [usePatterns, setUsePatterns] = useState(true);
+
+  // Лайкнутые PatternCards из всех подборок — few-shot для идей (до 5).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { collections } = await api.minerCollections();
+        const ids: string[] = [];
+        for (const c of collections) {
+          if (ids.length >= 5) break;
+          const { cards } = await api.minerGet(c.id);
+          for (const card of cards) {
+            if (card.liked && ids.length < 5) ids.push(card.id);
+          }
+        }
+        if (!cancelled) setLikedCards(ids);
+      } catch {
+        /* подборки опциональны */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const generate = () =>
     guarded(
       async () => {
         setBusy(true);
         try {
-          setIdeas((await api.carouselIdeas(carousel.id, wish || undefined)).ideas);
+          setIdeas(
+            (
+              await api.carouselIdeas(carousel.id, {
+                wish: wish || undefined,
+                patternCardIds: usePatterns && likedCards.length > 0 ? likedCards : undefined,
+              })
+            ).ideas,
+          );
         } finally {
           setBusy(false);
         }
@@ -383,6 +627,12 @@ function IdeaStep({
             Идеи · {priceLabel(prices?.ideasUsd)}
           </Button>
         </div>
+        {likedCards.length > 0 && (
+          <label className="flex items-center gap-2 text-xs text-mut">
+            <input type="checkbox" checked={usePatterns} onChange={(e) => setUsePatterns(e.target.checked)} />
+            Использовать паттерны из подборок (♥ {likedCards.length}) — структура, не копирование
+          </label>
+        )}
         {error && <ErrorNote text={error} />}
         {ideas && (
           <div className="space-y-2">
