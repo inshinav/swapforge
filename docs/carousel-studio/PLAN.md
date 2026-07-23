@@ -69,11 +69,11 @@
       resumeCarousels() в index.ts — done: тесты порядка и резюма — check: unit.
 - [x] P2.4 storage.ts (аддитивно): carouselDir/ensure/safe-path, userUsageBytes, эвикция в
       cleanupStorageLifecycle + транзиент-свип — check: unit + storage-suite.
-- [ ] P2.5 routes-carousel.ts v1: CRUD, quote, start (прекол openHoldForProject→409 + hold), status,
+- [x] P2.5 routes-carousel.ts v1: CRUD, quote, start (прекол openHoldForProject→409 + hold), status,
       файлы; регистрация за флагом — done: inject-тесты CRUD/tenancy(чужое→404)/CSRF/флаг-выкл→404/409 —
       check: unit.
-- [ ] P2.6 Финализация ffmpeg: lanczos → 1080×1350 / 1080×1080 sRGB — check: unit (ffmpegAvailable-гард).
-- [ ] P2.G Гейт фазы: полный typecheck+lint+test+build.
+- [x] P2.6 Финализация ffmpeg: lanczos → 1080×1350 / 1080×1080 sRGB — check: unit (ffmpegAvailable-гард).
+- [x] P2.G Гейт фазы: полный typecheck+lint+test+build.
 
 ## P3 Движки
 
