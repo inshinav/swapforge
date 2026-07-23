@@ -111,10 +111,10 @@ describe('carousel: схемы движков', () => {
     }
   });
 
-  it('таблица имён задач: пять уникальных carousel_*-имён', () => {
+  it('таблица имён задач: семь уникальных carousel_*-имён', () => {
     const values = Object.values(CAROUSEL_TASKS);
-    expect(values).toHaveLength(5);
-    expect(new Set(values).size).toBe(5);
+    expect(values).toHaveLength(7);
+    expect(new Set(values).size).toBe(7);
     for (const v of values) expect(v).toMatch(/^carousel_[a-z]+$/);
   });
 });

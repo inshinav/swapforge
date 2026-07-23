@@ -49,7 +49,11 @@ export function buildCarouselQuote(slideCount: number): CarouselQuoteUsd {
 
 /** Смета одиночного идеационного вызова (микро-hold). */
 export function buildIdeationQuote(
-  task: typeof CAROUSEL_TASKS.idea | typeof CAROUSEL_TASKS.storyboard | typeof CAROUSEL_TASKS.caption,
+  task:
+    | typeof CAROUSEL_TASKS.idea
+    | typeof CAROUSEL_TASKS.storyboard
+    | typeof CAROUSEL_TASKS.caption
+    | typeof CAROUSEL_TASKS.discover,
 ): CarouselQuoteUsd {
   return totalOf([rowFor(task, 1)]);
 }

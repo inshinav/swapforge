@@ -23,7 +23,8 @@ export type UsageTask =
   | 'carousel_idea'
   | 'carousel_storyboard'
   | 'carousel_caption'
-  | 'carousel_pattern';
+  | 'carousel_pattern'
+  | 'carousel_discover';
 
 const STAGE_TASK: Partial<Record<StageName, UsageTask>> = {
   analyze: 'video_analysis',
@@ -50,6 +51,8 @@ export const SEED_TOKENS: Record<UsageTask, { tin: number; tout: number }> = {
   carousel_caption: { tin: 800, tout: 600 },
   // миниатюра поста high + метаданные → структурная карточка
   carousel_pattern: { tin: 2_000, tout: 500 },
+  // персона → темы+хэштеги автоподбора
+  carousel_discover: { tin: 900, tout: 500 },
 };
 
 export function taskModel(task: UsageTask): string {
@@ -57,6 +60,7 @@ export function taskModel(task: UsageTask): string {
   if (task === 'carousel_slide') return config.carouselImageModel;
   if (task === 'carousel_qc') return modelChainFor('analyze')[0]!;
   if (task === 'carousel_pattern') return modelChainFor('analyze')[0]!;
+  if (task === 'carousel_discover') return modelChainFor('generate')[0]!;
   if (task === 'video_analysis') return modelChainFor('analyze')[0]!;
   if (task === 'classify_ref') return modelChainFor('classify')[0]!;
   if (task === 'describe_ref') return modelChainFor('describe')[0]!;

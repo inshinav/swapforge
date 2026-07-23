@@ -14,7 +14,7 @@ import { reconcileOrphanHolds } from './billing/flow';
 import { reconcileDuePaymentIntents } from './billing/payments';
 import { reconcileCarouselHolds } from './engine/carousel/billing';
 import { resumeCarousels } from './engine/carousel/worker';
-import { resumeMiningRuns } from './engine/miner/run';
+import { reconcileMinerHolds, resumeMiningRuns } from './engine/miner/run';
 import { resumeDurableJobs } from './jobs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -35,7 +35,8 @@ async function main(): Promise<void> {
   if (config.carouselStudio) {
     reconcileCarouselHolds(); // карусельные холды по статус-матрице SPEC §7
     resumeCarousels(); // прерванные раны докатываются по пер-слайдовым чекпоинтам
-    resumeMiningRuns(); // майнинг с персистнутым apify_run_id докатывается, без него — fail+release
+    reconcileMinerHolds(); // сироты-холды подборок (упавшие темы/раны) — полный возврат
+    resumeMiningRuns(); // майнинг с персистнутым прогрессом докатывается, без него — fail+release
   }
   void reconcileDuePaymentIntents().catch((e) =>
     console.warn(`[billing] сверка платежей не удалась: ${e instanceof Error ? e.message : e}`),

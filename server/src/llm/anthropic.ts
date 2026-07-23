@@ -53,7 +53,7 @@ async function complete(req: StructuredRequest, withSchemaFormat: boolean): Prom
   if (usage.usage) {
     recordUsage({
       // carouselId атрибуцируется в ту же колонку scope-id (без FK — переживает удаления)
-      projectId: req.meta?.projectId ?? req.meta?.carouselId,
+      projectId: req.meta?.projectId ?? req.meta?.carouselId ?? req.meta?.collectionId,
       generationId: req.meta?.generationId,
       userId: req.meta?.userId,
       task: req.schemaName,

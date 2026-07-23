@@ -32,6 +32,7 @@ import type {
   CarouselRefInfo,
   CollectionInfo,
   MiningRunInfo,
+  MiningTheme,
   PatternCardInfo,
   Storyboard,
 } from '@shared/carousel';
@@ -403,11 +404,20 @@ export const api = {
     fetch(u(`api/miner/collections/${id}`)).then((r) =>
       j<{ collection: CollectionInfo; runs: MiningRunInfo[]; cards: PatternCardInfo[] }>(r),
     ),
-  minerQuote: (limit?: number) =>
-    fetch(u(`api/miner/quote${limit ? `?limit=${limit}` : ''}`)).then((r) =>
-      j<{ priceUsd: number | null }>(r),
+  minerQuote: (opts?: { limit?: number; discovery?: boolean }) =>
+    fetch(
+      u(
+        `api/miner/quote?limit=${opts?.limit ?? 100}${opts?.discovery ? '&discovery=1' : ''}`,
+      ),
+    ).then((r) => j<{ priceUsd: number | null; themesUsd: number | null }>(r)),
+  minerAutoStart: (modelId?: string) =>
+    post(u('api/miner/auto/start'), { modelId }).then((r) =>
+      j<{ collectionId: string; name: string; themes: MiningTheme[] }>(r),
     ),
-  minerMine: (id: string) => post(u(`api/miner/collections/${id}/mine`)).then((r) => j<{ runId: string }>(r)),
+  minerMine: (id: string, hashtags?: string[]) =>
+    post(u(`api/miner/collections/${id}/mine`), hashtags?.length ? { hashtags } : undefined).then((r) =>
+      j<{ runId: string }>(r),
+    ),
   minerCardPatch: (cardId: string, body: { liked?: boolean; archived?: boolean }) =>
     fetch(u(`api/miner/cards/${cardId}`), {
       method: 'PATCH',

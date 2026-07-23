@@ -8,8 +8,14 @@ import { getDb } from './db';
 import { config } from './config';
 import { consumeDailyLimit } from './limits';
 import { minerQuoteUsd, startMiningRun } from './engine/miner/run';
-import { HoldConflictError, InsufficientCreditsError } from './engine/carousel/billing';
-import { priceCredits } from './billing/credits';
+import { suggestThemes } from './engine/miner/discover';
+import {
+  HoldConflictError,
+  InsufficientCreditsError,
+  placeCarouselHold,
+} from './engine/carousel/billing';
+import { buildIdeationQuote } from './engine/carousel/pricing';
+import { priceCredits, releaseHold, settleHold } from './billing/credits';
 import { safeMinerThumbPath } from './storage';
 import type { CollectionInfo, MiningRunInfo, PatternCardInfo } from '../../shared/carousel';
 
@@ -96,10 +102,75 @@ export function registerMinerRoutes(app: FastifyInstance): void {
 
   app.get('/api/miner/quote', async (req, reply) => {
     if (hiddenFrom(req, reply)) return;
-    const q = (req.query ?? {}) as { limit?: string };
+    const q = (req.query ?? {}) as { limit?: string; discovery?: string };
     const limit = Math.max(10, Math.min(200, Number(q.limit) || 100));
-    const usd = minerQuoteUsd(limit);
-    return { priceUsd: usd === null ? null : priceCredits(usd) / 100 };
+    // P9: автоподбор добавляет hashtag-посты дискавери (до 3 тегов × 30).
+    const discoveryPosts = q.discovery === '1' ? 90 : 0;
+    const usd = minerQuoteUsd(limit, 20, discoveryPosts);
+    const themesUsd = buildIdeationQuote('carousel_discover').totalUsd;
+    return {
+      priceUsd: usd === null ? null : priceCredits(usd) / 100,
+      themesUsd: themesUsd === null ? null : priceCredits(themesUsd) / 100,
+    };
+  });
+
+  // ── P9: автоподбор — одна кнопка: подборка + темы под модель (микро-hold) ──
+  app.post('/api/miner/auto/start', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const body = (req.body ?? {}) as { modelId?: string };
+    const modelName = body.modelId
+      ? ((getDb().prepare(`SELECT name FROM models WHERE id=? AND user_id=?`).get(body.modelId, req.user!.id) as
+          | { name: string }
+          | undefined)?.name ?? null)
+      : null;
+    if (body.modelId && modelName === null) return bad(reply, 404, 'Модель не найдена');
+    const collectionId = randomUUID();
+    const name = `Авто · ${modelName ?? 'моя модель'} · ${new Date().toISOString().slice(0, 10)}`;
+    getDb()
+      .prepare(`INSERT INTO collections (id, user_id, name, seed_json) VALUES (?, ?, ?, ?)`)
+      .run(collectionId, req.user!.id, name, JSON.stringify({ auto: true, modelId: body.modelId ?? null, limit: 100 }));
+
+    // Микро-hold на подборку (scope = гейт LLM-вызова тем); провал = полный возврат.
+    const opId = `themes-${randomUUID().slice(0, 8)}`;
+    const isOwner = req.user!.role === 'owner';
+    let holdId: string | null = null;
+    if (!isOwner) {
+      const q = buildIdeationQuote('carousel_discover');
+      if (q.totalUsd === null) return bad(reply, 502, 'Смета временно недоступна — попробуй чуть позже');
+      try {
+        holdId = placeCarouselHold(req.user!.id, collectionId, priceCredits(q.totalUsd));
+      } catch (e) {
+        getDb().prepare(`DELETE FROM collections WHERE id=?`).run(collectionId);
+        if (e instanceof InsufficientCreditsError) {
+          return reply.code(402).send({
+            error: e.message,
+            shortfallUsd: Math.ceil(e.needCredits - e.availableCredits) / 100,
+          });
+        }
+        throw e;
+      }
+    }
+    try {
+      const themes = await suggestThemes({
+        collectionId,
+        userId: req.user!.id,
+        opId,
+        modelId: body.modelId ?? null,
+      });
+      if (holdId) {
+        const fact = (
+          getDb().prepare(`SELECT COALESCE(SUM(cost_usd),0) AS s FROM usage_events WHERE generation_id=?`).get(opId) as {
+            s: number;
+          }
+        ).s;
+        settleHold(holdId, priceCredits(fact), opId, 'списание по факту (темы автоподбора)');
+      }
+      return { collectionId, name, themes: themes.themes };
+    } catch (e) {
+      if (holdId) releaseHold(holdId, 0, 'темы не собрались — резерв возвращён');
+      getDb().prepare(`DELETE FROM collections WHERE id=?`).run(collectionId);
+      return bad(reply, 502, e instanceof Error ? e.message : String(e));
+    }
   });
 
   app.post('/api/miner/collections/:id/mine', async (req, reply) => {
@@ -119,7 +190,19 @@ export function registerMinerRoutes(app: FastifyInstance): void {
         return bad(reply, 429, `Дневной лимит майнинга исчерпан (${config.limitMinerPerDay}) — возвращайся завтра`);
       }
     }
-    const seed = JSON.parse(row.seed_json) as { usernames: string[]; limit: number };
+    const stored = JSON.parse(row.seed_json) as { usernames?: string[]; limit?: number };
+    // P9: хэштеги тем из тела (автоподбор) имеют приоритет над сохранённым seed.
+    const bodyTags = (((req.body ?? {}) as { hashtags?: string[] }).hashtags ?? [])
+      .map((h) => h.trim().toLowerCase().replace(/^#/, ''))
+      .filter((h) => /^[a-z0-9_]{2,40}$/.test(h))
+      .slice(0, 6);
+    const seed =
+      bodyTags.length > 0
+        ? { hashtags: bodyTags, limit: stored.limit ?? 100 }
+        : { usernames: stored.usernames ?? [], limit: stored.limit ?? 100 };
+    if (!('hashtags' in seed) && seed.usernames.length === 0) {
+      return bad(reply, 422, 'Ни аккаунтов в подборке, ни тем автоподбора — выбери темы');
+    }
     try {
       const runId = startMiningRun(id, req.user!.id, seed);
       return { runId };

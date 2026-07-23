@@ -65,7 +65,7 @@ Telegram. Позиционирование: карусели для IG/TikTok с
 
 - **ReferenceProvider абстракция**; первая реализация — **Apify** (официальные акторы IG/TikTok
   scraper), токен env `APIFY_TOKEN`. Вызовы — по существующему outbound-HTTP паттерну (submit → poll).
-- **Вход майнинга v1: только аккаунты** (profile-scrape несёт followersCount — ER считается честно).
+- **Вход майнинга: аккаунты руками ИЛИ автоподбор (P9)** — персона → LLM-темы с хэштегами → hashtag-скрейп → топ-авторы по лайкам → обычный profile-майнинг (ER честный). Холды майнера скоупятся ПОДБОРКОЙ (collectionId — тот же скоуп у LLM-гейта тем и vision). Легаси-вход: только аккаунты** (profile-scrape несёт followersCount — ER считается честно).
   Хэштеги — фаза 2 (требуют доборного profile-pass по авторам топ-N, отдельная цена). Лимит постов
   default 100, кап 200.
 - **Virality-фильтр (детерминированный, до vision):** карусели/фото-посты; ER = (likes+comments)/followers
@@ -144,7 +144,8 @@ ZIP: `slide-01.jpg … slide-NN.jpg` (1080×1350 / 1080×1080, sRGB, ≤4MB/сл
   `reconcileOrphanHolds` карусельные холды не трогает (INNER JOIN на generations — проверено).
 - QC-авто-ретрай и K=2 ручных ретраев — себестоимость поглощается заведением (settle капится холдом).
 - **Таблица имён (один источник):** `SEED_TOKENS`-ключ == zod schemaName == `recordUsage.task`:
-  `carousel_slide` (image), `carousel_qc`, `carousel_idea`, `carousel_storyboard`, `carousel_caption`.
+  `carousel_slide` (image), `carousel_qc`, `carousel_idea`, `carousel_storyboard`, `carousel_caption`,
+  `carousel_pattern` (vision-карточки), `carousel_discover` (темы автоподбора, P9).
 - Косметика: `settleHold` получает аддитивный опц. параметр note (default — старый текст
   'списание по факту рендера'), чтобы леджер не врал про карусели.
 

@@ -142,3 +142,18 @@
 - [x] P8.6 UI: секция «Лук и что в кадре» (текст лука, фото лука, чекбоксы рефов модели, upload пропсов),
       бейджи пропсов в раскадровке — check: web unit.
 - [x] P8.G Гейт: полный прогон + деплой + прод-смок.
+
+## P9 Автоподбор вирусного (запрос Alex 23.07.2026)
+
+- [x] P9.1 Гейт: ветка collectionId в requireActiveAttempt (fail-closed; ЧИНИТ vision-майнинг
+      не-owner — раньше упирался в гейт) + meta.collectionId в llm-слое и patterns.ts.
+- [x] P9.2 discover.ts: THEMES_SYSTEM (персона→темы+хэштеги, carousel_discover в прайсинге),
+      discoverAccounts (hashtag-актор → topAuthors по лайкам), modelPersonaNote.
+- [x] P9.3 run.ts: hold scope → collectionId; discovery-стадия с персистом discover_run_id
+      и stats.discovered (рестарт-безопасно); minerQuoteUsd с discovery-постами;
+      reconcileMinerHolds на буте.
+- [x] P9.4 Роуты: POST /api/miner/auto/start (подборка+темы одним вызовом, микро-hold,
+      402→подборка не остаётся), mine принимает hashtags, quote с discovery+themesUsd.
+- [x] P9.5 UI: блок «Автоподбор под модель» (селект модели → темы-чипы ≤3 → «Найти вирусное»
+      с ценой), подсказка про лук в создании карусели.
+- [x] P9.G Гейт: 404 тестов + браузер-смок флоу тем.

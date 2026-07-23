@@ -227,8 +227,28 @@ export function requireActiveAttempt(input: {
   refFingerprint?: string | null;
   /** Carousel Studio: скоуп оплаты — открытая hold на carouselId (SPEC §7). */
   carouselId?: string | null;
+  /** Reference Miner: скоуп оплаты — открытая hold на collectionId (темы/vision-карточки). */
+  collectionId?: string | null;
 }): string | null {
   const db = getDb();
+  // Майнерская ветка изолирована (fail-closed на каждом шаге), как карусельная ниже.
+  if (input.collectionId) {
+    const col = db
+      .prepare(`SELECT user_id FROM collections WHERE id=?`)
+      .get(input.collectionId) as { user_id: string } | undefined;
+    if (!col) throw new BillingAttemptRequiredError();
+    const mUser = db.prepare(`SELECT role FROM users WHERE id=?`).get(col.user_id) as
+      | { role: string }
+      | undefined;
+    if (mUser?.role === 'owner') return null;
+    const mHold = db
+      .prepare(
+        `SELECT id FROM credit_holds WHERE project_id=? AND user_id=? AND status='open' LIMIT 1`,
+      )
+      .get(input.collectionId, col.user_id) as { id: string } | undefined;
+    if (!mHold) throw new BillingAttemptRequiredError();
+    return mHold.id;
+  }
   // Карусельная ветка изолирована и не проваливается в проектную (fail-closed на каждом шаге).
   if (input.carouselId) {
     const carousel = db

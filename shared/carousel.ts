@@ -38,6 +38,8 @@ export const CAROUSEL_TASKS = {
   idea: 'carousel_idea',
   storyboard: 'carousel_storyboard',
   caption: 'carousel_caption',
+  pattern: 'carousel_pattern',
+  discover: 'carousel_discover',
 } as const;
 export type CarouselTask = (typeof CAROUSEL_TASKS)[keyof typeof CAROUSEL_TASKS];
 
@@ -134,6 +136,19 @@ export const PatternCardStructureZ = z.object({
   nicheTags: z.array(z.string()),
 });
 export type PatternCardStructure = z.infer<typeof PatternCardStructureZ>;
+
+// ── P9: автоподбор тем майнинга (персона → темы + хэштеги поиска) ────────────
+
+export const MiningThemeZ = z.object({
+  /** Название темы для чипа в UI (RU). */
+  label: z.string(),
+  /** 2–4 поисковых хэштега без # (латиница/цифры/подчёркивания). */
+  hashtags: z.array(z.string().regex(/^[a-z0-9_]+$/)).min(2).max(4),
+});
+export type MiningTheme = z.infer<typeof MiningThemeZ>;
+
+export const MiningThemesZ = z.object({ themes: z.array(MiningThemeZ).min(3).max(6) });
+export type MiningThemes = z.infer<typeof MiningThemesZ>;
 
 // ── DTO для API (стиль shared/api-types.ts) ──────────────────────────────────
 
@@ -280,6 +295,16 @@ export const QC_JSON_SCHEMA = obj({
   realism: { type: 'number', minimum: 0, maximum: 10 },
   sceneMatch: bool,
   notes: str,
+});
+
+export const MINING_THEMES_JSON_SCHEMA = obj({
+  themes: arr(
+    obj({
+      label: str,
+      hashtags: arr({ type: 'string', pattern: '^[a-z0-9_]+$' }, { minItems: 2, maxItems: 4 }),
+    }),
+    { minItems: 3, maxItems: 6 },
+  ),
 });
 
 export const PATTERN_CARD_JSON_SCHEMA = obj({

@@ -83,7 +83,7 @@ export async function createPatternCard(input: PatternCardInput, llm?: LlmClient
     schema: PATTERN_CARD_JSON_SCHEMA,
     maxTokens: 900,
     models: modelChainFor('analyze'),
-    meta: { userId: input.userId, generationId: input.opId },
+    meta: { userId: input.userId, generationId: input.opId, collectionId: input.collectionId },
   });
   const structure = PatternCardStructureZ.parse(raw);
   const id = randomUUID();

@@ -21,6 +21,7 @@ export interface StructuredRequest {
     generationId?: string | null;
     userId?: string | null;
     carouselId?: string | null;
+    collectionId?: string | null;
   };
 }
 

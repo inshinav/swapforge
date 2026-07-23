@@ -472,6 +472,8 @@ export function applySchema(d: DatabaseSync): void {
   // P8: текст лука (описание образа руками владельца карусели; RU допустим —
   // движки переваривают, слайд-промты остаются EN через outfit/propNote).
   ensureColumn(d, 'carousel_projects', 'look_note', `look_note TEXT NOT NULL DEFAULT ''`);
+  // P9: id hashtag-рана автоподбора (рестарт-безопасность стадии discovery).
+  ensureColumn(d, 'mining_runs', 'discover_run_id', `discover_run_id TEXT`);
 }
 
 export function getDb(): DatabaseSync {

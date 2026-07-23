@@ -10,6 +10,7 @@ import type {
   CarouselInfo,
   CarouselQuoteInfo,
   CollectionInfo,
+  MiningTheme,
   PatternCardInfo,
   SlideInfo,
   Storyboard,
@@ -238,6 +239,13 @@ function CollectionsCard() {
       {expanded && (
         <div className="p-4 space-y-3">
           {error && <ErrorNote text={error} />}
+          <AutoDiscovery
+            onStarted={(id) => {
+              void load();
+              setOpenId(id);
+            }}
+          />
+          <div className="text-xs text-mut">Или вручную — свои аккаунты-источники:</div>
           <div className="flex flex-col sm:flex-row gap-2">
             <input
               className="flex-1 rounded-lg border border-line2 bg-panel2 px-3 py-2 text-sm"
@@ -306,6 +314,120 @@ function CollectionsCard() {
         </div>
       )}
     </Card>
+  );
+}
+
+/** P9: автоподбор — кнопка → темы под модель → выбор → майнинг сам находит аккаунты. */
+function AutoDiscovery({ onStarted }: { onStarted: (collectionId: string) => void }) {
+  const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [modelId, setModelId] = useState('');
+  const [prices, setPrices] = useState<{ priceUsd: number | null; themesUsd: number | null } | null>(null);
+  const [themes, setThemes] = useState<MiningTheme[] | null>(null);
+  const [collectionId, setCollectionId] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState<'themes' | 'mine' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .models()
+      .then((ms) => {
+        setModels(ms.map((m) => ({ id: m.id, name: m.name })));
+        if (ms[0]) setModelId(ms[0].id);
+      })
+      .catch(() => setModels([]));
+    api.minerQuote({ discovery: true }).then(setPrices).catch(() => setPrices(null));
+  }, []);
+
+  const suggest = async () => {
+    setBusy('themes');
+    setError(null);
+    try {
+      const res = await api.minerAutoStart(modelId || undefined);
+      setThemes(res.themes);
+      setCollectionId(res.collectionId);
+      setPicked(new Set(res.themes.slice(0, 2).map((_, i) => i)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const mine = async () => {
+    if (!collectionId || !themes) return;
+    const hashtags = [...picked].flatMap((i) => themes[i]?.hashtags ?? []).slice(0, 6);
+    setBusy('mine');
+    setError(null);
+    try {
+      await api.minerMine(collectionId, hashtags);
+      setThemes(null);
+      setPicked(new Set());
+      onStarted(collectionId);
+      setCollectionId(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-lime/25 bg-lime/5 p-3 space-y-2">
+      <div className="text-sm font-semibold">Автоподбор под модель</div>
+      <div className="text-xs text-mut">
+        Одна кнопка: темы под твою модель → сам найду вирусные аккаунты по хэштегам → разберу в паттерны.
+      </div>
+      {error && <ErrorNote text={error} />}
+      {!themes ? (
+        <div className="flex flex-col sm:flex-row gap-2">
+          <select
+            className="rounded-lg border border-line2 bg-panel2 px-3 py-2 text-sm"
+            value={modelId}
+            onChange={(e) => setModelId(e.target.value)}
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+            {models.length === 0 && <option value="">без модели</option>}
+          </select>
+          <Button kind="primary" busy={busy === 'themes'} onClick={() => void suggest()}>
+            Предложить темы · {priceLabel(prices?.themesUsd)}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {themes.map((t, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() =>
+                  setPicked((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(i)) next.delete(i);
+                    else if (next.size < 3) next.add(i);
+                    return next;
+                  })
+                }
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  picked.has(i) ? 'border-lime/60 text-lime bg-lime/10' : 'border-line2 text-mut hover:border-lime/40'
+                }`}
+                title={t.hashtags.map((h) => `#${h}`).join(' ')}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button kind="primary" busy={busy === 'mine'} disabled={picked.size === 0} onClick={() => void mine()}>
+              Найти вирусное · {priceLabel(prices?.priceUsd)}
+            </Button>
+            <span className="text-xs text-mut">до 3 тем · {[...picked].flatMap((i) => themes[i]?.hashtags ?? []).slice(0, 6).map((h) => `#${h}`).join(' ')}</span>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -437,9 +559,14 @@ function CreateCard({ onCreated, onOpenModels }: { onCreated: (id: string) => vo
               </label>
             </div>
             {error && <ErrorNote text={error} />}
-            <Button kind="primary" busy={busy} disabled={!modelId || !variantId} onClick={() => void create()}>
-              Создать карусель
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button kind="primary" busy={busy} disabled={!modelId || !variantId} onClick={() => void create()}>
+                Создать карусель
+              </Button>
+              <span className="text-xs text-mut">
+                лук (образ+фото) и пропсы (мотоцикл, шлем…) добавишь следующим шагом
+              </span>
+            </div>
           </>
         )}
       </div>

@@ -56,6 +56,26 @@ setCarouselLlmForTests({
     if (req.schemaName === 'carousel_qc') {
       return { identity: 9, artifacts: 8, realism: 8, sceneMatch: true, notes: 'dev mock pass' };
     }
+    if (req.schemaName === 'carousel_discover') {
+      return {
+        themes: [
+          { label: 'Мото-девушка', hashtags: ['bikerlifestyle', 'motogirl'] },
+          { label: 'Пляж Майами', hashtags: ['miamibeach', 'beachmodel'] },
+          { label: 'Спортзал', hashtags: ['gymgirl', 'fitmodel'] },
+        ],
+      };
+    }
+    if (req.schemaName === 'carousel_pattern') {
+      return {
+        hookType: 'mid-action candid',
+        slideCount: 4,
+        slideRoles: ['hook', 'context', 'payoff', 'cta'],
+        composition: ['tight crop'],
+        captionStyle: 'hook → story → CTA',
+        whyItWorks: 'relatable moment',
+        nicheTags: ['lifestyle'],
+      };
+    }
     throw new Error(`dev-mock: неожиданный schemaName ${req.schemaName}`);
   },
 });
