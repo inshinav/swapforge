@@ -119,7 +119,13 @@ export function attachHoldGeneration(holdId: string, generationId: string): void
  * Списание по факту: закрывает hold и пишет charge (cap = сумма hold-а).
  * Идемпотентно: второй вызов на закрытом hold — no-op false.
  */
-export function settleHold(holdId: string, factCredits: number, generationId?: string | null): boolean {
+export function settleHold(
+  holdId: string,
+  factCredits: number,
+  generationId?: string | null,
+  // Аддитивно (Carousel Studio): подпись строки леджера; default сохраняет прежний текст.
+  note = 'списание по факту рендера',
+): boolean {
   const d = getDb();
   return tx(d, () => {
     const hold = d
@@ -144,7 +150,7 @@ export function settleHold(holdId: string, factCredits: number, generationId?: s
         holdId,
         generationId ?? hold.generation_id,
         hold.project_id,
-        'списание по факту рендера',
+        note,
       );
     }
     return true;

@@ -379,6 +379,7 @@ export function applySchema(d: DatabaseSync): void {
       quote_json TEXT,
       run_id TEXT,
       hold_id TEXT,
+      review_deadline TEXT,
       error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -444,6 +445,7 @@ export function applySchema(d: DatabaseSync): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_carousel_projects_user ON carousel_projects(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_carousel_holds_open_join ON credit_holds(project_id, status);
     CREATE INDEX IF NOT EXISTS idx_carousel_projects_claim ON carousel_projects(status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_slides_pos ON carousel_slides(carousel_id, idx);
     CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id, created_at);
@@ -452,6 +454,9 @@ export function applySchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_mining_runs_active ON mining_runs(status, created_at)
       WHERE status IN ('queued','running','filtering','vision');
   `);
+  // Страховка для dev-БД, где carousel_projects создана до появления колонки
+  // (вызов строго ПОСЛЕ CREATE TABLE выше — на свежей БД таблица уже есть).
+  ensureColumn(d, 'carousel_projects', 'review_deadline', `review_deadline TEXT`);
 }
 
 export function getDb(): DatabaseSync {
