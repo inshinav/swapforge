@@ -77,12 +77,12 @@
 
 ## P3 Движки
 
-- [ ] P3.1 engine/carousel/ideas.ts + POST .../ideas (микро-hold: quote→hold(reused→409)→вызов→settle;
+- [x] P3.1 engine/carousel/ideas.ts + POST .../ideas (микро-hold: quote→hold(reused→409)→вызов→settle;
       ревизия reconcileCarouselHolds под утёкшие идеация-холды) — done: mock-LLM + billing-юнит
       микро-цикла (крэш между hold и settle → бут-чистка) — check: unit.
-- [ ] P3.2 engine/carousel/storyboard.ts + ген/PATCH-правки — check: unit.
-- [ ] P3.3 engine/carousel/caption.ts + роут (+реген) — check: unit.
-- [ ] P3.4 few-shot слот PatternCards в ideas/storyboard (интерфейс, пока пусто) — check: snapshot.
+- [x] P3.2 engine/carousel/storyboard.ts + ген/PATCH-правки — check: unit.
+- [x] P3.3 engine/carousel/caption.ts + роут (+реген) — check: unit.
+- [x] P3.4 few-shot слот PatternCards в ideas/storyboard (интерфейс, пока пусто) — check: snapshot.
 
 ## P4 Web UI
 
