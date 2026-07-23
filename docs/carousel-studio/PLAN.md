@@ -58,16 +58,16 @@
 
 ## P2 Job E2E + billing
 
-- [ ] P2.1 pricing: SEED_TOKENS.carousel_* (5 задач) + taskModel + **ourModels()** (аддитивно) +
+- [x] P2.1 pricing: SEED_TOKENS.carousel_* (5 задач) + taskModel + **ourModels()** (аддитивно) +
       engine/carousel/pricing.ts `buildCarouselQuote` — done: смета детерминирована,
       priceForCached(carouselModel)!==null — check: unit.
-- [ ] P2.2 engine/carousel/billing.ts: quote-снапшот; placeHold с правилом **reused→409**; settle по
+- [x] P2.2 engine/carousel/billing.ts: quote-снапшот; placeHold с правилом **reused→409**; settle по
       id-атрибуции (минус failed/moderated; кап=hold; settleHold с опц. note); releaseHold(0) при
       нуле успешных; reconcileCarouselHolds() по матрице §7 — done: юниты успех/частичный/полный
       fail/крэш/reused/double-click — check: unit.
-- [ ] P2.3 engine/carousel/worker.ts: FIFO-клейм (глобальный кап, пер-юзер 1), статус-машина,
+- [x] P2.3 engine/carousel/worker.ts: FIFO-клейм (глобальный кап, пер-юзер 1), статус-машина,
       resumeCarousels() в index.ts — done: тесты порядка и резюма — check: unit.
-- [ ] P2.4 storage.ts (аддитивно): carouselDir/ensure/safe-path, userUsageBytes, эвикция в
+- [x] P2.4 storage.ts (аддитивно): carouselDir/ensure/safe-path, userUsageBytes, эвикция в
       cleanupStorageLifecycle + транзиент-свип — check: unit + storage-suite.
 - [ ] P2.5 routes-carousel.ts v1: CRUD, quote, start (прекол openHoldForProject→409 + hold), status,
       файлы; регистрация за флагом — done: inject-тесты CRUD/tenancy(чужое→404)/CSRF/флаг-выкл→404/409 —
