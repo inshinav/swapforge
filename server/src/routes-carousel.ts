@@ -20,6 +20,8 @@ import {
 import { openHoldForProject, priceCredits } from './billing/credits';
 import { deleteCarouselFiles, safeCarouselPath } from './storage';
 import { getScene, listLocationPacks } from './engine/carousel/locations';
+import { buildStoredZip } from './zip-store';
+import { sendCarouselToTelegram } from './telegram/notify';
 import { runIdeaEngine } from './engine/carousel/ideas';
 import { runStoryboardEngine } from './engine/carousel/storyboard';
 import { runCaptionEngine } from './engine/carousel/caption';
@@ -452,6 +454,85 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
       .prepare(`UPDATE carousel_projects SET status='generating', review_deadline=NULL, updated_at=datetime('now') WHERE id=?`)
       .run(id);
     enqueueCarouselRun(id);
+    return { ok: true };
+  });
+
+  // ── Экспорт и доставка (SPEC §6) ──
+
+  function doneSlideFiles(carouselId: string): string[] {
+    const rows = getDb()
+      .prepare(
+        `SELECT file, final_file FROM carousel_slides WHERE carousel_id=? AND status='done' ORDER BY idx ASC`,
+      )
+      .all(carouselId) as Array<{ file: string | null; final_file: string | null }>;
+    return rows
+      .map((r) => r.final_file ?? r.file)
+      .filter((f): f is string => !!f)
+      .map((f) => safeCarouselPath(carouselId, f))
+      .filter((f): f is string => !!f);
+  }
+
+  app.get('/api/carousel/projects/:id/export.zip', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (!['done', 'qc_review'].includes(row.status)) {
+      return bad(reply, 409, 'Экспорт доступен после генерации');
+    }
+    const files = doneSlideFiles(id);
+    if (files.length === 0) return bad(reply, 409, 'Нет готовых слайдов');
+    const entries = files.map((full, i) => ({
+      name: `slide-${String(i + 1).padStart(2, '0')}${path.extname(full).toLowerCase() || '.jpg'}`,
+      data: fs.readFileSync(full),
+    }));
+    const caption = parseJson<{ caption: string; hashtags: string[] }>(row.caption_json);
+    if (caption) {
+      entries.push({
+        name: 'caption.txt',
+        data: Buffer.from(`${caption.caption}\n\n${caption.hashtags.join(' ')}\n`, 'utf8'),
+      });
+    }
+    const idea = parseJson<{ title: string }>(row.idea_json);
+    entries.push({
+      name: 'meta.json',
+      data: Buffer.from(
+        JSON.stringify(
+          { title: row.title || idea?.title || '', idea: idea ?? null, locationPack: row.location_pack, slides: files.length, exportedAt: new Date().toISOString() },
+          null,
+          2,
+        ),
+        'utf8',
+      ),
+    });
+    const zip = buildStoredZip(entries);
+    reply.header('Content-Disposition', `attachment; filename="carousel-${id.slice(0, 8)}.zip"`);
+    reply.type('application/zip');
+    return reply.send(zip);
+  });
+
+  app.post('/api/carousel/projects/:id/send-tg', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (!['done', 'qc_review'].includes(row.status)) {
+      return bad(reply, 409, 'Отправка доступна после генерации');
+    }
+    const files = doneSlideFiles(id);
+    if (files.length === 0) return bad(reply, 409, 'Нет готовых слайдов');
+    const caption = parseJson<{ caption: string; hashtags: string[] }>(row.caption_json);
+    const res = await sendCarouselToTelegram({
+      telegramId: req.user!.telegramId,
+      filePaths: files,
+      caption: caption ? `${caption.caption}\n\n${caption.hashtags.join(' ')}` : null,
+    });
+    if (!res.ok) {
+      if (res.needStart) {
+        return bad(reply, 409, `Открой бота @${config.telegramBotName || 'бота'} и нажми Start — тогда он сможет прислать карусель`);
+      }
+      return bad(reply, 502, `Telegram не принял отправку: ${res.error}`);
+    }
     return { ok: true };
   });
 

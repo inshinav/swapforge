@@ -864,6 +864,21 @@ function ProgressAndResult({
   const [error, setError] = useState<string | null>(null);
   const [busySlide, setBusySlide] = useState<string | null>(null);
   const [captionBusy, setCaptionBusy] = useState(false);
+  const [tgBusy, setTgBusy] = useState(false);
+  const [tgNote, setTgNote] = useState<string | null>(null);
+
+  const sendTg = async () => {
+    setTgBusy(true);
+    setTgNote(null);
+    try {
+      await api.carouselSendTg(carousel.id);
+      setTgNote('Отправлено — проверь Telegram');
+    } catch (e) {
+      setTgNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTgBusy(false);
+    }
+  };
 
   const act = (slideId: string, action: 'accept' | 'retry') =>
     guarded(
@@ -973,10 +988,19 @@ function ProgressAndResult({
 
       {carousel.status === 'done' && doneSlides.length > 0 && (
         <Card>
-          <SectionTitle title="Экспорт" hint="ZIP и отправка в Telegram появятся в следующем обновлении" />
-          <div className="p-4 flex gap-2">
-            <Button disabled title="Скоро">Скачать ZIP</Button>
-            <Button disabled title="Скоро">В Telegram</Button>
+          <SectionTitle title="Экспорт" hint={`${doneSlides.length} готовых слайдов + подпись`} />
+          <div className="p-4 flex flex-wrap items-center gap-2">
+            <a
+              className="inline-flex min-h-11 sm:min-h-0 items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold bg-lime text-black hover:bg-lime-dim"
+              href={api.carouselExportUrl(carousel.id)}
+              download
+            >
+              Скачать ZIP
+            </a>
+            <Button busy={tgBusy} onClick={() => void sendTg()}>
+              В Telegram
+            </Button>
+            {tgNote && <span className="text-xs text-mut">{tgNote}</span>}
           </div>
         </Card>
       )}

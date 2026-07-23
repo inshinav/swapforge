@@ -7,6 +7,7 @@ import { config } from '../../config';
 import { CarouselRunError, generateCarouselSlides, type CarouselRunDeps } from './generate';
 import { reviewDeadlineFromNow, settleCarousel } from './billing';
 import { runCaptionEngine } from './caption';
+import { notifyCarouselReady } from '../../telegram/notify';
 
 const running = new Set<string>();
 let testDeps: CarouselRunDeps | null = null;
@@ -74,6 +75,7 @@ async function runOne(carouselId: string): Promise<void> {
     } else if ((counts.done ?? 0) > 0) {
       setProject(carouselId, { status: 'done' });
       settleCarousel(carouselId);
+      void notifyDone(carouselId, counts.done ?? 0);
     } else {
       setProject(carouselId, { status: 'failed', error: 'Ни один слайд не получился — резерв возвращён' });
       settleCarousel(carouselId); // 0 done → полный release
@@ -111,6 +113,21 @@ async function generateRunCaption(carouselId: string): Promise<void> {
     console.warn(
       `[carousel-caption] carousel=${carouselId}: подпись не сгенерилась (${e instanceof Error ? e.message.slice(0, 120) : e}) — кнопка «Пересобрать подпись» доступна`,
     );
+  }
+}
+
+/** Уведомление о готовности (best-effort; в тестах сеть заглушена — просто молчит). */
+async function notifyDone(carouselId: string, slides: number): Promise<void> {
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT u.telegram_id AS tg, c.title AS title
+           FROM carousel_projects c JOIN users u ON u.id = c.user_id WHERE c.id = ?`,
+      )
+      .get(carouselId) as { tg: number; title: string } | undefined;
+    if (row?.tg) await notifyCarouselReady({ telegramId: row.tg, title: row.title || 'без названия', slides });
+  } catch {
+    /* уведомление вторично */
   }
 }
 

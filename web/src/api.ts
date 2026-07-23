@@ -359,6 +359,9 @@ export const api = {
   carouselSlideAction: (id: string, slideId: string, action: 'accept' | 'retry') =>
     post(u(`api/carousel/projects/${id}/slides/${slideId}/${action}`)).then((r) => j<{ ok: true }>(r)),
   carouselFileUrl: (id: string, file: string) => u(`api/carousel/${id}/file/${encodeURIComponent(file)}`),
+  carouselExportUrl: (id: string) => u(`api/carousel/projects/${id}/export.zip`),
+  carouselSendTg: (id: string) =>
+    post(u(`api/carousel/projects/${id}/send-tg`)).then((r) => j<{ ok: true }>(r)),
 
   // ── Reference Miner («Подборки») ─────────────────────────────────────────
   minerCollections: () =>
