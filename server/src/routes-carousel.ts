@@ -15,10 +15,20 @@ import {
   InsufficientCreditsError,
   startGenerationHold,
 } from './engine/carousel/billing';
-import { openHoldForProject } from './billing/credits';
+import { openHoldForProject, priceCredits } from './billing/credits';
 import { deleteCarouselFiles, safeCarouselPath } from './storage';
-import { listLocationPacks } from './engine/carousel/locations';
-import type { CarouselInfo, SlideInfo } from '../../shared/carousel';
+import { getScene, listLocationPacks } from './engine/carousel/locations';
+import { withIdeationHold } from './engine/carousel/billing';
+import { runIdeaEngine } from './engine/carousel/ideas';
+import { runStoryboardEngine } from './engine/carousel/storyboard';
+import { runCaptionEngine } from './engine/carousel/caption';
+import { buildIdeationQuote } from './engine/carousel/pricing';
+import {
+  CarouselIdeaZ,
+  StoryboardZ,
+  type CarouselInfo,
+  type SlideInfo,
+} from '../../shared/carousel';
 
 const MEDIA_CT: Record<string, string> = {
   '.png': 'image/png',
@@ -234,6 +244,161 @@ export function registerCarouselRoutes(app: FastifyInstance): void {
       .run(id);
     enqueueCarouselRun(id);
     return { ok: true, queuePosition: carouselQueuePosition(id) };
+  });
+
+  // ── Движки (SPEC §4): синхронные микро-холды, цена видна на кнопке ──
+
+  /** Единый маппер ошибок идеационных вызовов. */
+  async function ideationCall<T>(
+    reply: FastifyReply,
+    fn: () => Promise<T>,
+  ): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof HoldConflictError) {
+        void bad(reply, 409, e.message);
+        return undefined;
+      }
+      if (e instanceof InsufficientCreditsError) {
+        void reply.code(402).send({
+          error: e.message,
+          shortfallUsd: Math.ceil(e.needCredits - e.availableCredits) / 100,
+        });
+        return undefined;
+      }
+      void bad(reply, 502, e instanceof Error ? e.message : String(e));
+      return undefined;
+    }
+  }
+
+  /** Цены идеационных кнопок для UI («Идеи · ≈$0.03»). */
+  app.get('/api/carousel/ideation-prices', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const price = (task: 'carousel_idea' | 'carousel_storyboard' | 'carousel_caption') => {
+      const q = buildIdeationQuote(task);
+      return q.totalUsd === null ? null : priceCredits(q.totalUsd) / 100;
+    };
+    return {
+      ideasUsd: price('carousel_idea'),
+      storyboardUsd: price('carousel_storyboard'),
+      captionUsd: price('carousel_caption'),
+    };
+  });
+
+  app.post('/api/carousel/projects/:id/ideas', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (!['draft', 'storyboard'].includes(row.status)) {
+      return bad(reply, 409, 'Идеи доступны до запуска генерации');
+    }
+    const wish = ((req.body ?? {}) as { wish?: string }).wish;
+    const ideas = await ideationCall(reply, () =>
+      withIdeationHold({ carouselId: id, userId: req.user!.id, task: 'carousel_idea' }, (opId) =>
+        runIdeaEngine({ carouselId: id, userId: req.user!.id, opId, wish }),
+      ),
+    );
+    if (!ideas) return;
+    return ideas;
+  });
+
+  app.post('/api/carousel/projects/:id/idea', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (!['draft', 'storyboard'].includes(row.status)) {
+      return bad(reply, 409, 'Идею можно менять до запуска генерации');
+    }
+    const parsed = CarouselIdeaZ.safeParse(((req.body ?? {}) as { idea?: unknown }).idea);
+    if (!parsed.success) return bad(reply, 422, 'Идея не прошла валидацию');
+    for (const sceneId of parsed.data.sceneIds) {
+      if (!getScene(row.location_pack, sceneId)) {
+        return bad(reply, 422, `Сцена ${sceneId} не из пака ${row.location_pack}`);
+      }
+    }
+    getDb()
+      .prepare(
+        `UPDATE carousel_projects SET idea_json=?, slide_count=?, updated_at=datetime('now') WHERE id=?`,
+      )
+      .run(JSON.stringify(parsed.data), parsed.data.slideCount, id);
+    return { ok: true };
+  });
+
+  app.post('/api/carousel/projects/:id/storyboard', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (!['draft', 'storyboard'].includes(row.status)) {
+      return bad(reply, 409, 'Раскадровка доступна до запуска генерации');
+    }
+    if (!row.idea_json) return bad(reply, 409, 'Сначала выбери идею');
+    const storyboard = await ideationCall(reply, () =>
+      withIdeationHold({ carouselId: id, userId: req.user!.id, task: 'carousel_storyboard' }, (opId) =>
+        runStoryboardEngine({ carouselId: id, userId: req.user!.id, opId }),
+      ),
+    );
+    if (!storyboard) return;
+    getDb()
+      .prepare(
+        `UPDATE carousel_projects SET storyboard_json=?, slide_count=?, status='storyboard', updated_at=datetime('now') WHERE id=?`,
+      )
+      .run(JSON.stringify(storyboard), storyboard.slides.length, id);
+    return { storyboard };
+  });
+
+  app.patch('/api/carousel/projects/:id/storyboard', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (!['draft', 'storyboard'].includes(row.status)) {
+      return bad(reply, 409, 'Раскадровку можно править до запуска генерации');
+    }
+    const parsed = StoryboardZ.safeParse(((req.body ?? {}) as { storyboard?: unknown }).storyboard);
+    if (!parsed.success) return bad(reply, 422, 'Раскадровка не прошла валидацию');
+    if (parsed.data.slides.length > config.carouselMaxSlides) {
+      return bad(reply, 422, `Максимум ${config.carouselMaxSlides} слайдов`);
+    }
+    for (const s of parsed.data.slides) {
+      if (!getScene(row.location_pack, s.sceneId)) {
+        return bad(reply, 422, `Сцена ${s.sceneId} не из пака ${row.location_pack}`);
+      }
+    }
+    // Нормализуем idx строго в 1..N в порядке массива.
+    const normalized = {
+      ...parsed.data,
+      slides: parsed.data.slides.map((s, i) => ({ ...s, idx: i + 1 })),
+    };
+    getDb()
+      .prepare(
+        `UPDATE carousel_projects SET storyboard_json=?, slide_count=?, status='storyboard', updated_at=datetime('now') WHERE id=?`,
+      )
+      .run(JSON.stringify(normalized), normalized.slides.length, id);
+    return { storyboard: normalized };
+  });
+
+  app.post('/api/carousel/projects/:id/caption', async (req, reply) => {
+    if (hiddenFrom(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const row = getOwnedCarousel(req.user!.id, id);
+    if (!row) return bad(reply, 404, 'Карусель не найдена');
+    if (row.status === 'generating') return bad(reply, 409, 'Дождись окончания генерации');
+    if (!row.idea_json) return bad(reply, 409, 'Сначала выбери идею');
+    const language = ((req.body ?? {}) as { language?: 'en' | 'ru' }).language;
+    const caption = await ideationCall(reply, () =>
+      withIdeationHold({ carouselId: id, userId: req.user!.id, task: 'carousel_caption' }, (opId) =>
+        runCaptionEngine({ carouselId: id, userId: req.user!.id, opId, language }),
+      ),
+    );
+    if (!caption) return;
+    getDb()
+      .prepare(`UPDATE carousel_projects SET caption_json=?, updated_at=datetime('now') WHERE id=?`)
+      .run(JSON.stringify(caption), id);
+    return { caption };
   });
 
   app.get('/api/carousel/:id/file/:file', async (req, reply) => {

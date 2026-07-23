@@ -6,6 +6,7 @@ import { getDb } from '../../db';
 import { config } from '../../config';
 import { CarouselRunError, generateCarouselSlides, type CarouselRunDeps } from './generate';
 import { reviewDeadlineFromNow, settleCarousel } from './billing';
+import { runCaptionEngine } from './caption';
 
 const running = new Set<string>();
 let testDeps: CarouselRunDeps | null = null;
@@ -63,6 +64,10 @@ async function runOne(carouselId: string): Promise<void> {
          FROM carousel_slides WHERE carousel_id=?`,
       )
       .get(carouselId) as { done: number | null; review: number | null };
+    // Подпись — часть квоты генерации (usage на run_id); best-effort, провал не роняет ран.
+    if ((counts.done ?? 0) > 0 || (counts.review ?? 0) > 0) {
+      await generateRunCaption(carouselId);
+    }
     if ((counts.review ?? 0) > 0) {
       // Ревью-окно: hold остаётся открытой до принятия/ретраев/TTL (SPEC §5/§7).
       setProject(carouselId, { status: 'qc_review', review_deadline: reviewDeadlineFromNow() });
@@ -83,6 +88,29 @@ async function runOne(carouselId: string): Promise<void> {
   } finally {
     running.delete(carouselId);
     pumpCarousels();
+  }
+}
+
+/** Авто-подпись после слайдов: usage на run_id (в квоте генерации), провал только warn. */
+async function generateRunCaption(carouselId: string): Promise<void> {
+  const row = getDb()
+    .prepare(`SELECT user_id, run_id, caption_json, idea_json FROM carousel_projects WHERE id=?`)
+    .get(carouselId) as
+    | { user_id: string; run_id: string | null; caption_json: string | null; idea_json: string | null }
+    | undefined;
+  if (!row || row.caption_json || !row.idea_json) return;
+  try {
+    const caption = await runCaptionEngine(
+      { carouselId, userId: row.user_id, opId: row.run_id ?? `run-${carouselId.slice(0, 8)}` },
+      testDeps?.qcLlm,
+    );
+    getDb()
+      .prepare(`UPDATE carousel_projects SET caption_json=?, updated_at=datetime('now') WHERE id=?`)
+      .run(JSON.stringify(caption), carouselId);
+  } catch (e) {
+    console.warn(
+      `[carousel-caption] carousel=${carouselId}: подпись не сгенерилась (${e instanceof Error ? e.message.slice(0, 120) : e}) — кнопка «Пересобрать подпись» доступна`,
+    );
   }
 }
 
